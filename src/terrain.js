@@ -74,13 +74,20 @@ function scaleCylinderUVs(geo, radius, height, tile = DOCK_WOOD_TILE) {
 }
 
 function makeDockWoodMat(
-  map, fallbackColor, roughness, causticsUniforms, cacheKey, mapTint = 0xffffff, algaeTex = null
+  map, fallbackColor, roughness, causticsUniforms, cacheKey, mapTint = 0xffffff,
+  algaeTex = null, woodMaps = null
 ) {
   return applyPatches(
     new THREE.MeshStandardMaterial({
       map: map || null,
       color: map ? mapTint : fallbackColor,
       roughness,
+      normalMap: woodMaps?.normalMap || null,
+      /* 木目の起伏は 1mm 級。1.0 だと «彫った板» になる */
+      normalScale: new THREE.Vector2(0.75, 0.75),
+      roughnessMap: woodMaps?.roughAoMap || null,
+      aoMap: woodMaps?.roughAoMap || null,
+      aoMapIntensity: 0.55,
     }),
     [
       (m) => addUnderwaterCaustics(m, causticsUniforms, cacheKey),
@@ -312,6 +319,12 @@ const LAND_ALBEDO_SIZE = 1024;
 const LAND_DETAIL_SIZE = 512;
 /** 湖底アルベドの 1 層あたりの辺。元の webp が 512 なので合わせる */
 const BED_ALBEDO_SIZE = 512;
+/** 木材の派生マップの辺。板 1 枚が UV 1m ぶんなので 512 で 2mm/px */
+const WOOD_DETAIL_SIZE = 512;
+/* 木目の起伏は浅い。法線を強くすると «彫刻した板» になる。
+   粗さは «明るいほど荒い»（風化して毛羽立った面が明るく、
+   詰まった晩材の筋が暗く滑らか） */
+const WOOD_DETAIL_OPTS = { aoRadius: 0.022, nScale: 1.9, roughLo: 0.70, roughHi: 0.96 };
 
 /** 画像を canvas 経由で RGBA バイト列にする */
 function imageToRgba(img, size) {
@@ -367,6 +380,54 @@ function bakeLandDetailLayer(img, opts = {}) {
 }
 
 /** 湖底アルベドが読めなかったときの 1x1x3。層番号だけ合っていればいい */
+/** 木材の派生マップ用の DataTexture。色ではなくデータなので NoColorSpace */
+function makeWoodDataTex(data, size) {
+  const t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.colorSpace = THREE.NoColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = 4;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * 木材アルベドの輝度から、法線・粗さ・遮蔽を焼く。
+ *
+ * 桟橋の板と杭は 1024² のアルベドを持っているのに roughness が定数で、
+ * «印刷された紙» に見えていた。プレイヤーが立っている板で、ほぼ全画面に
+ * 入る最近接オブジェクトなのに、そこだけ凹凸がなかった。
+ * 陸タイルと同じ焼き方（bakeLandDetailMaps）がそのまま使えるので、
+ * 画像を作り直さずに済む。
+ * @param {HTMLImageElement} img
+ */
+function bakeWoodMaps(img) {
+  const size = WOOD_DETAIL_SIZE;
+  if (typeof document === 'undefined' || !img) return null;
+  const pix = imageToRgba(img, size);
+  const luma = new Float32Array(size * size);
+  for (let i = 0; i < size * size; i++) {
+    const o = i * 4;
+    luma[i] = (0.2126 * pix[o] + 0.7152 * pix[o + 1] + 0.0722 * pix[o + 2]) / 255;
+  }
+  const { data } = bakeLandDetailMaps(luma, size, WOOD_DETAIL_OPTS);
+  const nrm = new Uint8Array(size * size * 4);
+  const rgh = new Uint8Array(size * size * 4);
+  for (let i = 0; i < size * size; i++) {
+    const o = i * 4;
+    // 法線は RG に入っている。Z は面から立てたままでよい
+    nrm[o] = data[o]; nrm[o + 1] = data[o + 1]; nrm[o + 2] = 255; nrm[o + 3] = 255;
+    /* three は aoMap を R、roughnessMap を G から読む。
+       1 枚に詰めればサンプラも 1 本で済む */
+    rgh[o] = data[o + 2];
+    rgh[o + 1] = data[o + 3];
+    rgh[o + 2] = 0; rgh[o + 3] = 255;
+  }
+  return { normalMap: makeWoodDataTex(nrm, size), roughAoMap: makeWoodDataTex(rgh, size) };
+}
+
 function dummyBedArray() {
   const t = new THREE.DataArrayTexture(
     new Uint8Array([160, 150, 130, 255, 150, 148, 142, 255, 96, 92, 74, 255]), 1, 1, 3
@@ -723,7 +784,12 @@ export class Terrain {
       Terrain._loadRepeatTexture('./assets/textures/dock-piling.webp'),
       // 水際の藻。帯の «位置» はワールド Y で決めるので、これは面の色だけ
       Terrain._loadRepeatTexture('./assets/textures/piling-algae.webp'),
-    ]).then(([plank, piling, algae]) => ({ plank, piling, algae }));
+    ]).then(([plank, piling, algae]) => ({
+      plank, piling, algae,
+      // アルベドの輝度から凹凸を起こす。新しい画像は要らない
+      plankMaps: bakeWoodMaps(plank.image),
+      pilingMaps: bakeWoodMaps(piling.image),
+    }));
   }
 
   /**
@@ -1377,16 +1443,16 @@ export class Terrain {
     const algaeMap = this._dockTextures?.algae || null;
     const woodMat = makeDockWoodMat(
       plankMap, 0x7a5b3c, 0.92, this._causticsUniforms, 'dock-wood-caustics-v1',
-      0xffffff, algaeMap
+      0xffffff, algaeMap, this._dockTextures?.plankMaps || null
     );
     const woodDark = makeDockWoodMat(
       pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-dark-caustics-v1', 0xc8b49a,
-      algaeMap
+      algaeMap, this._dockTextures?.pilingMaps || null
     );
     const postMat = withInstanceUvY(
       makeDockWoodMat(
         pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-post-caustics-v1', 0xc8b49a,
-        algaeMap
+        algaeMap, this._dockTextures?.pilingMaps || null
       ),
       'dock-post-caustics-v1'
     );
