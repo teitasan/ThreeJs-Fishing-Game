@@ -119,9 +119,9 @@ html, body {
 <script type="module">
 import * as THREE from 'three';
 import { Environment, WEATHERS } from './src/sky.js?v=20260828-uwgfx18';
-import { Terrain } from './src/terrain.js?v=20260906-rocktex1';
+import { Terrain } from './src/terrain.js?v=20260906-leaftex1';
 import { resolveLake } from './src/lakefield.js';
-import { Water } from './src/water.js?v=20260906-foamtex2';
+import { Water } from './src/water.js?v=20260906-splash1';
 import { PostFX } from './src/postfx.js?v=20260828-bloom1';
 import { DioramaCube } from './src/dioramaCube.js?v=20260905-cube10';
 import { createCausticTexture } from './src/causticTexture.js?v=20260828-caustnet3';
@@ -464,14 +464,17 @@ async function build() {
   let bedTextures = null;
   let dockTextures = null;
   let landTextures = null;
+  let leafTextures = null;
   const texResults = await Promise.allSettled([
     Terrain.loadBedTextures(),
     Terrain.loadDockTextures(),
     Terrain.loadLandTextures(),
+    Terrain.loadLeafTextures(),
   ]);
   if (texResults[0].status === 'fulfilled') bedTextures = texResults[0].value;
   if (texResults[1].status === 'fulfilled') dockTextures = texResults[1].value;
   if (texResults[2].status === 'fulfilled') landTextures = texResults[2].value;
+  if (texResults[3].status === 'fulfilled') leafTextures = texResults[3].value;
 
   const causticsUniforms = makeCausticsUniforms();
   terrain = new Terrain(scene, {
@@ -480,6 +483,7 @@ async function build() {
     bedTextures,
     dockTextures,
     landTextures,
+    leafTextures,
     causticsUniforms,
     renderer,
   });

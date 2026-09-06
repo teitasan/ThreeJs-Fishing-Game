@@ -129,6 +129,53 @@ function loadFoamTexture(onReady) {
   return fallback;
 }
 
+/* しぶきアトラスのセル。three は画像を上下反転して読む（flipY）ので、
+   v=0 は «画像の下端» ＝ PNG の下の段になる。
+   PNG は 上段 = 雫 / 飛び散り、下段 = 霧 / 伸びた雫 */
+const SPLASH_MIST = 0;
+const SPLASH_STREAK = 1;
+const SPLASH_DROP = 2;
+const SPLASH_BURST = 3;
+
+/**
+ * しぶきの 2x2 アトラス。読み終わるまでは «4 セルとも同じ丸» の
+ * canvas を出しておくので、セル番号がどれでも破綻しない。
+ * @param {(tex: THREE.Texture) => void} onReady
+ */
+function loadSplashTexture(onReady) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  /* 4 セルとも同じ丸を描いておく。読み込みに失敗しても、セル番号が
+     どれでも同じ絵になるだけで破綻しない */
+  for (let i = 0; i < 4; i++) {
+    const cx = (i % 2) * 32 + 16;
+    const cy = Math.floor(i / 2) * 32 + 16;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 15);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.4, 'rgba(230,245,255,0.75)');
+    g.addColorStop(1, 'rgba(200,230,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect((i % 2) * 32, Math.floor(i / 2) * 32, 32, 32);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  if (typeof document !== 'undefined') {
+    new THREE.TextureLoader().load('./assets/textures/splash.png', (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      /* アトラスなので端は繰り返さない。ミップは残す（点は小さくなるので
+         切ると盛大にジャギる）。セル間はもともと余白が広いので、
+         深いミップで多少にじんでも «白い粒» のままになる */
+      t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.needsUpdate = true;
+      onReady(t);
+    }, undefined, () => {});
+  }
+  return tex;
+}
+
 const _m4 = new THREE.Matrix4();
 
 export class Water {
@@ -978,29 +1025,51 @@ export class Water {
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setDrawRange(0, 0);
 
-    // 円形スプライト
-    const c = document.createElement('canvas');
-    c.width = c.height = 32;
-    const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.4, 'rgba(230,245,255,0.75)');
-    g.addColorStop(1, 'rgba(200,230,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 32, 32);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
+    /* 粒ごとに «どのしぶきか» を選ぶ。2x2 アトラスのセル番号 */
+    geo.setAttribute('aCell', new THREE.BufferAttribute(new Float32Array(MAX), 1));
 
-    const mat = new THREE.PointsMaterial({
+    /* 以前は 32x32 の放射グラデーション 1 枚だった。キャストと魚とのやり取りの
+       «音がしそうな瞬間» がその解像度で、ただのボヤけた点になっていた。
+       写真の 2x2 アトラス（1 セル 256）へ差し替える */
+    let mat = null;
+    const tex = loadSplashTexture((t) => { mat.map = t; mat.needsUpdate = true; });
+    mat = new THREE.PointsMaterial({
       size: 0.3, map: tex, transparent: true, depthWrite: false, fog: false,
       blending: THREE.AdditiveBlending, vertexColors: true, sizeAttenuation: true,
     });
+    /* PointsMaterial は gl_PointCoord をそのまま UV に使うので、
+       粒ごとにセルをずらすには varying を 1 本足すしかない */
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>',
+          '#include <common>\nattribute float aCell;\nvarying float vCell;')
+        .replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nvCell = aCell;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vCell;')
+        .replace('#include <map_particle_fragment>', `
+          #if defined( USE_MAP ) || defined( USE_ALPHAMAP )
+            vec2 uvBase = vec2( gl_PointCoord.x, 1.0 - gl_PointCoord.y );
+            vec2 cell = vec2( mod( vCell, 2.0 ), floor( vCell * 0.5 ) );
+            vec2 uv = uvBase * 0.5 + cell * 0.5;
+          #endif
+          #ifdef USE_MAP
+            diffuseColor *= texture2D( map, uv );
+          #endif
+          #ifdef USE_ALPHAMAP
+            diffuseColor.a *= texture2D( alphaMap, uv ).g;
+          #endif
+        `);
+    };
+    mat.customProgramCacheKey = () => 'splash-atlas-v1';
     this.splash = new THREE.Points(geo, mat);
     this.splash.frustumCulled = false;
     this.splash.renderOrder = 4;
     this.scene.add(this.splash);
     for (let i = 0; i < MAX; i++) {
-      this.splashParts.push({ alive: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, dur: 1, sz: 1 });
+      this.splashParts.push({
+        alive: false, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, dur: 1, sz: 1, cell: 0,
+      });
     }
   }
 
@@ -1238,6 +1307,15 @@ export class Water {
       p.life = 0;
       p.dur = rand(0.5, 1.1);
       p.sz = rand(0.5, 1.3);
+      /* 速い粒は «伸びた雫»、遅い粒は «霧»。着水直後の速い粒がぜんぶ
+         同じ丸だと «泡» に見えてしまう。
+         «飛び散り» はセル 1 枚でしぶき全体の絵になっているので、
+         10 粒ぜんぶがそれだと過剰。ごく稀に混ぜて核にする */
+      const fast = (p.vy + sp) / power;
+      const r = Math.random();
+      p.cell = fast > 4.2
+        ? (r < 0.10 ? SPLASH_BURST : (r < 0.62 ? SPLASH_STREAK : SPLASH_DROP))
+        : (r < 0.46 ? SPLASH_MIST : SPLASH_DROP);
       added++;
     }
   }
@@ -1296,6 +1374,7 @@ export class Water {
     // しぶき
     const posAttr = this.splash.geometry.attributes.position;
     const colAttr = this.splash.geometry.attributes.color;
+    const cellAttr = this.splash.geometry.attributes.aCell;
     let n = 0;
     for (let i = 0; i < this.splashMax; i++) {
       const p = this.splashParts[i];
@@ -1317,10 +1396,12 @@ export class Water {
       colAttr.array[n * 3] = a * p.sz;
       colAttr.array[n * 3 + 1] = a * p.sz;
       colAttr.array[n * 3 + 2] = a * p.sz;
+      cellAttr.array[n] = p.cell;
       n++;
     }
     this.splash.geometry.setDrawRange(0, n);
     posAttr.needsUpdate = true;
     colAttr.needsUpdate = true;
+    cellAttr.needsUpdate = true;
   }
 }

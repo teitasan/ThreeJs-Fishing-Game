@@ -13,7 +13,7 @@ import { buildRadialGrid, DETAIL_BY_QUALITY } from './terrainMesh.js?v=20260830-
 import { makeTileableHeightField, makeTileablePebbleField, bakeLandDetailMaps }
   from './tileableNoise.js?v=20260830-zone5';
 import { TreeSet, VARIANTS as TREE_VARIANTS, LOD_DIST as TREE_LOD_DIST, LOD_FADE_BAND as TREE_FADE_BAND }
-  from './trees.js?v=20260830-zone5';
+  from './trees.js?v=20260906-leaftex1';
 import { SPECIES_IDS } from './treeSkeleton.js?v=20260830-zone5';
 import { WORLD_SIZE, WATER_REGION, MAX_DEPTH, resolveLake } from './lakefield.js';
 
@@ -618,6 +618,7 @@ export class Terrain {
     /* 遠景インポスターを起動時に 1 回だけ焼くのに使う。無ければ中景で代用する */
     this._renderer = opts.renderer || null;
     this._dockTextures = opts.dockTextures || null;
+    this._leafTextures = opts.leafTextures || null;
     this._landTextures = opts.landTextures || null;
     this._buildTerrainMesh(opts.bedTextures || null, this._landTextures);
     this._findDock();
@@ -705,6 +706,29 @@ export class Terrain {
    * 地形フラグメントのサンプラが 16 本を超えてリンクに失敗し、地面が
    * 丸ごと描画されなくなる（→ makeLandArrayTexture）。
    */
+  /**
+   * 葉のカード（2x2 アトラス、RGBA）。
+   *
+   * 遠景インポスターはこのテクスチャを描いて焼くので «あとから差し替え»
+   * にはできない。地形を組み立てる前に読み終えておくこと。
+   * 片方でも読めなければ null を返し、手続き生成のカードのままにする。
+   */
+  static loadLeafTextures() {
+    const load = (kind) => new Promise((resolve) => {
+      new THREE.TextureLoader().load(`./assets/textures/leaf-${kind}.png`, (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;   // アトラスなので繰り返さない
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.anisotropy = 4;
+        tex.needsUpdate = true;
+        resolve(tex);
+      }, undefined, () => resolve(null));
+    });
+    return Promise.all([load('beech'), load('cedar')])
+      .then(([beech, cedar]) => (beech && cedar ? { beech, cedar } : null));
+  }
+
   static loadLandTextures() {
     return Promise.all(
       LAND_KINDS.map((k) => Terrain._loadRepeatTexture(`./assets/textures/land-${k}.webp`)),
@@ -1647,6 +1671,7 @@ export class Terrain {
        近景 / 中景 / 遠景インポスターの 3 段を種 × バリエーションごとに
        持ち、カメラ距離で振り分ける（trees.js / treeSkeleton.js） */
     this.treeSet = new TreeSet(this.scene, {
+      leafTextures: this._leafTextures,
       quality: q,
       renderer: this._renderer,
       seed: this.seed ^ 0x7ee5,

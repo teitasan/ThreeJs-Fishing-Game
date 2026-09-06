@@ -609,9 +609,16 @@ export class TreeSet {
     const radial0 = q === 'low' ? [6, 4, 3, 3] : q === 'high' ? [9, 6, 4, 3] : [8, 5, 4, 3];
     const leafStride = q === 'low' ? 2 : 1;
 
+    /* 葉は写真のカード（2x2 アトラス、1 セル 512）。UV の切り出しは
+       LEAF_ATLAS のまま変わらないので、差し替えるだけでよい。
+       «あとから差し替え» にしないのは、遠景インポスターがこのテクスチャを
+       描いて焼くから。焼いたあとに差し替えると近景だけ写真になる */
     this.textures = {};
     for (const k of this.kinds) {
-      this.textures[k] = { bark: makeBarkTexture(k), leaf: makeLeafTexture(k) };
+      this.textures[k] = {
+        bark: makeBarkTexture(k),
+        leaf: opts.leafTextures?.[k] || makeLeafTexture(k),
+      };
     }
 
     for (const k of this.kinds) {
