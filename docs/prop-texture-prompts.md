@@ -18,6 +18,18 @@
 
 つまり画像を作ってもらう必要があるのは以下だけ。
 
+## 状況
+
+**9 枚すべて受け取り、組み込み済み**（2026-09-06）。受け入れ時の実測：
+
+- 寸法・形式は全部仕様どおり。PNG 4 枚は colortype 6 の本物の RGBA
+- 平均色は目標から 1/255 以内（rock `#807E78` / bed-grain `#808080` / moss `#46612C`）
+- タイル 5 枚は `seamReport` をそのまま通過（`seam ≤ neighbour × 1.2`）。
+  **継ぎ目処理は不要だった**
+- アルファ 4 枚とも透明部の RGB が黒。白だとミップで縁が滲むので、ここは重要
+
+組み込みで分かったことは各節の «組み込みメモ» に追記した。
+
 ## 一覧
 
 | 優先 | ファイル | 置き換える先 | 解像度 | α | 実寸 |
@@ -99,6 +111,14 @@ even in value with no shading inside the bubbles.
 **受け取り側**：輝度を «泡の被覆率» として使う。色は水面側で付けるので白黒でよい。
 グレーの中間調が «薄い泡» になるので、二値化はしないこと。
 
+> **組み込みメモ**：そのまま差し替えたら泡が完全に消えた。3 タップとも
+> タイルの平均 0.47 を返していた ＝ mip が最大まで上がっていた。汀線は斜めから
+> 見るので 1 画素の足跡が «岸に垂直な向き» にとても長い。二値に近いマスクを
+> その足跡で平均すると 0.47 へ寄り、固定の閾値の下に落ちて全部切られる。
+> `fwidth(fa)` で足跡を測り、伸びるほど閾値を平均へ寄せるようにした。
+> また colorSpace は **NoColorSpace**。«色» ではなく «被覆率» なので、リニアへ
+> 変換されると平均が 0.47 → 0.19 になって閾値が全部狂う。
+
 ## A-2. `rock-albedo.webp` — 岩の肌
 
 **いまの実装**：`makeRockTexture(256)` の canvas 描画。ベース `#7f7e78` の花崗岩。
@@ -167,6 +187,11 @@ pure black #000000.
 
 **受け取り側**：輝度をアルファに、色はほぼ白なのでそのまま使う。
 
+> **組み込みメモ**：`PointsMaterial` は `gl_PointCoord` をそのまま UV に使うので、
+> 粒ごとにセルを変えるには varying を 1 本足すしかなかった（`aCell` 属性 +
+> `map_particle_fragment` の差し替え）。«飛び散り» はセル 1 枚でしぶき全体の絵に
+> なっているので、10 粒ぜんぶがそれだと過剰。10% だけ混ぜて核にしている。
+
 ## B-1/B-2. `leaf-beech.webp` / `leaf-cedar.webp` — 葉のカード
 
 **いまの実装**：`makeLeafTexture(kind, 256)`、`LEAF_ATLAS = 2` の 2×2＝512²。
@@ -227,6 +252,10 @@ variation, average color exactly mid-grey #808080. This is a detail layer that g
 multiplied over an existing color, so it must not carry a color cast of its own.
 ```
 
+> **組み込みメモ**：サンプラを 1 本足したら `land-texture-test` の «地形のサンプラは
+> 9 本まで» に引っかかった。テストのコメントどおり、砂・岩・泥の 3 本を
+> `sampler2DArray` 1 本にまとめて解決（9 → 7 本）。
+
 ## B-4. `piling-algae.webp` — 杭の水際
 
 **いまの実装**：無い。桟橋の杭は水に浸かっている部分も乾いた木のまま。
@@ -242,6 +271,12 @@ few paler grey-green patches, with fine hair-like algae strands all lying in one
 direction. Small dark spots of encrusting growth. Matte and uniformly wet-looking.
 Uniform over the whole frame, no clear waterline, no band, no gradient, no dry wood.
 ```
+
+> **組み込みメモ**：帯の位置はワールド Y で決めている（杭は InstancedMesh で高さが
+> 違い、UV は `withInstanceUvY` で伸縮させているので UV では合わない）。境界は
+> 低い周波数でずらす。ハッシュで振ると杭 1 本の中でも暴れて白いノイズになる。
+> 注入は `materialPatch.js` の `dockWaterline()`。terrain.js に置くと `uAlgae` の
+> 宣言が上のサンプラ検査に数えられてしまうが、実際には別のプログラムなので。
 
 ## C-1. `rain-ring.webp` — 雨粒のリング
 
@@ -264,6 +299,11 @@ ring appears from frame 5 onward.
 The rings are white to pale blue-white, thin and crisp. Everything else is
 pure black #000000. All 16 cells are perfectly centred and the same size.
 ```
+
+> **組み込みメモ**：もらった絵はセルの中でリングがあまり広がらず、ほぼフェードだけ
+> だった。UV 側でもコマの進みに合わせて 0.34 → 1.0 まで拡大し、«広がり» はシェーダが
+> 持つようにして補っている。次に作るときは «frame 16 でセルの縁まで届く» をもっと
+> 強く言ったほうがいい。
 
 ---
 
