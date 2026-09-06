@@ -8,6 +8,7 @@ import { UnderwaterPropScatter, addUnderwaterCaustics, patchUwMaterial } from '.
 import { WaterPlants, buildSubmergedTuft } from './waterPlants.js?v=20260830-zone5';
 import { Undergrowth, UNDER_KINDS } from './undergrowth.js?v=20260830-zone5';
 import { RockSet, makeSingleRock } from './rocks.js?v=20260906-rocktex1';
+import { applyPatches, dockWaterline } from './materialPatch.js?v=20260906-algae1';
 import { makeRng, clamp, clamp01, lerp, smoothstep, TAU, lineSagProfile } from './util.js?v=20260830-zone5';
 import { buildRadialGrid, DETAIL_BY_QUALITY } from './terrainMesh.js?v=20260830-zone5';
 import { makeTileableHeightField, makeTileablePebbleField, bakeLandDetailMaps }
@@ -72,15 +73,19 @@ function scaleCylinderUVs(geo, radius, height, tile = DOCK_WOOD_TILE) {
   uv.needsUpdate = true;
 }
 
-function makeDockWoodMat(map, fallbackColor, roughness, causticsUniforms, cacheKey, mapTint = 0xffffff) {
-  return addUnderwaterCaustics(
+function makeDockWoodMat(
+  map, fallbackColor, roughness, causticsUniforms, cacheKey, mapTint = 0xffffff, algaeTex = null
+) {
+  return applyPatches(
     new THREE.MeshStandardMaterial({
       map: map || null,
       color: map ? mapTint : fallbackColor,
       roughness,
     }),
-    causticsUniforms,
-    cacheKey
+    [
+      (m) => addUnderwaterCaustics(m, causticsUniforms, cacheKey),
+      (m) => dockWaterline(m, algaeTex),
+    ]
   );
 }
 
@@ -305,6 +310,8 @@ const LAND_DETAIL_OPTS = {
 export const LAND_KINDS = ['beach', 'grass', 'forest', 'rock'];
 const LAND_ALBEDO_SIZE = 1024;
 const LAND_DETAIL_SIZE = 512;
+/** 湖底アルベドの 1 層あたりの辺。元の webp が 512 なので合わせる */
+const BED_ALBEDO_SIZE = 512;
 
 /** 画像を canvas 経由で RGBA バイト列にする */
 function imageToRgba(img, size) {
@@ -359,8 +366,13 @@ function bakeLandDetailLayer(img, opts = {}) {
   return bakeLandDetailMaps(luma, size, opts).data;
 }
 
-function dummyBedTex() {
-  const t = new THREE.DataTexture(new Uint8Array([160, 150, 130, 255]), 1, 1);
+/** 湖底アルベドが読めなかったときの 1x1x3。層番号だけ合っていればいい */
+function dummyBedArray() {
+  const t = new THREE.DataArrayTexture(
+    new Uint8Array([160, 150, 130, 255, 150, 148, 142, 255, 96, 92, 74, 255]), 1, 1, 3
+  );
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
   t.colorSpace = THREE.SRGBColorSpace;
   t.needsUpdate = true;
   return t;
@@ -670,11 +682,11 @@ export class Terrain {
     u.uShoreWind.value = wind;
   }
 
-  static _loadRepeatTexture(url) {
+  static _loadRepeatTexture(url, colorSpace = THREE.SRGBColorSpace) {
     return new Promise((resolve, reject) => {
       new THREE.TextureLoader().load(url, (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.colorSpace = colorSpace;
         tex.anisotropy = 4;
         tex.needsUpdate = true;
         resolve(tex);
@@ -688,7 +700,20 @@ export class Terrain {
       Terrain._loadRepeatTexture('./assets/textures/bed-sand.webp'),
       Terrain._loadRepeatTexture('./assets/textures/bed-rock.webp'),
       Terrain._loadRepeatTexture('./assets/textures/bed-mud.webp'),
-    ]).then(([sand, rock, mud]) => ({ sand, rock, mud }));
+      /* 湖底アルベドの 2 オクターブ目。平均 0.5 の中立タイルなので、
+         «色» ではなく «倍率» として扱う（→ NoColorSpace） */
+      Terrain._loadRepeatTexture('./assets/textures/bed-grain.webp', THREE.NoColorSpace),
+    ]).then(([sand, rock, mud, grain]) => {
+      /* 砂・岩・泥は 1 本の 2D 配列テクスチャにまとめる。別々の sampler2D の
+         ままだと、粒タイルを足したところで地形フラグメントのサンプラが
+         上限（land-texture-test の 9 本）を超える。陸タイルと同じ手 */
+      const albedo = makeLandArrayTexture(
+        [sand, rock, mud].map((t) => imageToRgba(t.image, BED_ALBEDO_SIZE)),
+        BED_ALBEDO_SIZE, THREE.SRGBColorSpace,
+      );
+      for (const t of [sand, rock, mud]) t.dispose();
+      return { albedo, grain };
+    });
   }
 
   /** 桟橋の木材アルベド（床板 / 杭・桁） */
@@ -696,7 +721,9 @@ export class Terrain {
     return Promise.all([
       Terrain._loadRepeatTexture('./assets/textures/dock-plank.webp'),
       Terrain._loadRepeatTexture('./assets/textures/dock-piling.webp'),
-    ]).then(([plank, piling]) => ({ plank, piling }));
+      // 水際の藻。帯の «位置» はワールド Y で決めるので、これは面の色だけ
+      Terrain._loadRepeatTexture('./assets/textures/piling-algae.webp'),
+    ]).then(([plank, piling, algae]) => ({ plank, piling, algae }));
   }
 
   /**
@@ -860,11 +887,19 @@ export class Terrain {
    * 陸タイルの目標色は頂点色の実測平均なので、貼っても見た目の色は変わらない。
    */
   _applyBedTextures(mat, tex, causticsUniforms, landTextures) {
-    const dummyColor = dummyBedTex();
+    /* 粒タイルが無いときの 1x1。中立（0.5）なので ×2 で 1.0 になり、
+       掛けても色が動かない */
+    const dummyNeutral = (() => {
+      const t = new THREE.DataTexture(new Uint8Array([128, 128, 128, 255]), 1, 1);
+      t.colorSpace = THREE.NoColorSpace;
+      t.needsUpdate = true;
+      return t;
+    })();
     const uniforms = {
-      uBedSand: { value: tex?.sand || dummyColor },
-      uBedRock: { value: tex?.rock || dummyColor },
-      uBedMud: { value: tex?.mud || dummyColor },
+      uBedTex: { value: tex?.albedo || dummyBedArray() },
+      uBedGrain: { value: tex?.grain || dummyNeutral },
+      /* 粒の効き。1 に近づけるほど «色のムラ» が強くなる */
+      uBedGrainAmt: { value: tex?.grain ? 0.62 : 0.0 },
       uBedScale: { value: 1 / 12 }, // 1 タイル ≈ 12 m
       uBedDetail: { value: this.bedDetailTexture },
       uBedDetailScale: { value: 1 / 1.8 },
@@ -924,9 +959,13 @@ export class Terrain {
           `#include <common>
           ${CAUSTICS_GLSL}
           ${SHORE_WET_GLSL}
-          uniform sampler2D uBedSand;
-          uniform sampler2D uBedRock;
-          uniform sampler2D uBedMud;
+          /* 砂・岩・泥の 3 層。層番号は loadBedTextures の並び順 */
+          uniform sampler2DArray uBedTex;
+          #define BED_SAND 0.0
+          #define BED_ROCK 1.0
+          #define BED_MUD  2.0
+          uniform sampler2D uBedGrain;
+          uniform float uBedGrainAmt;
           uniform sampler2D uBedDetail;
           uniform sampler2D uGroundGravel;
           uniform sampler2D uGroundSand;
@@ -1126,9 +1165,9 @@ export class Terrain {
             float under = smoothstep(0.12, -0.28, vBedWorldPos.y);
             if (under > 0.001) {
               vec2 uv = vBedWorldPos.xz * uBedScale;
-              vec3 mudC  = texture2D(uBedMud,  uv).rgb;
-              vec3 sandC = texture2D(uBedSand, uv).rgb;
-              vec3 rockC = texture2D(uBedRock, uv).rgb;
+              vec3 mudC  = texture(uBedTex, vec3(uv, BED_MUD)).rgb;
+              vec3 sandC = texture(uBedTex, vec3(uv, BED_SAND)).rgb;
+              vec3 rockC = texture(uBedTex, vec3(uv, BED_ROCK)).rgb;
               vec4 detail = texture2D(uBedDetail, vBedWorldPos.xz * uBedDetailScale);
               float v = vBed;
               float wMud  = 1.0 - smoothstep(0.28, 0.40, v);
@@ -1137,6 +1176,14 @@ export class Terrain {
               float wSum = max(1e-4, wMud + wSand + wRock);
               vec3 bedCol = (mudC * wMud + sandC * wSand + rockC * wRock) / wSum;
               bedCol *= mix(0.88, 1.10, detail.b);
+              /* 湖底のアルベドは 1 タイル 12m（≒8.5px/m）と粗い。凹凸のほうは
+                 uBedDetailScale = 1/1.8m で細かいので、寄ると «凹凸だけ鮮明で
+                 色はボケる» ちぐはぐが出る（立方体モード・俯瞰・水中カメラで
+                 目立つ）。同じ 1.8m で色の 2 オクターブ目を掛ける。
+                 平均 0.5 の中立タイルなので ×2 で明るさは動かない。
+                 遠景では mip が 0.5 へ寄って自動的に効かなくなる */
+              vec3 grain = texture2D(uBedGrain, vBedWorldPos.xz * uBedDetailScale).rgb;
+              bedCol *= mix(vec3(1.0), grain * 2.0, uBedGrainAmt);
               float d = clamp(-vBedWorldPos.y / 16.0, 0.0, 1.0);
               bedCol *= mix(1.0, 0.38, d);
               diffuseColor.rgb = mix(diffuseColor.rgb, bedCol, under);
@@ -1327,15 +1374,19 @@ export class Terrain {
     const g = new THREE.Group();
     const plankMap = this._dockTextures?.plank || null;
     const pilingMap = this._dockTextures?.piling || null;
+    const algaeMap = this._dockTextures?.algae || null;
     const woodMat = makeDockWoodMat(
-      plankMap, 0x7a5b3c, 0.92, this._causticsUniforms, 'dock-wood-caustics-v1'
+      plankMap, 0x7a5b3c, 0.92, this._causticsUniforms, 'dock-wood-caustics-v1',
+      0xffffff, algaeMap
     );
     const woodDark = makeDockWoodMat(
-      pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-dark-caustics-v1', 0xc8b49a
+      pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-dark-caustics-v1', 0xc8b49a,
+      algaeMap
     );
     const postMat = withInstanceUvY(
       makeDockWoodMat(
-        pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-post-caustics-v1', 0xc8b49a
+        pilingMap, 0x5a4029, 0.95, this._causticsUniforms, 'dock-post-caustics-v1', 0xc8b49a,
+        algaeMap
       ),
       'dock-post-caustics-v1'
     );

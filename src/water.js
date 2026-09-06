@@ -132,6 +132,28 @@ function loadFoamTexture(onReady) {
 /* しぶきアトラスのセル。three は画像を上下反転して読む（flipY）ので、
    v=0 は «画像の下端» ＝ PNG の下の段になる。
    PNG は 上段 = 雫 / 飛び散り、下段 = 霧 / 伸びた雫 */
+/**
+ * 雨の着弾リング。4x4 の 16 コマ。アルファだけ使う。
+ * 読めなければ «透明な 1x1» を返す（リングが出なくなるだけ）。
+ */
+function loadRainRingTexture(onReady) {
+  const blank = new THREE.DataTexture(
+    new Uint8Array([255, 255, 255, 0]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType
+  );
+  blank.needsUpdate = true;
+  if (typeof document === 'undefined') return blank;
+  new THREE.TextureLoader().load('./assets/textures/rain-ring.png', (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // アトラスなので端は繰り返さない
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    onReady(tex);
+  }, undefined, () => {});
+  return blank;
+}
+
 const SPLASH_MIST = 0;
 const SPLASH_STREAK = 1;
 const SPLASH_DROP = 2;
@@ -233,6 +255,7 @@ export class Water {
       /* 渚の泡もランタイムで詰めたいので出しておく
          x,y = 先端の白線の内外幅 / z,w = 後方の泡帯の内外幅 */
       uFoamTex: { value: loadFoamTexture((tex) => { this.uniforms.uFoamTex.value = tex; }) },
+      uRainRing: { value: loadRainRingTexture((tex) => { this.uniforms.uRainRing.value = tex; }) },
       uFoamTip: { value: new THREE.Vector4(0.016, 0.002, 0.036, 0.004) },
       // x = レースの下閾値, y = 上閾値, z = 泡の合成量, w = 古い泡の減衰
       /* x,y = レースの閾値。写真そのものにコントラストがあるので、
@@ -323,6 +346,7 @@ export class Water {
         uniform float uTime, uNight, uRain, uFogNear, uFogFar, uExposure, uWind, uCamNear, uCamFar;
         uniform sampler2D uSceneColor, uSceneDepth, uReflColor, uRippleNormal, uHeightTex;
         uniform sampler2D uFoamTex;
+        uniform sampler2D uRainRing;
         uniform mat4 uTexMat;
         uniform mat4 uProjView, uInvProjView;
         uniform float uHasRefl, uReflTexel;
@@ -743,7 +767,12 @@ export class Water {
           vec3 foamCol = foamTint * foamBright + uSunColor * sunFoam;
           foamCol *= mix(0.38, 1.0, 1.0 - uNight * 0.38);
 
-          // --- 雨粒 ---
+          /* --- 雨粒 ---
+             以前は解析式のリング 1 本（smoothstep で細い環を描くだけ）。
+             着弾の王冠も、2 本目の環も、崩れ方も無かった。
+             16 コマのスプライトシートへ差し替える。
+             セルの中でリングがあまり広がらない絵なので、UV 側でも
+             コマの進みに合わせて拡大する（＝実際の広がりはこちらが持つ） */
           if (uRain > 0.02) {
             vec2 rp = vWorld.xz * 3.4;
             float t = uTime * 3.0;
@@ -751,9 +780,22 @@ export class Water {
             vec2 cell = floor(rp);
             float r = hash21(cell + cellT * 7.1);
             float ring = fract(t);
-            float d = length(fract(rp) - vec2(0.5));
-            float drop = smoothstep(0.02, 0.0, abs(d - ring * 0.5)) * step(0.86, r) * (1.0 - ring);
-            surf += vec3(0.5) * drop * uRain;
+            if (r > 0.86) {
+              /* セル内の座標を «広がる» ぶんだけ縮めてから引く。
+                 0.34 → 1.0 まで開くので、絵の中の環がそのまま外へ育つ */
+              float grow = mix(0.34, 1.0, ring);
+              vec2 luv = (fract(rp) - 0.5) / max(grow, 0.001) + 0.5;
+              if (luv.x > 0.0 && luv.x < 1.0 && luv.y > 0.0 && luv.y < 1.0) {
+                float f = floor(ring * 16.0);
+                vec2 fc = vec2(mod(f, 4.0), 3.0 - floor(f * 0.25));   // 左上が 1 コマ目
+                vec4 ringTex = texture2D(uRainRing, (luv + fc) * 0.25);
+                /* 旧実装（vec3(0.5) * drop * uRain）は小雨だと «乗せた分» が
+                   0.08 ほどしか無く、ほぼ見えなかった。雨量に対して線形だと
+                   小雨で消えるので、下駄を履かせて効かせる */
+                surf += vec3(0.62, 0.68, 0.72) * ringTex.a * (1.0 - ring)
+                      * (0.55 + uRain * 1.5);
+              }
+            }
           }
 
           /* --- 合成 ---

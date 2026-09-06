@@ -141,3 +141,59 @@ export function lodDitherFade(mat, band = 10) {
   mat.customProgramCacheKey = () => `lod-dither-fade-${band}`;
   return mat;
 }
+
+/**
+ * 杭の水際の藻と «濡れ»。
+ *桟橋はこれまで «濡れ» をまったく持っていなかったので、
+ * 水に浸かっている部分も乾いた木のままだった。
+ *
+ * 帯の位置は UV ではなくワールド Y で決める。杭は InstancedMesh で
+ * 高さが違い、UV は withInstanceUvY で伸縮させているので、UV で切ると
+ * 杭ごとに水位がずれる。
+ * @param {THREE.Material} mat
+ * @param {THREE.Texture|null} algaeTex
+ */
+export function dockWaterline(mat, algaeTex) {
+  if (!algaeTex) return mat;
+  const uniforms = { uAlgae: { value: algaeTex } };
+  mat.userData.algaeUniforms = uniforms;
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\n        varying vec3 vDockWorldPos;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vDockWorldPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+        #else
+          vDockWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        #endif`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vDockWorldPos;
+        uniform sampler2D uAlgae;`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        #ifdef USE_MAP
+        {
+          float y = vDockWorldPos.y;
+          /* 水位はどの杭でも同じ高さで止まらない。低い周波数で境界をずらす。
+             ハッシュで振ると杭 1 本の中でも暴れて «白いノイズ» になるので、
+             滑らかな関数を使うこと */
+          float wob = sin(vDockWorldPos.x * 2.1) * 0.035
+                    + sin(vDockWorldPos.z * 1.7 + 1.3) * 0.030;
+          float top = 0.11 + wob;
+          float wet = 1.0 - smoothstep(top - 0.07, top + 0.02, y);
+          /* 藻は木目の UV に乗せる。杭は縦長なので、投影を作り直すより
+             すでに «縦へ伸ばしてある» この UV を使うほうが素直 */
+          vec3 algae = texture2D(uAlgae, vMapUv * 2.2).rgb;
+          // 深いほど密。水面すぐ下は «まばらに付いた» 状態にする
+          float dens = wet * mix(0.50, 1.0, 1.0 - smoothstep(-0.9, 0.04, y));
+          diffuseColor.rgb = mix(diffuseColor.rgb, algae, clamp(dens, 0.0, 1.0) * 0.86);
+          // 濡れた木は暗く、少し滑らかになる
+          diffuseColor.rgb *= mix(1.0, 0.74, wet);
+          roughnessFactor = mix(roughnessFactor, 0.44, wet * 0.80);
+        }
+        #endif`);
+  };
+  mat.customProgramCacheKey = () => 'dock-waterline-v1';
+  return mat;
+}

@@ -3,9 +3,9 @@
    =========================================================== */
 import * as THREE from 'three';
 import { Environment } from './sky.js?v=20260828-uwgfx18';
-import { Terrain, WATER_REGION, WALK_INLAND } from './terrain.js?v=20260906-leaftex1';
+import { Terrain, WATER_REGION, WALK_INLAND } from './terrain.js?v=20260906-props1';
 import { resolveLake } from './lakefield.js';
-import { Water } from './water.js?v=20260906-splash1';
+import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
