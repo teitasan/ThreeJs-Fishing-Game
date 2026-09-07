@@ -6,7 +6,7 @@ English | **[日本語](README.md)**
 **Cast a line into the dawn-lit lake, and wait.**  
 They say the *Lord of the Lake* still sleeps in its deepest waters.
 
-### ▶ [Play in your browser](https://teitasan.github.io/lakeside-fishing/)
+### ▶ [Play in your browser](https://teitasan.github.io/ThreeJs-Fishing-Game/)
 
 No installation needed — everything runs in the browser. Sound on. Best with a mouse on desktop.  
 Available in **Japanese / English** (switch from the title screen or the in-game menu). The GitHub Pages build is single-player only. Multiplayer is available on the Cloudflare Worker–hosted build (Worker URL is not public).
@@ -54,7 +54,7 @@ A 3D fishing game built around quiet angling: walk the lakeshore, pick your dept
 4. During the fight: **hold to reel** / **release to ease the tension**
 5. Catches earn money and XP. `B` opens the shop, `Q` the journal
 
-For detailed parameters and the simulator, see the [Parameter Guide](https://teitasan.github.io/lakeside-fishing/manual.html) (Japanese).
+For detailed parameters and the simulator, see the [Parameter Guide](https://teitasan.github.io/ThreeJs-Fishing-Game/manual.html) (Japanese).
 
 ---
 
@@ -115,7 +115,7 @@ node scripts/run-mp-protocol-test.mjs
 
 | Role | Host | Serves |
 | --- | --- | --- |
-| Single-player | [GitHub Pages](https://teitasan.github.io/lakeside-fishing/) | Static HTML / JS / assets (no multiplayer UI) |
+| Single-player | [GitHub Pages](https://teitasan.github.io/ThreeJs-Fishing-Game/) | Static HTML / JS / assets (no multiplayer UI) |
 | Multiplayer | Cloudflare Worker | Full game + `/ws` + `/api/voice/join` (same origin) |
 
 Pushes to `main` deploy GitHub Pages and the Worker independently.
@@ -123,7 +123,7 @@ Pushes to `main` deploy GitHub Pages and the Worker independently.
 ### GitHub Pages (single-player)
 
 - Workflow: `.github/workflows/deploy-pages.yml`
-- Project-site base path: `/lakeside-fishing/` (relative `./` paths resolve correctly)
+- Project-site base path: `/ThreeJs-Fishing-Game/` (relative `./` paths resolve correctly)
 - **Play Together** is hidden and no WebSocket connection is attempted.
 
 ### Cloudflare Worker (multiplayer)
@@ -142,4 +142,4 @@ Secret: `REALTIMEKIT_API_TOKEN` (via `wrangler secret put`, as before).
 - Engine: Three.js (bundled in-repo, no external requests)
 - Post-processing: [postprocessing](https://github.com/pmndrs/postprocessing) (bundled in-repo)
 
-Single-player → [teitasan.github.io/lakeside-fishing](https://teitasan.github.io/lakeside-fishing/)
+Single-player → [teitasan.github.io/ThreeJs-Fishing-Game](https://teitasan.github.io/ThreeJs-Fishing-Game/)

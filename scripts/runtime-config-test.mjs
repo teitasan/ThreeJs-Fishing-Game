@@ -28,7 +28,7 @@ try {
   assert.equal(isMultiplayerAvailable(), true);
   assert.equal(multiplayerWsUrl(), 'wss://lakeside-fishing.example.workers.dev/ws?room=lake-1');
 
-  withLocation('https://teitasan.github.io/lakeside-fishing/');
+  withLocation('https://teitasan.github.io/ThreeJs-Fishing-Game/');
   assert.equal(isMultiplayerAvailable(), false);
   assert.equal(multiplayerWsUrl(), 'wss://teitasan.github.io/ws?room=lake-1');
 } finally {

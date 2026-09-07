@@ -6,7 +6,7 @@
 **朝焼けの湖で、静かに糸を垂れる。**  
 深場には *湖の主* が眠っているという。
 
-### ▶ [ブラウザで遊ぶ](https://teitasan.github.io/lakeside-fishing/)
+### ▶ [ブラウザで遊ぶ](https://teitasan.github.io/ThreeJs-Fishing-Game/)
 
 インストール不要・ブラウザだけで完結。音が出ます。PC + マウス推奨。  
 **日本語 / English** 両対応（タイトル画面またはメニューから切替）。GitHub Pages 版はシングルプレイのみ。マルチプレイは Cloudflare Worker でホストされた版で利用できます（Worker URL は非公開）。
@@ -54,7 +54,7 @@
 4. ヒット後は **押し続けて巻く** / **離してテンションを抜く**
 5. 釣果でお金と経験値。`B` でショップ、`Q` で図鑑
 
-詳しいパラメータやシミュレータは [パラメータ解説](https://teitasan.github.io/lakeside-fishing/manual.html) へ。
+詳しいパラメータやシミュレータは [パラメータ解説](https://teitasan.github.io/ThreeJs-Fishing-Game/manual.html) へ。
 
 ---
 
@@ -115,7 +115,7 @@ node scripts/run-mp-protocol-test.mjs
 
 | 役割 | 配信先 | 内容 |
 | --- | --- | --- |
-| シングルプレイ | [GitHub Pages](https://teitasan.github.io/lakeside-fishing/) | 静的 HTML / JS / アセット（マルチプレイ UI なし） |
+| シングルプレイ | [GitHub Pages](https://teitasan.github.io/ThreeJs-Fishing-Game/) | 静的 HTML / JS / アセット（マルチプレイ UI なし） |
 | マルチプレイ | Cloudflare Worker | ゲーム本体 + `/ws` + `/api/voice/join`（同一 origin） |
 
 `main` への push で GitHub Pages と Worker がそれぞれ自動デプロイされます。
@@ -123,7 +123,7 @@ node scripts/run-mp-protocol-test.mjs
 ### GitHub Pages（シングルプレイ）
 
 - ワークフロー: `.github/workflows/deploy-pages.yml`
-- プロジェクトサイトのベースパス: `/lakeside-fishing/`（相対パス `./` で解決）
+- プロジェクトサイトのベースパス: `/ThreeJs-Fishing-Game/`（相対パス `./` で解決）
 - **みんなで遊ぶ** は表示されず、WebSocket 接続も行いません。
 
 ### Cloudflare Worker（マルチプレイ）
@@ -142,4 +142,4 @@ node scripts/run-mp-protocol-test.mjs
 - エンジン: Three.js（リポジトリ内に同梱・外部通信なし）
 - 後処理: [postprocessing](https://github.com/pmndrs/postprocessing)（リポジトリ内に同梱）
 
-シングルプレイ → [teitasan.github.io/lakeside-fishing](https://teitasan.github.io/lakeside-fishing/)
+シングルプレイ → [teitasan.github.io/ThreeJs-Fishing-Game](https://teitasan.github.io/ThreeJs-Fishing-Game/)
