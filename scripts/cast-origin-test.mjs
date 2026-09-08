@@ -179,10 +179,20 @@ function tipAt(f) {
     'Angler.getCastOrigin が無い');
   /* ためる量 → フレームは逆引きを通す。等間隔に戻すと、メーターの前半で
      竿の前後がまったく動かなくなる */
-  assert.match(angler, /return this\._chargeFrame\(st === 'charge'/,
+  assert.match(angler, /if \(st === 'charge'\) return this\._chargeFrame\(/,
     '_castFrame がためる量を _chargeFrame に通していない');
   assert.match(angler, /chargeFrameTable\(sweep, f0, f1\)/,
     'ためる量 → フレームの逆引き（chargeFrameTable）を使っていない');
+  /* 振り終わりはそのフレームで止める。ため始めへ戻すと、アタリ待ちへの
+     混ざりが抜け切る前に竿が跳ねる。どれだけ跳ぶかは実データで測る */
+  const SWING = num(/swing:\s*([\d.]+)/, 'motion.cast.swing');
+  const a = tipAt(Math.round(CHARGE0)), b = tipAt(Math.round(SWING));
+  const jump = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  if (jump > 0.15) {
+    assert.match(angler, /return C\.swing;/,
+      `振り終わりでフレームを保持していない（ため始めへ戻ると竿先が ${jump.toFixed(2)}m 跳ぶ）`);
+  }
+  console.log(`振り終わりの保持: 戻すと竿先が ${jump.toFixed(2)}m 跳ぶので保持している`);
 
   /** その関数の中で使っているのはどちらか */
   const bodyOf = (name) => {

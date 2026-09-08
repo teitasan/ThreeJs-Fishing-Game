@@ -588,7 +588,12 @@ export class Angler {
       const e = clamp01(this.castAnim / Math.max(0.05, C.dur));
       return lerp(C.charge1, C.swing, e * e * (3 - 2 * e));
     }
-    return this._chargeFrame(st === 'charge' ? clamp01(p.charge || 0) : 0);
+    if (st === 'charge') return this._chargeFrame(clamp01(p.charge || 0));
+    /* 振り終わったら振り抜きの最後で止めておく。ここでため始めへ戻すと、
+       アタリ待ちへの混ざりが抜け切る前に竿が跳ねる（振り抜き 112 と
+       ため始め 10 では竿先が 73cm ずれていて、しかもその瞬間はまだ
+       キャストのクリップに重みが乗り切っている） */
+    return C.swing;
   }
 
   /**
