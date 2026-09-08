@@ -490,8 +490,6 @@ export class Angler {
    * かわりに、リターゲット時にオフラインで焼いていた次の値を読み込み時に測る。
    *   axis   : 右手のローカルで見た竿の軸。両手が同じ竿を握っているので
    *            «左手 → 右手» がそのまま軸になる。ブレなければ剛体で付けられる
-   *   grip   : そのフレームで左手が竿の線に乗っているか（0..1）。キャストの
-   *            後半のように本当に離している区間があるので、そこは IK で戻さない
    *   sweep  : 竿の前後の傾き。ためる量に前後の動きを比例させるのに使う
    *   stride : «足が滑らない速さ» と 1 周の尺。歩き／走りの再生倍率に使う
    *
@@ -560,19 +558,13 @@ export class Angler {
       const axisSpread = Math.max(...axes.map((v) => v.angleTo(axis))) * 180 / Math.PI;
       this._rodQ = new THREE.Quaternion().setFromUnitVectors(_up, axis);
 
-      /** 左手が竿の線から離れている距離（m）と、線に沿った位置 */
-      const offRod = () => {
-        hand.getWorldPosition(_hp);
+      /** 竿の向き（ワールド） */
+      const rodDir = () => {
         hand.getWorldQuaternion(_hq);
-        _v2.copy(axis).applyQuaternion(_hq).normalize();   // 竿の向き（ワールド）
-        help.getWorldPosition(_lp).sub(_hp);
-        const along = _lp.dot(_v2);
-        return { perp: _v3.copy(_lp).addScaledVector(_v2, -along).length(), along, dir: _v2.clone() };
+        return _v2.copy(axis).applyQuaternion(_hq).normalize();
       };
-      /* 0.03m 以内なら握っている、0.10m を超えたら離している */
-      const gripOf = (c) => sample(c, frames(c), () => clamp01((0.10 - offRod().perp) / 0.07));
       // 竿の前後の傾き（体の向きは root 側なので、ここではモデル空間の z）
-      const sweep = sample(clip.fishCast, frames(clip.fishCast), () => offRod().dir.z);
+      const sweep = sample(clip.fishCast, frames(clip.fishCast), () => rodDir().z);
 
       /* «足が滑らない速さ»。その場で回すと接地している足はちょうど地面の速さで
          後ろへ流れる。接地は «低いほう» の足で見分け、走りには両足が浮く瞬間が
@@ -615,7 +607,6 @@ export class Angler {
       this._motion = {
         fps: MOTION_FPS,
         rodYaw,
-        grip: { fishIdle: gripOf(clip.fishIdle), fishCast: gripOf(clip.fishCast) },
         sweep,
         stride: { walk: strideOf(clip.walk), run: strideOf(clip.run) },
       };
@@ -738,23 +729,6 @@ export class Angler {
     return this._chargeCache;
   }
 
-  /**
-   * いま左手が竿を握っているか（0..1）。Mixamo 側で
-   * «左手が竿の線に乗っているか» を測って焼いてある
-   */
-  _gripWeight() {
-    const m = this._motion;
-    if (!m) return 1;
-    const at = (arr, sec) => {
-      const i = clamp(Math.round(sec * m.fps), 0, arr.length - 1);
-      return arr[i];
-    };
-    return lerp(
-      at(m.grip.fishIdle, this.actFishIdle.time),
-      at(m.grip.fishCast, this.actFishCast.time),
-      this._castW
-    );
-  }
 
   /* ---------------- ロッド ---------------- */
   /**
@@ -1073,10 +1047,14 @@ export class Angler {
     this.fpv = on;
     /* 旧素体は頭・胴を «部位ごとの別メッシュ» として消していたが、Mixamo の
        キャラは全身が 1 枚のスキンメッシュなので部位単位では消せない。
-       頭の骨を潰して、カメラのすぐ前から頭を退かせる（自分の頭は自分には
-       見えないので、視界を空けるにはこれで足りる） */
-    const head = this.bones.Head;
-    if (head) head.scale.setScalar(on ? 1e-3 : 1);
+       頭の骨を潰すだけでは、カメラが体の内側に入って «裏面から向こうが
+       透けて見える» ことになる（面は片側だけ描くので）。体ごと消す。
+       竿・糸・ウキは別のオブジェクトなので残る */
+    if (this.model) {
+      this.model.traverse((o) => {
+        if (o.isMesh || o.isSkinnedMesh) o.visible = !on;
+      });
+    }
   }
 
   /**
@@ -1313,14 +1291,16 @@ export class Angler {
     this.rodMount.quaternion.copy(_rodQt);
     this.rodMount.updateMatrixWorld(true);
 
-    // 右腕：肘は外側後ろへ張り出す（竿を握る側の手なので、巻いていても動かさない）
-    _v6.set(...T.arm.poleR).applyQuaternion(this.root.quaternion);
-    this._solveArm('Right', hand, _v6);
-    /* Mixamo が乗っているぶんはクリップの腕へ戻す。竿はその右手から置いたので、
-       乗り切ったところで «竿を握った手» と過不足なく一致する */
-    if (w > 1e-3) {
-      B.RightArm.quaternion.slerp(this._clipQ.RightArm, w);
-      B.RightForeArm.quaternion.slerp(this._clipQ.RightForeArm, w);
+    /* 右腕：肘は外側後ろへ張り出す（竿を握る側の手なので、巻いていても動かさない）。
+       クリップに乗り切っているときは触らない（竿はその右手から置いてあるので、
+       クリップのままで «竿を握った手» と過不足なく一致する） */
+    if (w < 0.999) {
+      _v6.set(...T.arm.poleR).applyQuaternion(this.root.quaternion);
+      this._solveArm('Right', hand, _v6);
+      if (w > 1e-3) {
+        B.RightArm.quaternion.slerp(this._clipQ.RightArm, w);
+        B.RightForeArm.quaternion.slerp(this._clipQ.RightForeArm, w);
+      }
       this.root.updateMatrixWorld(true);
     }
     /* 左手は右手のすぐ下に添える。腕が肩から手首まで 0.42m しかなく、
@@ -1334,26 +1314,32 @@ export class Angler {
       this.reelKnob.getWorldPosition(_v13);
       _v3.lerp(_v13, this._reelHandBlend);
     }
-    /* 左手が竿から離れる区間（キャストの後半）は、竿へ戻さずクリップに任せる。
-       素体は腕が短くて両手が 1 点に集まらないぶんを IK で埋めているだけなので、
-       «本当に離している» ところまで埋めると嘘になる */
-    const leftW = 1 - w * (1 - this._gripWeight());
-    if (leftW < 0.999) _v3.lerp(B.LeftHand.getWorldPosition(_v14), 1 - leftW);
-    _v6.set(...T.arm.poleL).applyQuaternion(this.root.quaternion);
-    this._solveArm('Left', _v3, _v6);
-    if (w > 1e-3 && leftW < 0.999) {
-      B.LeftArm.quaternion.slerp(this._clipQ.LeftArm, 1 - leftW);
-      B.LeftForeArm.quaternion.slerp(this._clipQ.LeftForeArm, 1 - leftW);
-    }
+    /* 左手。クリップは両手を竿に乗せてくれている（Fishing Idle の実測で竿の線
+       から 0.2cm）ので、ふだんは触らない。旧素体は腕が短くて 17cm 浮いたので
+       IK で竿へ引っ張っていたが、Mannequin にそれをやると届かない目標
+       （肩から 0.61m。腕は 0.49m しかない）へ引っ張って腕が伸び切る。
 
-    // 両手を竿の向きへ向ける（新キャラは指ボーンが無いので握らせる処理はしない）
-    _v2.set(0, 1, 0).applyQuaternion(this.rodMount.getWorldQuaternion(_q));   // 竿の伸びる向き
-    this._aimBone(B.LeftHand, _v2);
-    this._aimBone(B.RightHand, _v2);
-    /* 手の向きもクリップのほうが «竿を握った手» そのものなので、乗っているぶんは戻す */
-    if (w > 1e-3) {
-      B.RightHand.quaternion.slerp(this._clipQ.RightHand, w);
-      if (leftW < 0.999) B.LeftHand.quaternion.slerp(this._clipQ.LeftHand, 1 - leftW);
+       手を出すのは «手続き生成のとき»（ファイト・取り込み・歩き・一人称）と
+       «巻いているとき»（左手をリールのノブへ寄せる）だけ */
+    const reelPull = this.reelKnob ? clamp01(this._reelHandBlend) : 0;
+    const leftIK = Math.max(1 - w, reelPull);
+    if (leftIK > 1e-3) {
+      if (leftIK < 0.999) _v3.lerp(B.LeftHand.getWorldPosition(_v14), 1 - leftIK);
+      _v6.set(...T.arm.poleL).applyQuaternion(this.root.quaternion);
+      this._solveArm('Left', _v3, _v6);
+      if (leftIK < 0.999) {
+        B.LeftArm.quaternion.slerp(this._clipQ.LeftArm, 1 - leftIK);
+        B.LeftForeArm.quaternion.slerp(this._clipQ.LeftForeArm, 1 - leftIK);
+      }
+      // 手を竿の向きへ向ける（指ボーンは握らせないので向きだけ）
+      _v2.set(0, 1, 0).applyQuaternion(this.rodMount.getWorldQuaternion(_q));
+      this._aimBone(B.LeftHand, _v2);
+      if (leftIK < 0.999) B.LeftHand.quaternion.slerp(this._clipQ.LeftHand, 1 - leftIK);
+    }
+    if (w < 0.999) {
+      _v2.set(0, 1, 0).applyQuaternion(this.rodMount.getWorldQuaternion(_q));
+      this._aimBone(B.RightHand, _v2);
+      if (w > 1e-3) B.RightHand.quaternion.slerp(this._clipQ.RightHand, w);
     }
   }
 
