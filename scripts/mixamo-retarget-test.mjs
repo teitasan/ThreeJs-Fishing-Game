@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAP, axisOf, buildRig, readGlb } from './mixamo-retarget.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -133,20 +134,9 @@ function poseSkeleton(localQ = {}) {
 }
 
 /* ---------------- 素体（GLB）の階層 ---------------- */
-function readGlb(path) {
-  const buf = readFileSync(path);
-  let off = 12;
-  while (off < buf.length) {
-    const len = buf.readUInt32LE(off);
-    if (buf.readUInt32LE(off + 4) === 0x4e4f534a) {
-      return JSON.parse(buf.slice(off + 8, off + 8 + len).toString('utf8'));
-    }
-    off += 8 + len;
-  }
-  throw new Error('no json chunk');
-}
 const gltf = readGlb(join(root, 'assets/models/player-lowpoly.glb'));
-const byName = new Map(gltf.nodes.map((n, i) => [n.name, i]));
+const rig = buildRig(gltf);
+const byName = rig.byName;
 
 /** クリップの局所回転で順運動学。各ノードのワールド回転・位置を返す */
 function forward(localQ) {
@@ -162,37 +152,31 @@ function forward(localQ) {
   return world;
 }
 
-/** そのパーツが伸びる局所軸（葉だけ明示。retarget 側の MAP と同じ） */
-const AXIS = { HandL: [0, -1, 0], HandR: [0, -1, 0], FootL: [0, 0, -1], FootR: [0, 0, -1] };
-function axisOf(name) {
-  if (AXIS[name]) return unit(AXIS[name]);
-  const n = gltf.nodes[byName.get(name)];
-  const kid = (n.children || [])
-    .map((c) => gltf.nodes[c].translation || [0, 0, 0])
-    .find((t) => Math.hypot(...t) > 1e-6);
-  return unit(kid || [0, -1, 0]);
-}
+/* 検査する対応は MAP そのものを使う。表を書き写すと «表どうしは合っているが
+   実物と食い違う» という一番たちの悪いすれ違いが起きる */
+const CHECK = MAP.map(([node, bones, axis]) => ({
+  node,
+  root: bones[0],
+  child: bones.slice(1).find((b) => OFFSET[b] !== undefined),
+  axis: axisOf(rig, byName.get(node), axis),
+}));
 
-/* 素体のパーツ → Mixamo の [根元, 向きの先] */
-const CHECK = [
-  ['Hips', 'Hips', 'Spine'],
-  ['Waist', 'Spine', 'Spine1'],
-  ['Belly', 'Spine1', 'Spine2'],
-  ['Chest', 'Spine2', 'Neck'],
-  ['Head', 'Head', 'HeadTop_End'],
-  ['UpperArmL', 'LeftArm', 'LeftForeArm'],
-  ['LowerArmL', 'LeftForeArm', 'LeftHand'],
-  ['HandL', 'LeftHand', 'LeftHandMiddle1'],
-  ['UpperArmR', 'RightArm', 'RightForeArm'],
-  ['LowerArmR', 'RightForeArm', 'RightHand'],
-  ['HandR', 'RightHand', 'RightHandMiddle1'],
-  ['UpperLegL', 'LeftUpLeg', 'LeftLeg'],
-  ['LowerLegL', 'LeftLeg', 'LeftFoot'],
-  ['FootL', 'LeftFoot', 'LeftToeBase'],
-  ['UpperLegR', 'RightUpLeg', 'RightLeg'],
-  ['LowerLegR', 'RightLeg', 'RightFoot'],
-  ['FootR', 'RightFoot', 'RightToeBase'],
-];
+/* ---------------- 軸の指定そのものが正しいか ----------------
+   «向きが合っているか» の検査は MAP の軸を前提にしてしまうので、
+   軸を間違えて指定した場合（Hips の軸に横向きの Joint_HipR を拾う等）は
+   すり抜ける。そこで軸だけは «メッシュが実際にどちらへ伸びているか» と
+   突き合わせる。パーツはどれも関節から片側へ伸びる箱なので、
+   ローカル境界箱の中心の向きがそのまま伸びる向きになる */
+for (const { node, axis } of CHECK) {
+  const n = gltf.nodes[byName.get(node)];
+  const prim = gltf.meshes[n.mesh].primitives[0];
+  const acc = gltf.accessors[prim.attributes.POSITION];
+  const c = unit(acc.min.map((v, i) => v + acc.max[i]));
+  const deg = Math.acos(Math.min(1, Math.max(-1, dot(c, axis)))) * 180 / Math.PI;
+  assert.ok(deg < 25,
+    `${node} の軸 [${axis.map((v) => v.toFixed(2))}] が、メッシュの伸びる向き ` +
+    `[${c.map((v) => v.toFixed(2))}] と ${deg.toFixed(0)}度 食い違っている`);
+}
 
 /* ---------------- 検査するポーズ ----------------
    T ポーズそのままだけだと «静止姿勢を写しただけ» でも通ってしまうので、
@@ -245,6 +229,27 @@ const clip = JSON.parse(readFileSync(outPath, 'utf8'));
 
 /* --- 出力の形 --- */
 assert.strictEqual(clip.name, 'SyntheticFishing', 'クリップ名がアクション名にならない');
+
+/* uuid が無いと THREE.AnimationClip.parse が clip.uuid = undefined にしてしまい、
+   AnimationMixer.clipAction のキャッシュがクリップ間で衝突する。
+   «2 本目のモーションに切り替えたのに 1 本目が鳴り続ける» という、
+   見た目からは原因の分からない壊れ方をするので、形と一意性を押さえておく */
+assert.match(clip.uuid || '', /^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$/,
+  `uuid が uuid の形をしていない: ${clip.uuid}`);
+{
+  const run = (name, out) => {
+    const rr = spawnSync(process.execPath, [
+      join(root, 'scripts/mixamo-retarget.mjs'),
+      '--dump', dumpPath, '--out', out, '--name', name, '--yaw', 'keep',
+    ], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(rr.status, 0, `リターゲットが失敗した:\n${rr.stdout}\n${rr.stderr}`);
+    return JSON.parse(readFileSync(out, 'utf8')).uuid;
+  };
+  const a = run('SyntheticFishing', join(dir, 'again.json'));
+  const b = run('SomethingElse', join(dir, 'other.json'));
+  assert.strictEqual(a, clip.uuid, 'uuid が作り直すたびに変わる（差分が無駄に出る）');
+  assert.notStrictEqual(a, b, 'クリップ名が違うのに uuid が同じ');
+}
 assert.ok(Math.abs(clip.duration - (frames.length - 1) / 30) < 1e-6, '尺が fps と合わない');
 for (const tr of clip.tracks) {
   assert.strictEqual(tr.times.length, frames.length, `${tr.name}: キー数がフレーム数と違う`);
@@ -253,7 +258,7 @@ for (const tr of clip.tracks) {
   assert.ok(tr.values.every(Number.isFinite), `${tr.name}: NaN が混じっている`);
 }
 const names = new Set(clip.tracks.map((t) => t.name));
-for (const [node] of CHECK) {
+for (const { node } of CHECK) {
   assert.ok(names.has(`${node}.quaternion`), `${node} のトラックが無い`);
 }
 assert.ok(names.has('Hips.position'), 'Hips の移動トラックが無い');
@@ -267,14 +272,38 @@ for (let f = 0; f < frames.length; f++) {
   const localQ = new Map();
   for (const [node, tr] of qTracks) localQ.set(node, tr.values.slice(f * 4, f * 4 + 4));
   const world = forward(localQ);
-  for (const [node, boneA, boneB] of CHECK) {
+  for (const { node, root: boneA, child: boneB, axis } of CHECK) {
     const want = unit(sub(posed[f].wp[boneB], posed[f].wp[boneA]));
-    const got = unit(qapply(world.get(node).q, axisOf(node)));
+    const got = unit(qapply(world.get(node).q, axis));
     const deg = Math.acos(Math.min(1, Math.max(-1, dot(want, got)))) * 180 / Math.PI;
     if (deg > worst) { worst = deg; worstAt = `${node} (frame ${f})`; }
   }
 }
 assert.ok(worst < 0.05, `パーツの向きが Mixamo の骨とずれている: 最大 ${worst.toFixed(3)}° @ ${worstAt}`);
+
+/* --- 握りの情報 ----------------------------------------------------------
+   竿は右手へ剛体で付けるので «右手ローカルで見た竿の軸» が要る。
+   素体は Mixamo より腕が短く、向きを合わせると両手が 1 点に集まらないので、
+   左腕は実行時に IK で竿へ戻す。ただしキャスト後半のように本当に手を
+   離している区間まで戻すと嘘になるため、握っている度合いも一緒に出す */
+{
+  const g = clip.grip;
+  assert.ok(g, '握りの情報 (grip) が出ていない');
+  assert.ok(Math.abs(Math.hypot(...g.axis) - 1) < 1e-3,
+    `竿の軸が単位ベクトルでない: [${g.axis}]`);
+  assert.strictEqual(g.leftGrip.length, frames.length, '握りの重みがフレーム数と違う');
+  assert.ok(g.leftGrip.every((v) => v >= 0 && v <= 1), '握りの重みが 0..1 に収まっていない');
+
+  // 軸は外から固定できること（クリップごとに違う軸になると、切り替えで竿が飛ぶ）
+  const forced = join(dir, 'forced.json');
+  const rr = spawnSync(process.execPath, [
+    join(root, 'scripts/mixamo-retarget.mjs'),
+    '--dump', dumpPath, '--out', forced, '--yaw', 'keep', '--rod-axis', '0,0,1',
+  ], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(rr.status, 0, `--rod-axis つきで失敗した:\n${rr.stdout}\n${rr.stderr}`);
+  assert.deepStrictEqual(JSON.parse(readFileSync(forced, 'utf8')).grip.axis, [0, 0, 1],
+    '--rod-axis で渡した軸が使われていない');
+}
 
 /* --- 腰の高さは «こちらの背丈» に正規化されること --- */
 const hips = clip.tracks.find((t) => t.name === 'Hips.position');
