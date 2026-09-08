@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, clamp01, lerp, damp, TAU, lineSagProfile } from './util.js?v=20260830-zone5';
+import { chargeFrameTable } from './castCharge.js';
 import { createBaitMesh, disposeBaitMesh, updateBaitMesh, createHookMesh, HOOK } from './baitMesh.js';
 import { t } from './i18n.js';
 
@@ -178,6 +179,9 @@ export const TUNING = {
      両手が同じ 1 点に集まらず左手が 17cm 浮く。左腕だけ IK で竿へ戻す。
        palm  : 竿を握る手のひらの点（HandR ローカルの -Y m）
        blend : 手続き生成との行き来の速さ（大きいほど速い）
+       castBlend : ために入るときだけの速さ。メーターは 1.9 秒で往復するので、
+               通常の blend（乗り切るまで 0.33 秒）だと最初の 3 割ほど竿が
+               付いてこず、狙いを決める動きと連動していないように見える
        cast  : Fishing Cast のどこを使うか（フレーム）。振りかぶりは charge で
                スクラブし、離したら swing まで dur 秒かけて流す。
                charge1 を振りかぶりの頂点（54）まで伸ばすと、そこへ至る途中で
@@ -186,8 +190,8 @@ export const TUNING = {
                ゲームの竿は 2.43m と背丈 1.5m の釣り人には長いため、
                下を向いた瞬間に穂先が地面へ入る。竿先が地上に残る 24 で切る */
   motion: {
-    palm: 0.05, blend: 9,
-    cast: { charge0: 0, charge1: 24, swing: 112, dur: 0.5 },
+    palm: 0.05, blend: 9, castBlend: 22,
+    cast: { charge0: 10, charge1: 24, swing: 112, dur: 0.5 },
   },
 };
 
@@ -502,6 +506,9 @@ export class Angler {
       this._motion = {
         fps: 1 / Math.max(1e-6, times[1] - times[0]),
         grip: { fishIdle: src.fishIdle.grip.leftGrip, fishCast: src.fishCast.grip.leftGrip },
+        /* 竿の «前後の傾き» をフレームごとに。ためる量から «前後が比例して
+           動くフレーム» を逆に引くのに使う（_chargeFrame） */
+        sweep: src.fishCast.grip.sweep,
         /* «足が滑らない速さ» と 1 周の尺。1 周で進む距離 = 速さ × 尺 */
         stride: { walk: src.walk.stride, run: src.run.stride },
       };
@@ -581,7 +588,40 @@ export class Angler {
       const e = clamp01(this.castAnim / Math.max(0.05, C.dur));
       return lerp(C.charge1, C.swing, e * e * (3 - 2 * e));
     }
-    return lerp(C.charge0, C.charge1, st === 'charge' ? clamp01(p.charge || 0) : 0);
+    return this._chargeFrame(st === 'charge' ? clamp01(p.charge || 0) : 0);
+  }
+
+  /**
+   * ためる量 0..1 → Fishing Cast のフレーム。
+   *
+   * ためる範囲を等間隔に送ってはいけない。Mixamo のキャストは前半で竿を横へ
+   * 払ってから後半で後ろへ倒すので、«竿の前後» がためる量に比例しない。
+   * 実測ではためる量 0→0.5 のあいだ竿先の前後が 1.42→1.43m しか動かず、
+   * 0.5→1.0 で一気に 1.94m 動いていた。狙う距離はメーターで決めるのに、
+   * その前半で竿がまったく反応しないので «連動していない» ように見える。
+   *
+   * クリップに焼いた «竿の前後の傾き»（grip.sweep）を逆に引いて、前後の
+   * 動きがためる量に比例するフレームを返す
+   */
+  _chargeFrame(charge) {
+    const C = TUNING.motion.cast;
+    const tbl = this._chargeTable(C.charge0, C.charge1);
+    if (!tbl) return lerp(C.charge0, C.charge1, charge);
+    const x = clamp01(charge) * (tbl.length - 1);
+    const i = Math.min(tbl.length - 2, Math.floor(x));
+    return lerp(tbl[i], tbl[i + 1], x - i);
+  }
+
+  /** 上の逆引きの表。ためる範囲が変わったときだけ作り直す（エディターで動かせる） */
+  _chargeTable(f0, f1) {
+    const sweep = this._motion && this._motion.sweep;
+    if (!sweep) return null;
+    const key = `${f0}:${f1}`;
+    if (this._chargeKey !== key) {
+      this._chargeKey = key;
+      this._chargeCache = chargeFrameTable(sweep, f0, f1);
+    }
+    return this._chargeCache;
   }
 
   /**
@@ -978,7 +1018,9 @@ export class Angler {
     this.actIdle.setEffectiveWeight((1 - mv) * (1 - w));
     if (this._motion) {
       const castT = (st === 'charge' || this.castAnim >= 0) ? 1 : 0;
-      this._castW = damp(this._castW, castT, TUNING.motion.blend, dt);
+      /* ために入るときだけ速く乗せる。抜けるほうは急ぐ理由がない */
+      const cb = castT > this._castW ? TUNING.motion.castBlend : TUNING.motion.blend;
+      this._castW = damp(this._castW, castT, cb, dt);
       this.actFishIdle.setEffectiveWeight(w * (1 - this._castW));
       this.actFishCast.setEffectiveWeight(w * this._castW);
       this.actFishCast.time = this._castFrame(st, p) / this._motion.fps;

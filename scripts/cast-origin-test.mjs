@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readGlb, buildRig } from './mixamo-retarget.mjs';
+import { chargeFrameTable } from '../src/castCharge.js';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (p) => readFileSync(join(root, p), 'utf8');
@@ -117,6 +118,50 @@ function tipAt(f) {
   console.log(`ためる範囲 ${CHARGE0}〜${CHARGE1}: 竿先の最低高さ ${worst.toFixed(2)}m @ frame ${worstAt}`);
 }
 
+/* ---------------- ためる量と竿の前後が連動しているか ----------------
+   狙う距離はためるメーターで決めるので、竿の前後がメーターに比例して
+   動かないと «連動していない» ように見える。ためる範囲を等間隔に送ると、
+   Mixamo のキャストは前半が «横へ払うだけ» なので前後がまったく動かない */
+{
+  const tipFore = (f) => {
+    const lo = Math.floor(f), hi = Math.min(Math.ceil(f), clip.tracks[0].times.length - 1);
+    const a = tipAt(lo)[2], b = tipAt(hi)[2];
+    return a + (b - a) * (f - lo);
+  };
+  const N = 17;
+  const spread = (frames) => {
+    const fore = frames.map(tipFore);
+    const step = [];
+    for (let i = 1; i < fore.length; i++) step.push(fore[i - 1] - fore[i]);
+    const travel = fore[0] - fore[fore.length - 1];
+    const mean = travel / step.length;
+    return { fore, step, travel, mean, worst: Math.max(...step), min: Math.min(...step) };
+  };
+
+  // 等間隔（直した前の挙動）
+  const flat = spread([...Array(N)].map((_, k) => CHARGE0 + (CHARGE1 - CHARGE0) * (k / (N - 1))));
+  // 逆引き（いまの挙動）
+  const tbl = chargeFrameTable(clip.grip.sweep, CHARGE0, CHARGE1);
+  assert.ok(tbl, 'ためる量 → フレームの表が作れない（grip.sweep が無い？）');
+  const even = spread([...Array(N)].map((_, k) => {
+    const x = (k / (N - 1)) * (tbl.length - 1);
+    const i = Math.min(tbl.length - 2, Math.floor(x));
+    return tbl[i] + (tbl[i + 1] - tbl[i]) * (x - i);
+  }));
+
+  assert.ok(even.travel > 1.2,
+    `ためても竿が前後に動かない（${even.travel.toFixed(2)}m しか動いていない）`);
+  assert.ok(even.min > -0.02,
+    `ためる途中で竿が逆へ戻る（最小の刻み ${even.min.toFixed(3)}m）`);
+  assert.ok(even.worst / even.mean < 1.4,
+    `竿の前後がためる量に比例していない：いちばん大きい刻みが平均の `
+    + `${(even.worst / even.mean).toFixed(1)} 倍（前半で動かない等）`);
+
+  console.log(`竿の前後の動き: 合計 ${even.travel.toFixed(2)}m / `
+    + `刻みのばらつき 平均の ${(even.worst / even.mean).toFixed(1)} 倍`
+    + `（等間隔送りだと ${(flat.worst / flat.mean).toFixed(1)} 倍）`);
+}
+
 /* ---------------- 構えたときの竿先は体の前にあるか ---------------- */
 {
   const sh = rig.world.get(rig.byName.get('Joint_ShoulderR')).p;
@@ -132,6 +177,12 @@ function tipAt(f) {
 {
   assert.match(angler, /getCastOrigin\(out = new THREE\.Vector3\(\)\)/,
     'Angler.getCastOrigin が無い');
+  /* ためる量 → フレームは逆引きを通す。等間隔に戻すと、メーターの前半で
+     竿の前後がまったく動かなくなる */
+  assert.match(angler, /return this\._chargeFrame\(st === 'charge'/,
+    '_castFrame がためる量を _chargeFrame に通していない');
+  assert.match(angler, /chargeFrameTable\(sweep, f0, f1\)/,
+    'ためる量 → フレームの逆引き（chargeFrameTable）を使っていない');
 
   /** その関数の中で使っているのはどちらか */
   const bodyOf = (name) => {

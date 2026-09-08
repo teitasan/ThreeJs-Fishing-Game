@@ -387,8 +387,14 @@ function main() {
     const weight = m.map((x) => clamp01((0.10 - x.perp) / 0.07));
     const held = m.filter((x, i) => weight[i] > 0.5).map((x) => x.along);
     held.sort((a, b) => a - b);
+    /* 竿の «前後の傾き» をフレームごとに。ためる量とフレームを等間隔で
+       結ぶと、前後の動きがためる量に比例しない（Mixamo のキャストは前半で
+       竿を横へ払ってから後半で後ろへ倒すので、メーターの前半で竿の前後が
+       まったく動かない）。ゲーム側でここを逆に引いて比例させる */
+    const sweep = handWorld.map((q) => Number(qapply(q, axis)[2].toFixed(4)));
     return {
       axis: axis.map((v) => Number(v.toFixed(5))),
+      sweep,
       leftAlong: held.length ? Number(held[held.length >> 1].toFixed(4)) : null,
       /* 軸のブレ。両手が近づくと «左手 → 右手» の向きは意味を失う（長さが
          ゼロに近づくので角度が暴れる）ので、10cm 以上離れているフレームだけで見る */
