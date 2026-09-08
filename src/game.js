@@ -9,7 +9,7 @@ import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
-import { Angler } from './angler.js';
+import { Angler } from './angler.js?v=20260908-mixamo';
 import { UI } from './ui.js';
 import { Debug } from './debug.js';
 import { AudioEngine } from './audio.js';
