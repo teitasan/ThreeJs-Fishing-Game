@@ -340,9 +340,9 @@ buildPose();
 {
   const S = angler._motion && angler._motion.stride;
   const note = S
-    ? `Mixamo の歩き／走りを混ぜます。足が滑らない速さはクリップごとの実測で 歩き ${S.walk.speed} m/s・走り ${S.run.speed} m/s。`
+    ? `Mixamo の歩き／走りを混ぜます。足が滑らない速さは読み込み時の実測で 歩き ${S.walk.speed.toFixed(2)} m/s・走り ${S.run.speed.toFixed(2)} m/s。`
       + '再生倍率 = ゲームの速さ ÷ その速さ × 効き。効き 1 で足がまったく滑りません。'
-    : 'Mixamo のクリップが読めなかったので、付属 Walk の再生倍率です。';
+    : 'モーションが読めていません。';
   const g = group('歩きと走り', note);
   slider(g, '足を合わせる効き', TUNING.walk, 'rate', 0, 1.5, 0.05, '×');
   slider(g, '再生倍率の上限', TUNING.walk, 'maxRate', 1, 4, 0.1, '×');
@@ -461,8 +461,7 @@ function frame() {
         + `ゲームの速度 <b>${real.toFixed(2)}</b> m/s → `
         + `<span class="${slip > 1.35 ? 'warn' : 'ok'}">足の滑り ${slip.toFixed(2)} 倍</span>`;
     } else {
-      const ts = TUNING.walk.timeBase + play.moving * TUNING.walk.timeGain;
-      walkInfo = `付属 Walk（Mixamo が読めていない）再生倍率 <b>${ts.toFixed(2)}×</b>`;
+      walkInfo = 'モーションが読めていません（歩きのクリップが無い）';
     }
   }
   readout.innerHTML = `状態 <b>${play.state}</b>　竿のピッチ <b>${angler.rodPitch.toFixed(2)}</b> rad`
