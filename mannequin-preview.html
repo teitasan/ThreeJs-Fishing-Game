@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mannequin 確認 — 湖畔のフィッシング</title>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
+</script>
+<style>
+:root { --bg:#131a1e; --panel:#1b252a; --line:#31424a; --fg:#dfe8ea; --dim:#8fa3ab; --gold:#f5c451; --bad:#ff6b6b; --good:#6de08a; }
+* { box-sizing: border-box; }
+html, body { height:100%; margin:0; }
+body { background:var(--bg); color:var(--fg); overflow:hidden; display:flex;
+  font-family:"Hiragino Sans","Yu Gothic",-apple-system,sans-serif; font-size:13px; }
+#view { flex:1; min-width:0; position:relative; }
+#view canvas { display:block; width:100%; height:100%; }
+#side { width:300px; background:var(--panel); border-left:1px solid var(--line); padding:14px; overflow-y:auto; }
+h1 { font-size:14px; margin:0 0 12px; color:var(--gold); }
+.row { margin-bottom:10px; }
+label { display:block; color:var(--dim); font-size:11.5px; margin-bottom:3px; }
+input[type=range] { width:100%; }
+select, button { width:100%; background:#223037; color:var(--fg); border:1px solid var(--line);
+  border-radius:5px; padding:6px 8px; font:inherit; }
+button { cursor:pointer; } button:hover { background:#2b3d46; }
+.chk { display:flex; align-items:center; gap:7px; color:var(--dim); font-size:12px; margin-bottom:7px; }
+#readout { position:absolute; left:12px; top:12px; background:rgba(10,16,20,.72); padding:9px 13px;
+  border-radius:6px; font-size:11.5px; line-height:1.9; font-variant-numeric:tabular-nums; }
+#readout b { color:var(--gold); font-weight:600; }
+.warn { color:var(--bad); } .ok { color:var(--good); }
+hr { border:0; border-top:1px solid var(--line); margin:14px 0; }
+code { color:var(--good); }
+</style>
+</head>
+<body>
+<div id="view"><div id="readout">読み込み中…</div></div>
+<div id="side">
+  <h1>Mannequin 確認</h1>
+  <p style="color:var(--dim);line-height:1.8;font-size:11.5px">
+    Mixamo の Mannequin に釣りモーションを載せたもの。キャラもモーションも
+    mixamorig なので<b>リターゲット無しでそのまま再生</b>できます。
+    竿は右手のボーンに剛体で付け、その向き（握りの軸）はここで実測します。
+  </p>
+  <div class="row"><label>クリップ</label><select id="clip"></select></div>
+  <div class="row"><button id="play">一時停止</button></div>
+  <div class="row"><label>再生速度 <span id="speedLbl">1.00×</span></label>
+    <input type="range" id="speed" min="0" max="2" step="0.05" value="1" /></div>
+  <hr />
+  <div class="chk"><input type="checkbox" id="showRod" checked /><label for="showRod" style="margin:0">竿を右手に付ける</label></div>
+  <div class="chk"><input type="checkbox" id="showOld" /><label for="showOld" style="margin:0">いまの釣り人を並べる</label></div>
+  <div class="row">
+    <label>背丈 <span id="scaleLbl"></span></label>
+    <input type="range" id="scale" min="0.6" max="1.2" step="0.005" value="1" />
+  </div>
+  <div class="row"><button id="fit15">いまの釣り人と同じ背丈にする</button></div>
+  <hr />
+  <div class="row"><button id="front">正面</button></div>
+  <div class="row"><button id="side3">真横</button></div>
+  <div class="row"><label>実測した握りの軸（mixamorig:RightHand ローカル）</label>
+    <div id="axis" style="font:11px ui-monospace,Menlo,monospace;color:var(--good);word-break:break-all"></div></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const ROD_TIP_Y = 2.26, ROD_BUTT_Y = -0.17;
+const GAME_ANGLER_H = 1.50;   // いまの釣り人のだいたいの背丈
+
+const view = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.shadowMap.enabled = true;
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1d262b);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.05, 60);
+camera.position.set(2.6, 1.7, 3.4);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.0, 0);
+scene.add(new THREE.HemisphereLight(0xcfe4ee, 0x2a2f28, 2.0));
+const sun = new THREE.DirectionalLight(0xfff2dc, 2.2);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.top = 3; sun.shadow.camera.bottom = -1;
+sun.shadow.camera.left = -3; sun.shadow.camera.right = 3;
+scene.add(sun);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(6, 48).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x39474a, roughness: 1 }));
+floor.receiveShadow = true;
+scene.add(floor);
+scene.add(new THREE.GridHelper(8, 16, 0x4a5f68, 0x33444c));
+
+const loader = new GLTFLoader();
+const readout = document.getElementById('readout');
+const ui = (id) => document.getElementById(id);
+
+/* ---------------- Mannequin ---------------- */
+const gltf = await loader.loadAsync('./assets/models/mannequin.glb');
+const rig = new THREE.Group();
+rig.add(gltf.scene);
+scene.add(rig);
+/* GLTFLoader はノード名から «:» や «.» を落とす（mixamorig:RightHand →
+   mixamorigRightHand）。どちらでも引けるように、英数字だけに正規化した名前で
+   索引を作る */
+const key = (s) => String(s).replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+const bones = {};
+gltf.scene.traverse((o) => {
+  bones[key(o.name)] = o;
+  if (o.isMesh || o.isSkinnedMesh) { o.castShadow = true; o.frustumCulled = false; }
+});
+const bone = (n) => bones[key('mixamorig' + n)];
+const HAND_R = bone('RightHand'), HAND_L = bone('LeftHand');
+if (!HAND_R || !HAND_L) {
+  throw new Error('右手／左手のボーンが見つからない。あるのは: '
+    + Object.values(bones).map((o) => o.name).filter((n) => /Hand/i.test(n)).join(', '));
+}
+const mixer = new THREE.AnimationMixer(gltf.scene);
+const clips = new Map(gltf.animations.map((c) => [c.name, c]));
+
+// 背丈
+gltf.scene.updateMatrixWorld(true);
+const rawH = new THREE.Box3().setFromObject(gltf.scene).max.y;
+
+/* ---------------- 握りの軸を実測 ----------------
+   両手が同じ竿を握っているので «左手 → 右手» がそのまま竿の軸。
+   FishingIdle を通して平均を取り、ブレも見る */
+const idle = clips.get('FishingIdle');
+let action = mixer.clipAction(idle);
+action.play();
+const acc = new THREE.Vector3();
+const samples = [];
+const _q = new THREE.Quaternion(), _a = new THREE.Vector3();
+const N = 60;
+for (let i = 0; i < N; i++) {
+  mixer.setTime((i / N) * idle.duration);
+  gltf.scene.updateMatrixWorld(true);
+  _a.subVectors(HAND_R.getWorldPosition(new THREE.Vector3()), HAND_L.getWorldPosition(new THREE.Vector3())).normalize();
+  _a.applyQuaternion(HAND_R.getWorldQuaternion(_q).invert());
+  samples.push(_a.clone());
+  acc.add(_a);
+}
+const ROD_AXIS = acc.normalize().clone();
+const spread = Math.max(...samples.map((v) => v.angleTo(ROD_AXIS))) * 180 / Math.PI;
+ui('axis').textContent = `[${ROD_AXIS.toArray().map((v) => v.toFixed(5)).join(', ')}]  ブレ ${spread.toFixed(2)}度`;
+mixer.setTime(0);
+
+/* ---------------- 竿 ---------------- */
+const rodSrc = await loader.loadAsync('./assets/models/rod-bamboo.glb');
+rodSrc.scene.updateMatrixWorld(true);
+const box = new THREE.Box3().setFromObject(rodSrc.scene);
+const rs = (ROD_TIP_Y - ROD_BUTT_Y) / Math.max(1e-3, box.max.y - box.min.y);
+const ro = ROD_TIP_Y - box.max.y * rs;
+const rodMount = new THREE.Object3D();
+rodSrc.scene.traverse((n) => {
+  if (!n.isMesh) return;
+  const geo = n.geometry.clone();
+  geo.applyMatrix4(n.matrixWorld);
+  geo.scale(rs, rs, rs);
+  geo.translate(0, ro, 0);
+  const mat = n.material.clone();
+  mat.metalness = 0;
+  mat.roughness = Math.max(0.55, mat.roughness);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  rodMount.add(mesh);
+});
+/* ボーンの子にはしない。glTF の Armature ノードはスケール 0.01（骨格が cm）
+   なので、ボーンにぶら下げると竿が 1/100 になる。angler.js と同じく
+   «ボーンのワールド行列から毎フレーム置く» 方式にすれば、スケールを
+   無視できるうえ、キャラの背丈を変えても竿は実寸のまま残る */
+scene.add(rodMount);
+const ROD_Q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), ROD_AXIS);
+const PALM = 0.05, GRIP_Y = 0.06;
+const _p = new THREE.Vector3(), _qq = new THREE.Quaternion(), _s = new THREE.Vector3();
+function placeRod() {
+  HAND_R.updateWorldMatrix(true, false);
+  HAND_R.matrixWorld.decompose(_p, _qq, _s);
+  rodMount.quaternion.copy(_qq).multiply(ROD_Q);
+  // 手のひらの握り点へ寄せ、グリップのどこを握るかぶん軸に沿って戻す
+  rodMount.position.copy(_p)
+    .add(new THREE.Vector3(0, -PALM, 0).applyQuaternion(_qq))
+    .addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(rodMount.quaternion), -GRIP_Y);
+  rodMount.updateMatrixWorld(true);
+}
+
+/* ---------------- 見比べ用に、いまの釣り人 ---------------- */
+const old = await loader.loadAsync('./assets/models/player-lowpoly.glb');
+old.scene.position.x = -1.2;
+old.scene.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+old.scene.visible = false;
+scene.add(old.scene);
+const oldMixer = new THREE.AnimationMixer(old.scene);
+const oldIdle = old.animations.find((a) => a.name === 'Idle');
+if (oldIdle) oldMixer.clipAction(oldIdle).play();
+
+/* ---------------- UI ---------------- */
+const sel = ui('clip');
+for (const name of clips.keys()) {
+  const o = document.createElement('option');
+  o.value = name; o.textContent = name;
+  sel.appendChild(o);
+}
+let playing = true;
+sel.onchange = () => {
+  action.stop();
+  action = mixer.clipAction(clips.get(sel.value));
+  action.play();
+};
+ui('play').onclick = () => { playing = !playing; ui('play').textContent = playing ? '一時停止' : '再生'; };
+ui('speed').oninput = () => { ui('speedLbl').textContent = Number(ui('speed').value).toFixed(2) + '×'; };
+ui('showRod').onchange = () => { rodMount.visible = ui('showRod').checked; };
+ui('showOld').onchange = () => { old.scene.visible = ui('showOld').checked; };
+ui('fit15').onclick = () => { ui('scale').value = String(GAME_ANGLER_H / rawH); };
+ui('front').onclick = () => { camera.position.set(0, 1.5, 3.6); controls.target.set(0, 1.0, 0); };
+ui('side3').onclick = () => { camera.position.set(3.6, 1.5, 0); controls.target.set(0, 1.0, 0); };
+
+/* ---------------- ループ ---------------- */
+const clock = new THREE.Clock();
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  if (playing) {
+    const k = Number(ui('speed').value);
+    mixer.update(dt * k);
+    oldMixer.update(dt * k);
+  }
+  const s = Number(ui('scale').value);
+  rig.scale.setScalar(s);
+  ui('scaleLbl').textContent = `${(rawH * s).toFixed(2)} m（等倍 ${rawH.toFixed(2)} m / いまの釣り人 ${GAME_ANGLER_H.toFixed(2)} m）`;
+  rig.updateMatrixWorld(true);
+  placeRod();
+
+  // 左手が竿の線からどれだけ離れているか
+  HAND_R.getWorldPosition(_v);
+  _v2.set(0, 1, 0).applyQuaternion(rodMount.getWorldQuaternion(_q));
+  HAND_L.getWorldPosition(_v3).sub(_v);
+  const along = _v3.dot(_v2);
+  const perp = _v3.clone().addScaledVector(_v2, -along).length();
+  const pitch = Math.atan2(Math.hypot(_v2.x, _v2.z), _v2.y) * 180 / Math.PI;
+  readout.innerHTML =
+    `クリップ <b>${sel.value}</b>　竿のピッチ <b>${pitch.toFixed(1)}°</b><br>`
+    + `左手の竿からのずれ <span class="${perp < 0.03 ? 'ok' : 'warn'}">${(perp * 100).toFixed(1)}cm</span>`
+    + `（竿に沿って ${(along * 100).toFixed(0)}cm）`;
+
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
