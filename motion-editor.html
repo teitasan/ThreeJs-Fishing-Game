@@ -338,9 +338,16 @@ buildPose();
   slider(g, '前傾ぶん首を起こす', TUNING.body, 'headLean', 0, 1.2, 0.01);
 }
 {
-  const g = group('歩き', '再生倍率 = 基準 + moving × 傾き。アニメの歩幅から出る「足が滑らない速さ」は 1.32 m/s です。');
-  slider(g, '再生倍率の基準', TUNING.walk, 'timeBase', 0.2, 4, 0.05, '×');
-  slider(g, 'moving での増分', TUNING.walk, 'timeGain', 0, 4, 0.05, '×');
+  const S = angler._motion && angler._motion.stride;
+  const note = S
+    ? `Mixamo の歩き／走りを混ぜます。足が滑らない速さはクリップごとの実測で 歩き ${S.walk.speed} m/s・走り ${S.run.speed} m/s。`
+      + '再生倍率 = ゲームの速さ ÷ その速さ × 効き。効き 1 で足がまったく滑りません。'
+    : 'Mixamo のクリップが読めなかったので、付属 Walk の再生倍率です。';
+  const g = group('歩きと走り', note);
+  slider(g, '足を合わせる効き', TUNING.walk, 'rate', 0, 1.5, 0.05, '×');
+  slider(g, '再生倍率の上限', TUNING.walk, 'maxRate', 1, 4, 0.1, '×');
+  slider(g, '走りへ移り始め', TUNING.walk, 'runFrom', 0, 1, 0.01);
+  slider(g, '走りに乗り切る', TUNING.walk, 'runTo', 0, 1, 0.01);
 }
 {
   const g = group('キャストの振り', '');
@@ -415,9 +422,12 @@ document.getElementById('reset').onclick = () => {
 
 /* ---------------- 毎フレーム ---------------- */
 const readout = document.getElementById('readout');
-// アニメの歩幅から出た「足が滑らない速さ」（stride の実測値）
-const NO_SLIDE = 1.32;
+/* ゲームの移動速度。歩き 0.6 / 走り 1.0 という moveAmt の割り当ても game.js と同じ。
+   «足が滑らない速さ» はクリップごとに実測してあるので、ここには持たない */
 const GAME_WALK = 3.10, GAME_RUN = 6.20;
+const speedFor = (mv) => (mv <= 0.6
+  ? GAME_WALK * (mv / 0.6)
+  : GAME_WALK + (GAME_RUN - GAME_WALK) * ((mv - 0.6) / 0.4));
 
 const clock = new THREE.Clock();
 function frame() {
@@ -431,24 +441,29 @@ function frame() {
     : play.reelAmt * Math.exp(-dt / 0.12);
   angler.update(dt, {
     state: play.state, charge: play.charge, tension: play.tension,
-    moving: play.moving, reeling: play.reelAmt, rarity: 0,
+    moving: play.moving, speed: speedFor(play.moving), reeling: play.reelAmt, rarity: 0,
     time: clock.elapsedTime, lineEnd: null,
   });
   angler.hideLine();
 
   /* 足の滑り：いまの再生倍率で滑らずに歩ける速さと、ゲームの実速度を比べる。
      moving は 0.6 で歩き・1.0 で走りに対応している（game.js の判定に合わせた） */
-  let walkInfo = '歩いていません（moving を上げると足の滑りが出ます）';
+  let walkInfo = '歩いていません（moving を上げると歩き → 走りへ移ります）';
   if (play.moving > 0.05) {
-    const ts = TUNING.walk.timeBase + play.moving * TUNING.walk.timeGain;
-    const okSpeed = NO_SLIDE * ts;
-    const real = play.moving <= 0.6
-      ? GAME_WALK * (play.moving / 0.6)
-      : GAME_WALK + (GAME_RUN - GAME_WALK) * ((play.moving - 0.6) / 0.4);
-    const slip = real / okSpeed;
-    walkInfo = `再生倍率 <b>${ts.toFixed(2)}×</b> → 滑らない速さ <b>${okSpeed.toFixed(2)}</b> m/s<br>`
-      + `ゲームの速度 <b>${real.toFixed(2)}</b> m/s → `
-      + `<span class="${slip > 1.35 ? 'warn' : 'ok'}">足の滑り ${slip.toFixed(2)} 倍</span>`;
+    const real = speedFor(play.moving);
+    const shown = angler.moveShownSpeed;
+    if (shown > 0.01) {
+      const slip = real / shown;
+      const runW = Math.min(1, Math.max(0, (play.moving - TUNING.walk.runFrom)
+        / Math.max(1e-3, TUNING.walk.runTo - TUNING.walk.runFrom)));
+      walkInfo = `再生倍率 <b>${angler.moveRate.toFixed(2)}×</b>（走り ${(runW * 100).toFixed(0)}%）`
+        + ` → 脚が描く速さ <b>${shown.toFixed(2)}</b> m/s<br>`
+        + `ゲームの速度 <b>${real.toFixed(2)}</b> m/s → `
+        + `<span class="${slip > 1.35 ? 'warn' : 'ok'}">足の滑り ${slip.toFixed(2)} 倍</span>`;
+    } else {
+      const ts = TUNING.walk.timeBase + play.moving * TUNING.walk.timeGain;
+      walkInfo = `付属 Walk（Mixamo が読めていない）再生倍率 <b>${ts.toFixed(2)}×</b>`;
+    }
   }
   readout.innerHTML = `状態 <b>${play.state}</b>　竿のピッチ <b>${angler.rodPitch.toFixed(2)}</b> rad`
     + `　Mixamo <b>${angler.motionW.toFixed(2)}</b>（振り ${angler._castW.toFixed(2)}）<br>${walkInfo}`;

@@ -9,7 +9,7 @@ import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
-import { Angler } from './angler.js?v=20260908-mixamo';
+import { Angler } from './angler.js?v=20260908-walkrun';
 import { UI } from './ui.js';
 import { Debug } from './debug.js';
 import { AudioEngine } from './audio.js';
@@ -29,7 +29,10 @@ import {
   fightHint, rigName, dirLabel,
 } from './i18n.js';
 import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
-import { RemotePlayers } from './multiplayer/remotePlayer.js';
+/* ?v= は «読み込む側» が新しくならないと効かない。ここを上げないと、
+   キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
+   釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
+import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260908-walkrun';
 import { PostFX } from './postfx.js?v=20260828-bloom1';
 import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';
@@ -252,6 +255,7 @@ export class Game {
     this.yaw = 0;
     this.pitch = -0.12;
     this.moveAmt = 0;
+    this.moveSpeed = 0;   // 地面の速さ（m/s）。釣り人の歩きの再生倍率に渡す
     this.underwaterCam = false;
     // 水中カメラ：マウスで回す（プレイヤーの向きとは独立）
     this.uwYaw = 0;
@@ -1573,6 +1577,7 @@ export class Game {
       charge: this.charge,
       tension: fightT,
       moving: this.moveAmt,
+      speed: this.moveSpeed,
       /* どれだけ巻けているか 0..1。真偽値ではなくファイトの F.spin
          （押してから実際にリールが乗るまでの立ち上がり）をそのまま渡す。
          真偽値だと押した瞬間に姿勢だけが段差で変わり、張力＝しなりは
@@ -1676,6 +1681,8 @@ export class Game {
     }
     const len = Math.hypot(mx, mz);
     let target = 0;
+    // 動く前の位置。«実際に進んだ距離» から地面の速さを出して釣り人へ渡す
+    const wasX = this.pos.x, wasZ = this.pos.z;
     if (len > 0) {
       mx /= len; mz /= len;
       const run = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
@@ -1698,6 +1705,11 @@ export class Game {
       }
     }
     this.moveAmt = damp(this.moveAmt, target, 8, dt);
+    /* 地面の速さ。釣り人の歩き／走りの再生倍率がこれで決まる（足が滑らない
+       速さはクリップごとに実測してある）。入力や竿の状態から逆算するのでは
+       なく実際に進んだ距離で測るので、壁ぎわで斜めに滑っているときも合う */
+    const moved = Math.hypot(this.pos.x - wasX, this.pos.z - wasZ);
+    this.moveSpeed = damp(this.moveSpeed, dt > 1e-4 ? moved / dt : 0, 8, dt);
 
     // 立ち位置の高さ
     const dockY = this.terrain.onDock(this.pos.x, this.pos.z);

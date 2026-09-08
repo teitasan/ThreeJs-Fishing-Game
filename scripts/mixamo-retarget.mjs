@@ -288,7 +288,11 @@ function main() {
 
   const handIdx = rig.byName.get('HandR');
   const handWorld = [];
-  const solve = (idx, parentQ, snap) => {
+  /* 足首の «その場での» ワールド位置。前進ぶんを入れずに解くので、接地している
+     足はちょうど地面の速さで後ろへ流れる。それが «足が滑らない速さ» になる */
+  const ankleIdx = { L: rig.byName.get('Joint_AnkleL'), R: rig.byName.get('Joint_AnkleR') };
+  const ankle = { L: [], R: [] };
+  const solve = (idx, parentQ, parentP, snap) => {
     const p = byIdx.get(idx);
     let localQ;
     let worldQ;
@@ -311,12 +315,16 @@ function main() {
       }
       arr.push(...localQ);
     }
-    for (const c of rig.nodes[idx].children || []) solve(c, worldQ, snap);
+    const rt = qapply(parentQ, rig.local(idx).t);
+    const worldP = [parentP[0] + rt[0], parentP[1] + rt[1], parentP[2] + rt[2]];
+    if (idx === ankleIdx.L) ankle.L.push(worldP);
+    else if (idx === ankleIdx.R) ankle.R.push(worldP);
+    for (const c of rig.nodes[idx].children || []) solve(c, worldQ, worldP, snap);
   };
 
   dump.frames.forEach((snap, i) => {
     times.push(i / dump.fps);
-    for (const r of rig.roots) solve(r, [0, 0, 0, 1], snap);
+    for (const r of rig.roots) solve(r, [0, 0, 0, 1], [0, 0, 0], snap);
     if (rootMode !== 'none' && hipsBone) {
       const d = sub(snap[hipsBone.root].head, hips0).map((v) => v * scale);
       const dr = qapply(yawQ, d);
@@ -393,6 +401,36 @@ function main() {
     };
   }
 
+  /* ---------------- 歩幅（足が滑らない速さ） ----------------
+     歩きや走りのクリップを «その場» で回すと、接地している足はちょうど
+     地面の速さで後ろへ流れる。だからその速さを測れば «この再生速度なら
+     足が滑らない» ゲーム速度が分かる。
+     Mixamo の実寸ではなくリターゲット後の骨格で測るので、こちらの短い脚に
+     見合った値になる（角度は移せても歩幅は脚の長さで決まる）。
+
+     接地している足は «低いほう» で見分ける。走りには両足とも浮く瞬間が
+     あって、そこは低いほうの足も速く動くため、中央値を取って弾く */
+  const stride = measureStride();
+  function measureStride() {
+    const n = Math.min(ankle.L.length, ankle.R.length);
+    if (n < 3) return null;
+    const dt = 1 / dump.fps;
+    const sp = [];
+    for (let i = 1; i < n; i++) {
+      for (const [a, b] of [[ankle.L, ankle.R], [ankle.R, ankle.L]]) {
+        if (a[i - 1][1] <= b[i - 1][1] && a[i][1] <= b[i][1]) {
+          sp.push(Math.hypot(a[i][0] - a[i - 1][0], a[i][2] - a[i - 1][2]) / dt);
+        }
+      }
+    }
+    if (!sp.length) return null;
+    sp.sort((x, y) => x - y);
+    return {
+      speed: Number(sp[sp.length >> 1].toFixed(3)),
+      cycle: Number((n / dump.fps).toFixed(3)),
+    };
+  }
+
   /* ---------------- three.js の AnimationClip JSON ---------------- */
   const round = (a, n = 5) => a.map((v) => Number(v.toFixed(n)));
   /* uuid は必ず入れる。THREE.AnimationClip.parse は clip.uuid = json.uuid を
@@ -420,6 +458,7 @@ function main() {
     });
   }
   if (gripInfo) clip.grip = gripInfo;
+  if (stride) clip.stride = stride;
 
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, JSON.stringify(clip));
@@ -427,6 +466,9 @@ function main() {
     `RETARGET_OK "${clipName}" ${times.length}f / ${clip.duration.toFixed(2)}s  tracks=${clip.tracks.length}  -> ${outPath}`
   );
   if (missing.length) console.log('  対応が取れなかった部位:', missing.join(', '));
+  if (stride) {
+    console.log(`  足が滑らない速さ ${stride.speed} m/s（1 周 ${stride.cycle} 秒）`);
+  }
   if (gripInfo) {
     const held = gripInfo.leftGrip.filter((v) => v > 0.5).length;
     console.log(

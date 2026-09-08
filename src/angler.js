@@ -46,7 +46,11 @@ const ANGLER_URL = './assets/models/player-lowpoly.glb';
 const MOTION_URLS = {
   fishIdle: './assets/motions/fishing-idle.json',
   fishCast: './assets/motions/fishing-cast.json',
+  walk: './assets/motions/walk.json',
+  run: './assets/motions/run.json',
 };
+/** モーションの読み込みに待たされてゲームが始まらないための上限（ミリ秒） */
+const MOTION_TIMEOUT = 8000;
 /* Mixamo のモーションで動かす状態。ファイトと取り込みは今までの手続き生成の
    ままにする。竿先を魚へ向ける必要があり（_aimPitch）、それに当たる Mixamo の
    クリップが無いので、置き換えると «引かれても竿が反応しない» ことになる */
@@ -140,10 +144,23 @@ export const TUNING = {
   arm: { poleR: [-0.5, -0.7, -0.5], poleL: [0.5, -0.8, -0.3], gripY: 0.06, leftY: -0.02 },
   /* 体。tilt は前傾を腰から上へ流す割合、head は狙いの方を向く強さ */
   body: { tilt: 0.55, headLook: 0.40, headLookMax: 0.45, headLean: 0.55 },
-  /* 歩き。再生倍率 = base + moving × gain。
-     アニメの歩幅から出る「足が滑らない速さ」は 1.32 m/s で、
-     ゲームの歩きは 3.1 m/s あるため、等倍だと 2.35 倍ぶん滑る */
-  walk: { timeBase: 0.85, timeGain: 0.50 },
+  /* 歩きと走り。
+     Mixamo のクリップを «その場» で回すと、接地している足はちょうど地面の
+     速さで後ろへ流れる。その «足が滑らない速さ» を骨格ごと実測して
+     クリップに焼いてあるので（歩き 1.57 m/s / 走り 2.69 m/s）、再生倍率は
+        ゲームの速さ ÷ そのクリップの足が滑らない速さ × rate
+     で決まる。rate 1 なら足はまったく滑らない。
+     ゲームは歩き 3.1 / 走り 6.2 m/s あるので rate 1 でどちらも約 2 倍で回る
+     （ゲームの «歩き» はもう小走りの速さなので、これで釣り合う）。
+     速すぎると感じたら rate を下げる。そのぶん足は滑る。
+     runFrom / runTo は歩き → 走りの乗り換え（moveAmt。ゲームは歩きで 0.6・
+     走りで 1.0 を渡す）。
+     timeBase / timeGain は Mixamo のクリップが読めなかったときだけ使う、
+     アセット付属 Walk の再生倍率（従来の値） */
+  walk: {
+    rate: 1.0, maxRate: 2.6, runFrom: 0.62, runTo: 0.95,
+    timeBase: 0.85, timeGain: 0.50,
+  },
   /* 指の曲げ（第 1〜3 関節 / 親指）。開いた手のままだと竿を握って見えない */
   fingers: { curl: [-1.05, -0.85, -0.55], thumb: [-0.55, -0.45] },
   /* 姿勢が切り替わるときの追従の速さ（大きいほど速い） */
@@ -322,6 +339,9 @@ export class Angler {
     this.rodPitch = TUNING.pose.idle.pitch;   // 竿のピッチ（垂直から前へ倒した角。ワールド基準）
     this.motionW = 0;    // Mixamo のモーションの乗り（0 = 今までの手続き生成だけ）
     this._castW = 0;     // Fishing Idle ↔ Fishing Cast の混ぜ具合
+    this._movePhase = 0;  // 歩き／走りの位相（0..1）。両方をこれで揃える
+    this.moveRate = 0;    // いまの歩き／走りの再生倍率（1 で等倍＝足が滑らない）
+    this.moveShownSpeed = 0;   // 脚が描いている速さ（m/s）
     this._motion = null; // 読み込んだモーション（竿の軸・握りの重み）
     this._clipQ = {};    // クリップが書いた姿勢の控え
     this.bodyLean = 0;
@@ -455,34 +475,98 @@ export class Angler {
    */
   async _setupMotions() {
     try {
+      /* 返ってこないファイルでゲームが始まらなくなるのがいちばん困るので、
+         上限を切って並べて読む。読めなければ手続き生成と付属 Walk のまま動く */
+      const load = async (url) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), MOTION_TIMEOUT);
+        try {
+          const res = await fetch(url, { signal: ctrl.signal });
+          if (!res.ok) throw new Error(`${url}: ${res.status}`);
+          return await res.json();
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      const ids = Object.keys(MOTION_URLS);
+      const got = await Promise.all(ids.map((id) => load(MOTION_URLS[id])));
       const src = {};
-      for (const [id, url] of Object.entries(MOTION_URLS)) {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`${url}: ${res.status}`);
-        src[id] = await res.json();
-      }
+      ids.forEach((id, i) => { src[id] = got[i]; });
+
       const times = src.fishIdle.tracks[0].times;
       this._motion = {
         fps: 1 / Math.max(1e-6, times[1] - times[0]),
         grip: { fishIdle: src.fishIdle.grip.leftGrip, fishCast: src.fishCast.grip.leftGrip },
+        /* «足が滑らない速さ» と 1 周の尺。1 周で進む距離 = 速さ × 尺 */
+        stride: { walk: src.walk.stride, run: src.run.stride },
       };
       /* 竿の向き。素体の竿は局所 +Y へ伸びるので、それを握りの軸へ向ける */
       this._rodQ = new THREE.Quaternion().setFromUnitVectors(
         _up, _v.fromArray(src.fishIdle.grip.axis).normalize()
       );
-      this.actFishIdle = this.mixer.clipAction(THREE.AnimationClip.parse(src.fishIdle));
-      this.actFishCast = this.mixer.clipAction(THREE.AnimationClip.parse(src.fishCast));
-      for (const a of [this.actFishIdle, this.actFishCast]) {
+      const act = (json) => this.mixer.clipAction(THREE.AnimationClip.parse(json));
+      this.actFishIdle = act(src.fishIdle);
+      this.actFishCast = act(src.fishCast);
+      this.actMoveWalk = act(src.walk);
+      this.actMoveRun = act(src.run);
+      for (const a of [this.actFishIdle, this.actFishCast, this.actMoveWalk, this.actMoveRun]) {
         a.play();
         a.setEffectiveWeight(0);
       }
-      // 振りの «どこを見せるか» はこちらで決めるので、時間は進めさせない
+      /* 振りの «どこを見せるか» と、歩き／走りの位相はこちらで決めるので、
+         時間は進めさせない。歩きと走りは 1 周の尺が違う（1.07 秒 / 0.73 秒）ので、
+         それぞれの倍率で勝手に回すと混ぜている間に脚の位相がずれて足が震える */
       this.actFishCast.paused = true;
+      this.actMoveWalk.paused = true;
+      this.actMoveRun.paused = true;
+      this._moveDur = {
+        walk: this.actMoveWalk.getClip().duration,
+        run: this.actMoveRun.getClip().duration,
+      };
       for (const n of MOTION_KEEP) this._clipQ[n] = new THREE.Quaternion();
     } catch (e) {
       console.warn('釣りモーションを読めなかったので手続き生成のままにする', e);
       this._motion = null;
     }
+  }
+
+  /**
+   * 歩きと走り。位相をひとつだけ持って両方のクリップに同じところを見せる。
+   *
+   * それぞれを自分の再生倍率で回すと、1 周の尺が違うぶん（歩き 1.07 秒 /
+   * 走り 0.73 秒）混ぜている間に脚の位相がずれて、足が地面で震える。
+   * 位相を共通にすれば、乗り換えの途中でも «同じ歩調の歩きと走り» を
+   * 混ぜることになるので破綻しない。
+   *
+   * 進み方は «1 周で進む距離» から出す。クリップごとに実測してある
+   * 足が滑らない速さ × 1 周の尺 がそれで、これでゲームの速さを割れば
+   * 1 秒あたりの周回数になる。つまり rate 1 のとき足はまったく滑らない。
+   *
+   * @param {number} weight 歩き＋走りに割り当てる重み
+   * @param {number} mv     moveAmt（歩きで 0.6・走りで 1.0）
+   * @param {number} speed  実際の地面の速さ（m/s）。ゲームが渡してくる
+   */
+  _poseMove(dt, weight, mv, speed) {
+    const W = TUNING.walk;
+    const S = this._motion.stride;
+    const runW = clamp01((mv - W.runFrom) / Math.max(1e-3, W.runTo - W.runFrom));
+    /* 速さを渡してこない呼び出し元（古い連携）には moveAmt から概算させる。
+       歩き 0.6 → 3.1 m/s・走り 1.0 → 6.2 m/s というゲーム側の割り当て */
+    const spd = Number.isFinite(speed) ? speed : (mv <= 0.6 ? mv / 0.6 * 3.1 : 3.1 + (mv - 0.6) / 0.4 * 3.1);
+    const cycle = lerp(S.walk.cycle, S.run.cycle, runW);
+    const perCycle = lerp(S.walk.speed * S.walk.cycle, S.run.speed * S.run.cycle, runW);
+    // 再生倍率（1 で等倍）。上げすぎると脚が回りすぎて見えるので頭打ちにする
+    const mult = Math.min(W.maxRate, (spd * W.rate) / Math.max(0.01, perCycle) * cycle);
+    this.moveRate = mult;
+    /* 脚が実際に «描いている» 速さ。ゲームの速さとの比がそのまま足の滑りになる */
+    this.moveShownSpeed = perCycle * mult / Math.max(0.01, cycle);
+    if (weight > 1e-3) {
+      this._movePhase = (this._movePhase + dt * mult / Math.max(0.01, cycle)) % 1;
+    }
+    this.actMoveWalk.time = this._movePhase * this._moveDur.walk;
+    this.actMoveRun.time = this._movePhase * this._moveDur.run;
+    this.actMoveWalk.setEffectiveWeight(weight * (1 - runW));
+    this.actMoveRun.setEffectiveWeight(weight * runW);
   }
 
   /** Fishing Cast のどのフレームを見せるか（振りかぶり → 振り抜き） */
@@ -886,15 +970,19 @@ export class Angler {
     const motionT = (useMotion ? 1 : 0) * (1 - mv);
     this.motionW = damp(this.motionW, motionT, TUNING.motion.blend, dt);
     const w = this.motionW;
-    this.actWalk.setEffectiveWeight(mv * (1 - w));
     this.actIdle.setEffectiveWeight((1 - mv) * (1 - w));
-    this.actWalk.setEffectiveTimeScale(TUNING.walk.timeBase + mv * TUNING.walk.timeGain);
     if (this._motion) {
       const castT = (st === 'charge' || this.castAnim >= 0) ? 1 : 0;
       this._castW = damp(this._castW, castT, TUNING.motion.blend, dt);
       this.actFishIdle.setEffectiveWeight(w * (1 - this._castW));
       this.actFishCast.setEffectiveWeight(w * this._castW);
       this.actFishCast.time = this._castFrame(st, p) / this._motion.fps;
+      this.actWalk.setEffectiveWeight(0);   // 付属 Walk は使わない
+      this._poseMove(dt, mv * (1 - w), mv, p.speed);
+    } else {
+      // Mixamo のクリップが読めなかったとき。従来どおり付属 Walk を速度で誤魔化す
+      this.actWalk.setEffectiveWeight(mv * (1 - w));
+      this.actWalk.setEffectiveTimeScale(TUNING.walk.timeBase + mv * TUNING.walk.timeGain);
     }
     this.mixer.update(dt);
 
