@@ -120,7 +120,12 @@ body {
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Angler, TUNING, TUNING_DEFAULT, saveTuning, resetTuning } from './src/angler.js';
+/* 調整用の道具なので «いま保存してあるソース» を必ず読む。
+   静的 import だとブラウザがモジュールを覚えていて、angler.js を直しても
+   古いものが動き続ける。«ここで見えるものがそのままゲームの動き» という
+   このページの前提が黙って崩れるので、毎回読み直す */
+const { Angler, TUNING, TUNING_DEFAULT, saveTuning, resetTuning } =
+  await import(`./src/angler.js?t=${Date.now()}`);
 
 /* ---------------- 見せる場 ---------------- */
 const view = document.getElementById('view');
@@ -179,9 +184,19 @@ scene.add(grid);
 
 /* ---------------- 釣り人 ---------------- */
 const angler = new Angler(scene);
-await angler.load();
-angler.setRod('legend');
-document.getElementById('loading').remove();
+const loading = document.getElementById('loading');
+try {
+  await angler.load();
+  angler.setRod('legend');
+} catch (e) {
+  /* 黙って «読み込んでいます…» のまま止まると、何が起きたのか分からない。
+     読み込みは外部ファイル頼みなので、失敗はここに出す */
+  loading.innerHTML = `<div style="max-width:80%;text-align:center;line-height:1.9">`
+    + `読み込みに失敗しました<br><code style="color:var(--bad);word-break:break-all">${String(e)}</code>`
+    + `</div>`;
+  throw e;
+}
+loading.remove();
 
 /* ---------------- 再生する状態 ---------------- */
 const play = {
