@@ -9,7 +9,7 @@ import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
-import { Angler } from './angler.js?v=20260908-walkrun';
+import { Angler } from './angler.js?v=20260908-castorigin';
 import { UI } from './ui.js';
 import { Debug } from './debug.js';
 import { AudioEngine } from './audio.js';
@@ -32,7 +32,7 @@ import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
 /* ?v= は «読み込む側» が新しくならないと効かない。ここを上げないと、
    キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
    釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
-import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260908-walkrun';
+import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260908-castorigin';
 import { PostFX } from './postfx.js?v=20260828-bloom1';
 import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';
@@ -1276,8 +1276,11 @@ export class Game {
    */
   _updateAim(force = false) {
     if (!this.aimPoint) this.aimPoint = new THREE.Vector3();
-    // ロッド先端（スカラーで退避：_v4 はこの後使い回す）
-    this.angler.getRodTip(_v4);
+    /* 糸が竿を離れる点（スカラーで退避：_v4 はこの後使い回す）。
+       竿先そのものではないのは、ためている最中の竿先が体の後ろにあるため
+       （Mixamo のキャストだと左へ 2.4m・地面の下 0.5m まで回る）。
+       狙い・着水点の予測・実際の発射をすべてこの点で揃える */
+    this.angler.getCastOrigin(_v4);
     const tipX = _v4.x, tipZ = _v4.z;
     this._tipY = _v4.y;
     // 狙い方向
@@ -1306,7 +1309,7 @@ export class Game {
 
   /** 着水点を予測（描画マーカー用） */
   _predictLanding(power, out = new THREE.Vector3()) {
-    this.angler.getRodTip(_v1);
+    this.angler.getCastOrigin(_v1);
     _v2.copy(_v1);
     this._castVelocity(power, _v3);
     // マーカー用の概算なので、水面は y=0 とみなして地形サンプルを半分に減らす
@@ -1339,7 +1342,7 @@ export class Game {
     this.stateTime = 0;
     this.angler.playCast();
     this.audio.cast(power);
-    this.angler.getRodTip(this.bobber);
+    this.angler.getCastOrigin(this.bobber);
     this.castOrigin.copy(this.bobber);
     this._castVelocity(power, this.bobberVel);
     this.angler.bobber.visible = true;

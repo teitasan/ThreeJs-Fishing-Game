@@ -39,6 +39,7 @@ const tests = [
   'scripts/undergrowth-test.mjs',
   'scripts/walk-zone-test.mjs',
   'scripts/mixamo-retarget-test.mjs',
+  'scripts/cast-origin-test.mjs',
 ];
 
 for (const rel of tests) {

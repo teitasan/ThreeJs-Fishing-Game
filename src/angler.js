@@ -179,10 +179,15 @@ export const TUNING = {
        palm  : 竿を握る手のひらの点（HandR ローカルの -Y m）
        blend : 手続き生成との行き来の速さ（大きいほど速い）
        cast  : Fishing Cast のどこを使うか（フレーム）。振りかぶりは charge で
-               スクラブし、離したら swing まで dur 秒かけて流す */
+               スクラブし、離したら swing まで dur 秒かけて流す。
+               charge1 を振りかぶりの頂点（54）まで伸ばすと、そこへ至る途中で
+               竿先が左へ 2.4m・地面の下 0.5m まで潜る（実測）。Mixamo の
+               キャストは竿を体の左へ低く落としてから振り抜く動きで、
+               ゲームの竿は 2.43m と背丈 1.5m の釣り人には長いため、
+               下を向いた瞬間に穂先が地面へ入る。竿先が地上に残る 24 で切る */
   motion: {
     palm: 0.05, blend: 9,
-    cast: { charge0: 8, charge1: 54, swing: 112, dur: 0.5 },
+    cast: { charge0: 0, charge1: 24, swing: 112, dur: 0.5 },
   },
 };
 
@@ -1348,6 +1353,29 @@ export class Angler {
   getRodTip(out = new THREE.Vector3()) {
     this.root.updateMatrixWorld(true);
     return this.rodTip.getWorldPosition(out);
+  }
+
+  /**
+   * 糸が竿を離れる点。ウキはここから飛び、狙いと着水点の予測もここを基準にする。
+   *
+   * 竿先そのもの（getRodTip）を使ってはいけない。振りかぶっている最中の竿先は
+   * 体の後ろにあり、Mixamo のキャストでは左へ 2.4m・地面の下 0.5m まで回る。
+   * そこから投げるとウキが後ろへ飛ぶ。実際の投げでも糸が離れるのは竿を
+   * 振り抜いた瞬間なので、«構えたときの竿先» を使う。
+   *
+   * モーションの途中の姿勢に依らないので、ためている間に狙いの目印が
+   * 暴れることもなくなる（竿先を使うと前後に 4m 動いていた）
+   */
+  getCastOrigin(out = new THREE.Vector3()) {
+    if (!this.ready || !this.bones.Joint_ShoulderR) return this.getRodTip(out);
+    const T = TUNING;
+    const pitch = this.fpv ? T.fpv.waitPitch : T.pose.wait.pitch;
+    this.root.updateMatrixWorld(true);
+    this.bones.Joint_ShoulderR.getWorldPosition(out);
+    _v1.set(...T.pose.wait.hand).applyQuaternion(this.root.quaternion);
+    out.add(_v1);
+    _v1.set(0, Math.cos(pitch), Math.sin(pitch)).applyQuaternion(this.root.quaternion);
+    return out.addScaledVector(_v1, ROD_TIP_Y - T.arm.gripY);
   }
 
   /** 糸のたるみ量（ウキを糸の上に乗せるので game 側でも使う） */
