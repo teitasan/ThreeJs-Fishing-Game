@@ -435,7 +435,8 @@ function frame() {
       + `ゲームの速度 <b>${real.toFixed(2)}</b> m/s → `
       + `<span class="${slip > 1.35 ? 'warn' : 'ok'}">足の滑り ${slip.toFixed(2)} 倍</span>`;
   }
-  readout.innerHTML = `状態 <b>${play.state}</b>　竿のピッチ <b>${angler.rodPitch.toFixed(2)}</b> rad<br>${walkInfo}`;
+  readout.innerHTML = `状態 <b>${play.state}</b>　竿のピッチ <b>${angler.rodPitch.toFixed(2)}</b> rad`
+    + `　Mixamo <b>${angler.motionW.toFixed(2)}</b>（振り ${angler._castW.toFixed(2)}）<br>${walkInfo}`;
 
   controls.update();
   renderer.render(scene, camera);
