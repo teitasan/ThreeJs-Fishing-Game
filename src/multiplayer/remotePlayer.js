@@ -1,11 +1,12 @@
 /* 他プレイヤー表示。既存 Angler をそのまま使い、竿・腕IK・リール・しなり・糸を再利用する。 */
 import * as THREE from 'three';
-import { Angler } from '../angler.js?v=20260908-mannequin2';
+import { Angler } from '../angler.js?v=20260909-gait';
 import { clamp01, TAU } from '../util.js';
 import { t } from '../i18n.js';
 import { Vec3Stream, YawStream, recvTimeSec } from './interpolation.js';
+import { gaitOfSpeed } from '../gait.js?v=20260909-gait';
 
-const WALK_SPEED = 3.1;
+
 const _v = new THREE.Vector3(), _lineEnd = new THREE.Vector3(), _prevPos = new THREE.Vector3();
 
 function makeLabel(name) {
@@ -79,7 +80,7 @@ class RemotePlayer {
     let lineEnd = null;
     if (hasLine && this.lineStream.sample(now, _lineEnd)) lineEnd = _lineEnd;
     else if (hasLine) lineEnd = _lineEnd.set(v.bx, v.by, v.bz);
-    this.angler.update(dt, { state, charge: clamp01(v.charge), tension: clamp01(v.tension), reeling: clamp01(v.reeling), moving: clamp01(this.speed / WALK_SPEED), rarity: v.rarity || 0, lineEnd });
+    this.angler.update(dt, { state, charge: clamp01(v.charge), tension: clamp01(v.tension), reeling: clamp01(v.reeling), moving: gaitOfSpeed(this.speed), speed: this.speed, rarity: v.rarity || 0, lineEnd });
     this.angler.bobber.visible = hasLine && state !== 'fight';
     this.angler.bobberRing.visible = hasLine && ['wait', 'nibble', 'bite'].includes(state);
     if (hasLine && lineEnd) {

@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, clamp01, lerp, damp, TAU, lineSagProfile } from './util.js?v=20260830-zone5';
+import { moveAmountOf, speedOfGait } from './gait.js?v=20260909-gait';
 import { chargeFrameTable } from './castCharge.js';
 import { createBaitMesh, disposeBaitMesh, updateBaitMesh, createHookMesh, HOOK } from './baitMesh.js';
 import { t } from './i18n.js';
@@ -654,17 +655,17 @@ export class Angler {
    * 足が滑らない速さ × 1 周の尺 がそれで、これでゲームの速さを割れば
    * 1 秒あたりの周回数になる。つまり rate 1 のとき足はまったく滑らない。
    *
-   * @param {number} weight 歩き＋走りに割り当てる重み
-   * @param {number} mv     moveAmt（歩きで 0.6・走りで 1.0）
+   * @param {number} weight 歩き＋走りに割り当てる重み（動いている度合い 0..1）
+   * @param {number} gait   足取り（歩きで 0.6・走りで 1.0）。歩きと走りのどちらを
+   *                        見せるかを決めるだけで、重みには使わない
    * @param {number} speed  実際の地面の速さ（m/s）。ゲームが渡してくる
    */
-  _poseMove(dt, weight, mv, speed) {
+  _poseMove(dt, weight, gait, speed) {
     const W = TUNING.walk;
     const S = this._motion.stride;
-    const runW = clamp01((mv - W.runFrom) / Math.max(1e-3, W.runTo - W.runFrom));
-    /* 速さを渡してこない呼び出し元（古い連携）には moveAmt から概算させる。
-       歩き 0.6 → 3.1 m/s・走り 1.0 → 6.2 m/s というゲーム側の割り当て */
-    const spd = Number.isFinite(speed) ? speed : (mv <= 0.6 ? mv / 0.6 * 3.1 : 3.1 + (mv - 0.6) / 0.4 * 3.1);
+    const runW = clamp01((gait - W.runFrom) / Math.max(1e-3, W.runTo - W.runFrom));
+    // 速さを渡してこない呼び出し元（古い連携）には足取りから概算させる
+    const spd = Number.isFinite(speed) ? speed : speedOfGait(gait);
     const cycle = lerp(S.walk.cycle, S.run.cycle, runW);
     const perCycle = lerp(S.walk.speed * S.walk.cycle, S.run.speed * S.run.cycle, runW);
     // 再生倍率（1 で等倍）。上げすぎると脚が回りすぎて見えるので頭打ちにする
@@ -1090,13 +1091,16 @@ export class Angler {
       this._hasLineEnd = false;
     }
     this.root.rotation.y = this.yaw;
+    /* 足取り（歩き 0.6 / 走り 1.0）と «動いている度合い»（歩きで 1）は別物。
+       混ぜると歩きが立ちに薄まる（GAIT_WALK の説明） */
+    const gait = clamp01(p.moving);
     // 足音は walkPhase を見ているので、読み込み前でも進めておく
-    this.walkPhase += dt * (4 + p.moving * 6) * (p.moving > 0.02 ? 1 : 0);
+    this.walkPhase += dt * (4 + gait * 6) * (gait > 0.02 ? 1 : 0);
     if (!this.ready) return;
 
     /* 歩きと待機はアセットのアニメーションを重みで混ぜる。
        脚と体幹はこれに任せ、腕だけこのあと上書きする */
-    const mv = clamp01(p.moving);
+    const mv = moveAmountOf(gait);
     const stand = 1 - mv;
     /* クリップの重みは «立っているか歩いているか» だけで決まる。立っていれば
        釣りの構え（ため中はキャスト）、歩いていれば歩き／走り。
@@ -1120,7 +1124,7 @@ export class Angler {
       this.actFishIdle.setEffectiveWeight(stand * (1 - this._castW));
       this.actFishCast.setEffectiveWeight(stand * this._castW);
       this.actFishCast.time = this._castFrame(st, p) / this._motion.fps;
-      this._poseMove(dt, mv, mv, p.speed);
+      this._poseMove(dt, mv, gait, p.speed);
       /* 竿が正面を向くぶんだけ体を回す。釣りのクリップが効いている度合い（w）
          で掛けるので、歩き出すと 0 に戻る（正面へ進みながら斜めを向かない） */
       this.model.rotation.y = -this._motion.rodYaw * TUNING.motion.faceRod * w;
