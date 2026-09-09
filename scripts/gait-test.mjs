@@ -35,12 +35,15 @@ near(standWalk, 0, 1e-9, '歩行中に «立っている» ぶんが残ってい
 console.log(`歩行中の «立っている» ぶん: ${standWalk.toFixed(3)}`
   + `（取り違えていたときは ${(1 - GAIT_WALK).toFixed(1)}）`);
 
-/* --- 2. その «立っている» ぶんが体の回転に化けていたことを示す --- */
+/* --- 2. 脚が «歩きと立ちの混ざり» になっていないこと --- */
 const src = read('src/angler.js');
-const yawDeg = 70;   // 実測（釣りモーション: 竿の水平の向き -70度）
-console.log(`体の回転に残っていた角度: ${(yawDeg * standWalk).toFixed(1)}度`
-  + `（取り違えていたときは ${(yawDeg * (1 - GAIT_WALK)).toFixed(0)}度）`);
-ok(yawDeg * (1 - GAIT_WALK) > 20, '取り違えの影響が小さすぎる（前提の確認）');
+console.log(`歩行中のクリップ: 歩き ${moveAmountOf(GAIT_WALK).toFixed(2)} + 構え ${standWalk.toFixed(2)}`
+  + `（取り違えていたときは 歩き ${GAIT_WALK.toFixed(1)} + 構え ${(1 - GAIT_WALK).toFixed(1)}）`);
+ok(1 - GAIT_WALK > 0.2, '取り違えの影響が小さすぎる（前提の確認）');
+/* 当時はこの «立っている» ぶんが竿を正面へ向けるための体の回転（70 度）にも
+   掛かっていて、歩きながら 28 度斜めを向いていた。体を回す仕掛けそのものは
+   そのあと無くしたので、ここでは残っていないことだけ見る */
+ok(!/model\.rotation\.y\s*=/.test(src), '体ごと回して竿の向きを合わせる処理が残っている');
 
 /* --- 3. 足取りと重みを別々に渡していること（元の取り違えの再発防止） --- */
 const call = /this\._poseMove\(dt,\s*([A-Za-z_$][\w$]*),\s*([A-Za-z_$][\w$]*),/.exec(src);

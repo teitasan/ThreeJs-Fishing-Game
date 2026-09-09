@@ -37,6 +37,7 @@ const CHARGE0 = num(/charge0:\s*([\d.]+)/, 'motion.cast.charge0');
 const CHARGE1 = num(/charge1:\s*([\d.]+)/, 'motion.cast.charge1');
 const SWING = num(/swing:\s*([\d.]+)/, 'motion.cast.swing');
 const PALM = num(/palm:\s*([\d.]+)/, 'motion.palm');
+const HOLD = num(/holdPitch:\s*([\d.]+)/, 'motion.holdPitch');
 const GRIP_Y = num(/gripY:\s*([\d.-]+)/, 'arm.gripY');
 const BLANK_Y0 = num(/const ROD_BLANK_Y0 = ([\d.]+)/, 'ROD_BLANK_Y0');
 const SEG = (() => {
@@ -54,22 +55,33 @@ const FPS = 30;
 
 /* ---------------- 素体とクリップ ---------------- */
 const glb = openGlb(join(root, 'assets/models/mannequin.glb'));
-const HAND = 'mixamorig:RightHand', HELP = 'mixamorig:LeftHand', ARM = 'mixamorig:RightArm';
-const WANT = new Set([HAND, HELP, ARM]);
+const HAND = 'mixamorig:RightHand', ARM = 'mixamorig:RightArm';
+const FINGERS = ['Index', 'Middle', 'Ring', 'Pinky'];
+const WANT = new Set([HAND, ARM,
+  ...FINGERS.flatMap((f) => [`mixamorig:RightHand${f}1`, `mixamorig:RightHand${f}3`])]);
 
-/* 竿の軸は angler.js と同じやり方で実測する（両手が同じ竿を握っているので
-   «左手 → 右手» がそのまま軸）。焼いた定数を持たないので食い違いが起きない */
+/* 竿の軸は angler.js と同じやり方で作る。«測る» のではなく «決め打ち» で、
+   モデル空間の «正面へ holdPitch»（+Z が正面）を、構えの間の手の向きへ
+   持ち帰った固定の回転にしてある。焼いた定数を持たないので食い違いが起きない。
+
+   以前はここを «左手首 → 右手首» の線で «測って» いた。それは拳が実際に
+   握っている軸から 63 度ずれた線で（下の 6 番で確かめている）、その水平の
+   ずれを体ごと回して打ち消していたため、体の向きとキャストの向きが 70 度
+   食い違っていた */
 const idle = clipSampler(glb, 'FishingIdle');
-const AXIS = (() => {
-  let acc = [0, 0, 0];
-  const n = 60;
+const REF_HAND = (() => {
+  let acc = [0, 0, 0, 0];
+  const n = 30;
   for (let i = 0; i < n; i++) {
     const w = poseWorld(glb, idle.at((i / (n - 1)) * idle.duration), WANT);
-    const h = w.get(HAND), l = w.get(HELP);
-    acc = vadd(acc, qapply(qinv(h.q), vunit(vsub(h.p, l.p))));
+    let q = w.get(HAND).q;
+    if (acc[0] * q[0] + acc[1] * q[1] + acc[2] * q[2] + acc[3] * q[3] < 0) q = q.map((v) => -v);
+    acc = acc.map((v, k) => v + q[k]);
   }
-  return vunit(acc);
+  const n2 = Math.hypot(...acc) || 1;
+  return acc.map((v) => v / n2);
 })();
+const AXIS = qapply(qinv(REF_HAND), [0, Math.cos(HOLD), Math.sin(HOLD)]);
 const ROD_Q = qBetween([0, 1, 0], AXIS);
 
 const cast = clipSampler(glb, 'FishingCast');
@@ -180,6 +192,71 @@ function rodAt(frame) {
       `振り終わりでフレームを保持していない（ため始めへ戻ると竿先が ${jump.toFixed(2)}m 跳ぶ）`);
   }
   console.log(`振り終わりの保持: 戻すと竿先が ${jump.toFixed(2)}m 跳ぶので保持している`);
+}
+
+/* ---------------- 5. 体の向きとキャストの向きが一致しているか ---------------- */
+{
+  /* 竿の水平の向きは «体の正面» でなければならない。ここがずれていた時代は
+     そのずれを体ごと回して打ち消していたので、体の向きとキャストの向きが
+     70 度食い違って «真横を向いて投げている» ように見えていた */
+  const dir = rodAt(0).dir;
+  const yaw = Math.atan2(dir[0], dir[2]) * 180 / Math.PI;
+  assert.ok(Math.abs(yaw) < 5,
+    `構えたときの竿が体の正面を向いていない（水平 ${yaw.toFixed(0)}度）。`
+    + 'ここがずれると体の向きとキャストの向きが食い違う');
+  const elev = Math.asin(Math.max(-1, Math.min(1, dir[1]))) * 180 / Math.PI;
+  assert.ok(elev > 15 && elev < 65,
+    `構えたときの竿の仰角が釣りらしくない（${elev.toFixed(0)}度）`);
+  // 体を回して打ち消す仕掛けが残っていないこと
+  assert.doesNotMatch(angler, /model\.rotation\.y\s*=/,
+    '体ごと回して竿の向きを合わせる処理が残っている');
+  assert.doesNotMatch(angler, /faceRod/, 'faceRod が残っている');
+  console.log(`構えの竿の向き: 水平 ${yaw.toFixed(0)}度（体の正面）/ 仰角 ${elev.toFixed(0)}度`);
+}
+
+/* ---------------- 6. «手首どうし» を竿の軸にしてはいけない ---------------- */
+{
+  /* 拳が実際に握っている軸は、4 本の指の «付け根と第 2 関節の中点» を通る線。
+     以前はこれを «左手首 → 右手首» で代用していたが、両手は竿の上に縦に
+     並んでいるのではなく 13cm 横へずれて添えられているので、その線は竿では
+     ない。«左手も竿の線に 0.2cm で乗る» という以前の実測は、その «竿の線» を
+     両手首から定義していたせいで必ず 0 になる循環した測り方だった */
+  const w = poseWorld(glb, idle.at(idle.duration * 0.3), new Set([...WANT,
+    'mixamorig:LeftHand',
+    ...FINGERS.flatMap((f) => [`mixamorig:LeftHand${f}1`, `mixamorig:LeftHand${f}3`])]));
+  const fist = (side) => {
+    const pts = FINGERS.map((f) => {
+      const a = w.get(`mixamorig:${side}Hand${f}1`).p;
+      const b = w.get(`mixamorig:${side}Hand${f}3`).p;
+      return a.map((v, k) => (v + b[k]) / 2);
+    });
+    const center = pts.reduce((acc, q) => acc.map((v, k) => v + q[k] / pts.length), [0, 0, 0]);
+    return { center, dir: vunit(vsub(pts[0], pts[pts.length - 1])) };
+  };
+  const R = fist('Right'), L = fist('Left');
+  const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) * 180 / Math.PI;
+
+  // 左右の拳が同じ向きの筒を握っている＝これが本当の竿の軸
+  const between = ang(R.dir, L.dir);
+  assert.ok(between < 20,
+    `左右の拳の握り軸が食い違う（${between.toFixed(0)}度）。竿の軸の測り方の前提が崩れている`);
+
+  // その軸と «手首どうし» の線は別物
+  const wrist = vunit(vsub(w.get(HAND).p, w.get('mixamorig:LeftHand').p));
+  const off = ang(R.dir, wrist);
+  assert.ok(off > 60,
+    `«手首どうし» が握り軸と一致してしまっている（${off.toFixed(0)}度）。`
+    + 'この検査の前提が崩れているので測り方を見直すこと');
+
+  // 左の拳は右の拳の軸線から外れている（縦に並んでいない）
+  const d = vsub(L.center, R.center);
+  const along = d[0] * R.dir[0] + d[1] * R.dir[1] + d[2] * R.dir[2];
+  const perp = Math.hypot(...d.map((v, k) => v - along * R.dir[k]));
+  assert.ok(perp > 0.05,
+    `左の拳が右の拳の軸線に乗っている（${(perp * 100).toFixed(1)}cm）。`
+    + '«両手が竿の線に乗る» を根拠にしてよいことになるので測り方を見直すこと');
+  console.log(`拳の握り軸: 左右で ${between.toFixed(0)}度違い / «手首どうし» とは ${off.toFixed(0)}度違い`
+    + ` / 左の拳は軸線から ${(perp * 100).toFixed(1)}cm 外れている`);
 }
 
 console.log('投げの出どころ: OK');
