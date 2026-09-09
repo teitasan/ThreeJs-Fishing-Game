@@ -46,6 +46,8 @@ const num = (re, what) => {
 const CHARGE0 = num(/charge0:\s*([\d.]+)/, 'motion.cast.charge0');
 const CHARGE1 = num(/charge1:\s*([\d.]+)/, 'motion.cast.charge1');
 const SWING = num(/swing:\s*([\d.]+)/, 'motion.cast.swing');
+const RELEASE = num(/release:\s*([\d.]+)/, 'motion.cast.release');
+const CAST_DUR = num(/swing:\s*[\d.]+,\s*release:\s*[\d.]+,\s*dur:\s*([\d.]+)/, 'motion.cast.dur');
 const GRIP_Y = num(/gripY:\s*([\d.-]+)/, 'arm.gripY');
 const ROD_FLOOR = num(/rodFloor:\s*([\d.]+)/, 'motion.rodFloor');
 const BLANK_Y0 = num(/const ROD_BLANK_Y0 = ([\d.]+)/, 'ROD_BLANK_Y0');
@@ -315,7 +317,50 @@ const rodAtCharge = (charge) => ({ ...rodAt(frameAt(charge)), frame: frameAt(cha
   assert.doesNotMatch(angler, /faceRod/, 'faceRod が残っている');
 }
 
-/* ---------------- 6. «手首どうし» を竿の軸にしてはいけない ---------------- */
+/* ---------------- 6. 振り抜きの速さと、糸が離れる瞬間 ---------------- */
+{
+  /* 振り抜きは «竿が動いているところ» だけを送る。以前は 112 まで送っていたが、
+     63〜112 は竿先がほとんど動かない «戻り» で、それを dur に詰め込んでいた
+     ため 5 倍速を超えて «妙に早い» 見え方になっていた */
+  const rate = (SWING - CHARGE1) / FPS / CAST_DUR;
+  assert.ok(rate > 0.8 && rate < 2.6,
+    `振り抜きの再生倍率が釣りらしくない（${rate.toFixed(1)} 倍速）。`
+    + `フレーム ${CHARGE1}→${SWING} ＝ ${((SWING - CHARGE1) / FPS).toFixed(2)}s を ${CAST_DUR}s で送っている`);
+
+  /* 竿先の «前へ出る速さ» が最大になるところが、糸が離れる瞬間 */
+  const fwdSpeed = (f) => (rodAt(f + 0.5).tip[2] - rodAt(f - 0.5).tip[2]) * FPS;
+  let peak = CHARGE1, peakV = -Infinity;
+  for (let f = CHARGE1; f <= Math.min(SWING + 6, FRAMES - 1); f++) {
+    const v = fwdSpeed(f);
+    if (v > peakV) { peakV = v; peak = f; }
+  }
+  assert.ok(Math.abs(RELEASE - peak) <= 2,
+    `糸が離れるフレーム（${RELEASE}）が振り抜きの頂点（${peak}）と合っていない`);
+  assert.ok(RELEASE > CHARGE1 && RELEASE <= SWING,
+    `糸が離れるフレーム（${RELEASE}）が振り抜きの範囲 ${CHARGE1}〜${SWING} の外にある`);
+
+  /* そこへ着くまでの «時間»。フレームは smoothstep で送るので逆関数で出す */
+  const invSmoothstep = (x) => 0.5 - Math.sin(Math.asin(Math.max(-1, Math.min(1, 1 - 2 * x))) / 3);
+  const lead = invSmoothstep((RELEASE - CHARGE1) / (SWING - CHARGE1)) * CAST_DUR;
+  assert.ok(lead > 0.15 && lead < CAST_DUR,
+    `糸が離れるまでの待ちがおかしい（${lead.toFixed(2)}s / 尺 ${CAST_DUR}s）`);
+  assert.match(angler, /this\.castLead = invSmoothstep\(x\) \* dur \* clamp01\(this\.motionW\)/,
+    'playCast が «糸が離れるまでの時間» を出していない');
+
+  /* ゲーム側が待っていること。ここを待たないと、まだ振りかぶっている絵の
+     うしろでウキだけが飛んでいく */
+  assert.match(game, /this\.castLead = this\.angler\.castLead \|\| 0;/,
+    'ゲームが釣り人の «糸が離れるまでの時間» を受け取っていない');
+  assert.match(game, /\} else if \(this\.castLead > 0\) \{/,
+    '飛んでいる間の処理が castLead を待っていない');
+  const flight = game.slice(game.indexOf('} else if (this.castLead > 0) {'), game.indexOf('} else if (this.castLead > 0) {') + 400);
+  assert.match(flight, /bob\.visible = false/, '待っている間にウキが見えている');
+  assert.match(flight, /hideLine\(\)/, '待っている間に糸が見えている');
+  console.log(`振り抜き: フレーム ${CHARGE1}→${SWING}（${rate.toFixed(1)} 倍速）/ `
+    + `糸が離れるのはフレーム ${RELEASE}＝振り抜きの頂点（前へ ${peakV.toFixed(1)} m/s）の ${lead.toFixed(2)} 秒後`);
+}
+
+/* ---------------- 7. «手首どうし» を竿の軸にしてはいけない ---------------- */
 {
   /* 拳が実際に握っている軸は、4 本の指の «付け根と第 2 関節の中点» を通る線。
      以前はこれを «左手首 → 右手首» で代用していたが、両手は竿の上に縦に

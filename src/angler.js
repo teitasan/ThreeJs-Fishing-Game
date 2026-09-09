@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, clamp01, lerp, damp, TAU, lineSagProfile } from './util.js?v=20260830-zone5';
-import { moveAmountOf, speedOfGait } from './gait.js?v=20260909-castmotion2';
+import { moveAmountOf, speedOfGait } from './gait.js?v=20260909-castsync';
 import { chargeFrameTable } from './castCharge.js';
 import { createBaitMesh, disposeBaitMesh, updateBaitMesh, createHookMesh, HOOK } from './baitMesh.js';
 import { t } from './i18n.js';
@@ -209,20 +209,30 @@ export const TUNING = {
        castBlend : ために入るときだけの速さ。メーターは 1.9 秒で往復するので、
                通常の blend（乗り切るまで 0.33 秒）だと最初の 3 割ほど竿が
                付いてこず、狙いを決める動きと連動していないように見える
-       cast  : Fishing Cast のどこを使うか（フレーム）。振りかぶりは charge で
-               スクラブし、離したら swing まで dur 秒かけて流す。
-               charge1 を振りかぶりの頂点（54）まで伸ばすと、そこへ至る途中で
-               竿先が地面へ入る（実測でフレーム 39〜51 は高さ 0.02〜-0.11m）。
-               Mixamo のキャストは竿を体の左へ低く落としてから振り抜く動きで、
-               ゲームの竿は 2.43m と長いため、下を向いた瞬間に穂先が地面へ届く。
-               竿先が地上に残る 33（高さ 0.52m）で切ってある */
+       cast  : Fishing Cast のどこを使うか（フレーム）。振りかぶりは
+               charge0〜charge1 を «ためる量» でスクラブし、離したら swing まで
+               dur 秒かけて流す。
+
+               charge1 は «竿先が地面すれすれまで下がるところ»（33）。ここから
+               先は地面ガードが効きっぱなしになるので、ためる側では使わない。
+               swing は «振り抜きが終わるところ»（63）。以前は 112 まで送って
+               いたが、63〜112 は竿先が 0.3〜5m/s でほとんど動かない «戻り» で、
+               それを dur に詰め込んでいたため 5.3 倍速になり «妙に早い»
+               見え方になっていた。63 までなら 30 コマ＝1.0 秒ぶんで、
+               dur 0.55 なら 1.8 倍速。
+               release は «糸が離れるフレーム»（60）。竿先の前方への速さが
+               ここで最大になる（実測 18.3m/s。総速度の最大は 59 の 26.9m/s）。
+               ゲームはここまでウキの発射を待つ（playCast の castLead） */
   motion: {
     blend: 9, castBlend: 22, rodFloor: 0.2,
-    cast: { charge0: 9, charge1: 33, swing: 112, dur: 0.5 },
+    cast: { charge0: 9, charge1: 33, swing: 63, release: 60, dur: 0.55 },
   },
 };
 
 /** 待ちと同じ姿勢を使う状態（アタリ前後は構えを変えない） */
+/** smoothstep（3t²-2t³）の逆関数。0..1 → 0..1 */
+const invSmoothstep = (x) => 0.5 - Math.sin(Math.asin(clamp(1 - 2 * clamp01(x), -1, 1)) / 3);
+
 const POSE_ALIAS = { flight: 'wait', nibble: 'wait', bite: 'wait' };
 const poseOf = (st) => TUNING.pose[POSE_ALIAS[st] || st] || TUNING.pose.idle;
 
@@ -372,6 +382,7 @@ export class Angler {
     this._lineEnd = new THREE.Vector3();
     this._hasLineEnd = false;
     this.castAnim = -1;  // >=0 でキャストモーション中
+    this.castLead = 0;   // 糸が離れるまでの時間（playCast が入れる）
     this.rodPitch = TUNING.pose.idle.pitch;   // 竿のピッチ（垂直から前へ倒した角。ワールド基準）
     this.motionW = 0;    // Mixamo のモーションの乗り（0 = 今までの手続き生成だけ）
     this._castW = 0;     // Fishing Idle ↔ Fishing Cast の混ぜ具合
@@ -1119,7 +1130,26 @@ export class Angler {
     if (this.model) this.model.visible = on;
   }
 
-  playCast() { this.castAnim = 0; }
+  /**
+   * キャストの振りを始める。
+   *
+   * castLead は «糸が離れるまでの時間»（秒）。ゲームはこれだけウキの発射を
+   * 遅らせる。ボタンを離した瞬間にウキが飛ぶと、まだ振りかぶっている絵の
+   * うしろでウキだけが飛んでいくことになり «振りと連動していない» 見え方に
+   * なる。振り抜きは charge1 → swing を smoothstep で送るので、糸が離れる
+   * フレーム（release）に着く «時間» は smoothstep の逆関数で出す。
+   *
+   * 手続き生成の振り（一人称など）は昔から離した瞬間に飛ばしているので、
+   * クリップに乗っているぶん（motionW）だけ待たせる。
+   */
+  playCast() {
+    this.castAnim = 0;
+    const C = TUNING.motion.cast;
+    const dur = Math.max(0.05, lerp(TUNING.cast.dur, C.dur, this.motionW));
+    const span = C.swing - C.charge1;
+    const x = span > 1e-3 ? clamp01((C.release - C.charge1) / span) : 1;
+    this.castLead = invSmoothstep(x) * dur * clamp01(this.motionW);
+  }
 
   /**
    * @param {object} p

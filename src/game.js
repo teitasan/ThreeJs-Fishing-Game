@@ -9,7 +9,7 @@ import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
-import { Angler } from './angler.js?v=20260909-castmotion2';
+import { Angler } from './angler.js?v=20260909-castsync';
 import { UI } from './ui.js';
 import { Debug } from './debug.js';
 import { AudioEngine } from './audio.js';
@@ -32,7 +32,7 @@ import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
 /* ?v= は «読み込む側» が新しくならないと効かない。ここを上げないと、
    キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
    釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
-import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-castmotion2';
+import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-castsync';
 import { PostFX } from './postfx.js?v=20260828-bloom1';
 import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';
@@ -268,6 +268,7 @@ export class Game {
     this.fs = 'idle'; // idle|charge|flight|wait|nibble|bite|fight|landing|card
     this.charge = 0;
     this.chargeDir = 1;
+    this.castLead = 0;   // 糸が離れるまでの待ち（振りと連動させる）
     this.castPower = 0;
     this.castPerfect = false;
     this.castAcc = 0;         // キャスト精度 0〜1（着水の静かさ・魚が散る範囲に効く）
@@ -1345,7 +1346,12 @@ export class Game {
     this.angler.getCastOrigin(this.bobber);
     this.castOrigin.copy(this.bobber);
     this._castVelocity(power, this.bobberVel);
-    this.angler.bobber.visible = true;
+    /* 糸が離れるのは振り抜きの途中（釣り人が測って教えてくる）。そこまでウキを
+       出さない。ボタンを離した瞬間に飛ばすと、まだ振りかぶっている絵のうしろで
+       ウキだけが飛んでいくことになる。飛ぶ速さと向きはここで決めてあるので、
+       待たせても狙いと着水は変わらない */
+    this.castLead = this.angler.castLead || 0;
+    this.angler.bobber.visible = this.castLead <= 0;
     this.angler.setBait(this.bait.id);
     this.marker.visible = false;
     this.aimMarker.visible = false;
@@ -1394,6 +1400,7 @@ export class Game {
 
   /* ---------------- 回収 ---------------- */
   _retrieve() {
+    this.castLead = 0;
     if (this.hookFish) {
       this.hookFish.state = 'flee';
       this.hookFish.timer = 2.2;
@@ -2110,6 +2117,14 @@ export class Game {
             if (Math.random() < dt * 8) this.water.addRipple(this.bobber.x, this.bobber.z, 0.35, 0.8);
           }
           this.audio.reelTick(1.5);
+        } else if (this.castLead > 0) {
+          // 糸が離れるまでの待ち。振り抜きの途中で離れるので、それまでは何も出さない
+          this.castLead = Math.max(0, this.castLead - dt);
+          this.bobber.copy(this.castOrigin);
+          bob.visible = false;
+          this.angler.hideLine();
+          this.angler.bobberRing.visible = false;
+          break;
         } else {
           // 放物線
           _v3.copy(this.bobber);                       // 直前位置（桟橋との判定用）

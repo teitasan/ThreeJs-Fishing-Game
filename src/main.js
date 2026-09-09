@@ -1,7 +1,7 @@
 /* ===========================================================
    エントリポイント
    =========================================================== */
-import { Game, AUTOSTART_KEY } from './game.js?v=20260909-castmotion2';
+import { Game, AUTOSTART_KEY } from './game.js?v=20260909-castsync';
 import { hasSave } from './save.js';
 import { iconHtml } from './icons.js';
 import { t, setLang, applyDom } from './i18n.js';
