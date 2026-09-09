@@ -1,0 +1,112 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>竿の軸を見る</title>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }</script>
+<style>html,body{height:100%;margin:0;background:#101619;color:#dfe8ea;font-family:system-ui}
+canvas{display:block}#r{position:fixed;left:10px;top:10px;background:rgba(0,0,0,.65);padding:8px 12px;
+border-radius:6px;font-size:12px;line-height:1.8;white-space:pre}</style></head>
+<body><div id="r">読み込み中…</div>
+<div id="ui" style="position:fixed;right:10px;top:10px;background:rgba(0,0,0,.65);padding:10px;border-radius:6px;width:250px">
+  <select id="clip" style="width:100%;background:#223037;color:#dfe8ea;border:1px solid #31424a;border-radius:4px;padding:5px"></select>
+  <label style="display:block;margin-top:8px;font-size:11px;color:#8fa3ab">時間 <span id="tv">0.00</span>s</label>
+  <input id="time" type="range" min="0" max="1" step="0.001" value="0" style="width:100%">
+  <label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:11px;color:#8fa3ab">
+    <input id="play" type="checkbox" checked>再生</label>
+  <label style="display:flex;gap:6px;align-items:center;font-size:11px;color:#8fa3ab">
+    <input id="showRed" type="checkbox">赤（手首どうし）も出す</label>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x101619);
+const cam = new THREE.PerspectiveCamera(35, innerWidth/innerHeight, 0.05, 100);
+cam.position.set(2.6, 1.5, 2.6);
+const rd = new THREE.WebGLRenderer({ antialias:true }); rd.setSize(innerWidth, innerHeight);
+rd.setPixelRatio(Math.min(2, devicePixelRatio)); document.body.appendChild(rd.domElement);
+const ctl = new OrbitControls(cam, rd.domElement); ctl.target.set(0, 1.0, 0);
+sc.add(new THREE.HemisphereLight(0xdfe8ff, 0x30303a, 1.5));
+const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(3,5,2); sc.add(dl);
+sc.add(new THREE.GridHelper(6, 12, 0x33444c, 0x223036));
+sc.add(new THREE.AxesHelper(0.6));   // 赤=+X 緑=+Y 青=+Z
+
+const stick = (color) => {
+  const g = new THREE.CylinderGeometry(0.012, 0.012, 2.2, 8);
+  g.translate(0, 1.1, 0);           // 原点が根元
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color }));
+  sc.add(m); return m;
+};
+const stWrist = stick(0xff4d4d); stWrist.visible = false;   // 赤: いまのコード（手首どうし）
+const stFist  = stick(0x54e06a);    // 緑: 拳が握っている筒の軸
+
+const gl = await new GLTFLoader().loadAsync('./assets/models/mannequin.glb');
+const model = gl.scene; sc.add(model);
+const B = {}; model.traverse(o => { const m = /^mixamorig\d*[:._-]?(.+)$/i.exec(o.name); if (m) B[m[1]] = o; });
+const mx = new THREE.AnimationMixer(model);
+const clips = new Map(gl.animations.map(c => [c.name, c]));
+let act = null;
+const sel = document.getElementById('clip');
+for (const c of gl.animations) sel.add(new Option(`${c.name}（${c.duration.toFixed(2)}s）`, c.name));
+const timeEl = document.getElementById('time'), tvEl = document.getElementById('tv');
+function pick(name) {
+  if (act) { act.stop(); }
+  const c = clips.get(name);
+  act = mx.clipAction(c); act.play(); act.paused = false;
+  timeEl.max = c.duration;
+  return c;
+}
+let cur = pick('FishingIdle');
+sel.onchange = () => { cur = pick(sel.value); };
+
+const fing = ['Index','Middle','Ring','Pinky'];
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
+const up = new THREE.Vector3(0,1,0);
+function fistAxis(side, outPos) {
+  // 4本の指の «付け根と第2関節の中点» を通る直線＝握っている筒の軸
+  const pts = fing.map(f => {
+    const k = B[`${side}Hand${f}1`].getWorldPosition(new THREE.Vector3());
+    const j = B[`${side}Hand${f}3`].getWorldPosition(new THREE.Vector3());
+    return k.add(j).multiplyScalar(0.5);
+  });
+  outPos.set(0,0,0); for (const p of pts) outPos.add(p); outPos.multiplyScalar(0.25);
+  // 人差し指側→小指側 の逆（親指側が «上»）
+  return _a.subVectors(pts[0], pts[3]).normalize().clone();
+}
+const el = document.getElementById('r');
+const deg = v => (Math.atan2(v.x, v.z) * 180 / Math.PI).toFixed(0);
+const ele = v => (Math.asin(Math.max(-1,Math.min(1,v.y))) * 180 / Math.PI).toFixed(0);
+const q = new THREE.Quaternion();
+const playEl = document.getElementById('play'), redEl = document.getElementById('showRed');
+redEl.onchange = () => { stWrist.visible = redEl.checked; };
+rd.setAnimationLoop(() => {
+  if (playEl.checked) {
+    mx.update(1/60);
+    timeEl.value = act.time;
+  } else {
+    act.time = +timeEl.value;
+    mx.update(0);
+  }
+  tvEl.textContent = (+timeEl.value).toFixed(2);
+  model.updateMatrixWorld(true);
+
+  // 赤: 右手首 - 左手首（いまのコードの推定）。根元は右手首
+  const rw = B.RightHand.getWorldPosition(new THREE.Vector3());
+  const lw = B.LeftHand.getWorldPosition(new THREE.Vector3());
+  const aw = _b.subVectors(rw, lw).normalize().clone();
+  stWrist.position.copy(rw);
+  stWrist.quaternion.setFromUnitVectors(up, aw);
+
+  // 緑: 右拳が握っている筒の軸。根元は握りの中心
+  const cen = new THREE.Vector3();
+  const af = fistAxis('Right', cen);
+  stFist.position.copy(cen);
+  stFist.quaternion.setFromUnitVectors(up, af);
+
+  el.textContent =
+    `赤 手首どうし   yaw ${deg(aw)}°  仰角 ${ele(aw)}°\n` +
+    `緑 拳の握り軸   yaw ${deg(af)}°  仰角 ${ele(af)}°\n` +
+    `握りの中心 y=${cen.y.toFixed(2)}  竿先(2.1m先) x=${(cen.x+af.x*2.1).toFixed(2)} y=${(cen.y+af.y*2.1).toFixed(2)} z=${(cen.z+af.z*2.1).toFixed(2)}\n` +
+    `フレーム ${Math.round(act.time*30)}`;
+  ctl.update(); rd.render(sc, cam);
+});
+addEventListener('resize', () => { cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); rd.setSize(innerWidth, innerHeight); });
+</script></body></html>
