@@ -10,31 +10,31 @@ const lerp = (a, b, t) => a + (b - a) * t;
 /**
  * 「ためる量 0..1」→「クリップのフレーム」の対応表を作る。
  *
- * sweep はフレームごとの «竿の前後の傾き»（前向きが正）。ためる範囲を等間隔に
- * 送ると、前後の動きがためる量に比例しない。Mixamo のキャストは前半で竿を横へ
- * 払ってから後半で後ろへ倒すので、実測ではためる量 0→0.5 のあいだ竿先の前後が
- * 1.42→1.43m しか動かず、0.5→1.0 で一気に 1.94m 動いていた。狙う距離はメーターで
- * 決めるのに、その前半で竿がまったく反応しないため «連動していない» ように見える。
- * ここで sweep を逆に引いて、前後の動きが比例する表にする。
+ * progress はフレームごとの «振りの進み具合»（単調に増える／減る量。いまは竿が
+ * 振れた累積の角度）。ためる範囲を等間隔に送ると、この進み具合がためる量に
+ * 比例しない。Mixamo のキャストは前半で竿を立てたまま向きだけ回し、後半で一気に
+ * 倒すので、実測ではフレーム 0→12 で竿の振れが 26 度、12→33 で 131 度だった。
+ * メーターの前半で竿が «ほとんど動かない» ように見えるので、ここで progress を
+ * 逆に引いて、振れがためる量に比例する表にする。
  *
- * @param {number[]} sweep フレームごとの竿の前後の傾き
+ * @param {number[]} progress フレームごとの振りの進み具合（単調に近いこと）
  * @param {number} f0 ためる範囲の始まり（フレーム）
  * @param {number} f1 ためる範囲の終わり（フレーム）
  * @param {number} n 表の刻み数
  * @returns {number[]|null} 長さ n のフレーム列。作れなければ null（呼び出し側は等間隔に戻す）
  */
-export function chargeFrameTable(sweep, f0, f1, n = 33) {
-  if (!Array.isArray(sweep) || sweep.length < 3) return null;
+export function chargeFrameTable(progress, f0, f1, n = 33) {
+  if (!Array.isArray(progress) || progress.length < 3) return null;
   const a = Math.max(0, Math.round(f0));
-  const b = Math.min(sweep.length - 1, Math.round(f1));
+  const b = Math.min(progress.length - 1, Math.round(f1));
   if (b - a < 2) return null;
-  /* まず単調にならす。«横へ払うだけ» の区間は前後がほとんど動かず、
-     わずかに逆へ戻る山もあるので、そのままでは逆に引けない */
-  const dir = Math.sign(sweep[b] - sweep[a]) || 1;
+  /* まず単調にならす。ほとんど動かない区間や、わずかに逆へ戻る山があると
+     そのままでは逆に引けない */
+  const dir = Math.sign(progress[b] - progress[a]) || 1;
   const mono = [];
-  let ext = sweep[a];
+  let ext = progress[a];
   for (let f = a; f <= b; f++) {
-    if ((sweep[f] - ext) * dir > 0) ext = sweep[f];
+    if ((progress[f] - ext) * dir > 0) ext = progress[f];
     mono.push(ext);
   }
   const last = mono[mono.length - 1];

@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, clamp01, lerp, damp, TAU, lineSagProfile } from './util.js?v=20260830-zone5';
-import { moveAmountOf, speedOfGait } from './gait.js?v=20260909-rodfore';
+import { moveAmountOf, speedOfGait } from './gait.js?v=20260909-castmotion2';
 import { chargeFrameTable } from './castCharge.js';
 import { createBaitMesh, disposeBaitMesh, updateBaitMesh, createHookMesh, HOOK } from './baitMesh.js';
 import { t } from './i18n.js';
@@ -29,6 +29,7 @@ const _rodP = new THREE.Vector3();   // 竿の置き場所（root ローカル�
 const _rodQt = new THREE.Quaternion();   // 竿の向き（同上）
 const _q2 = new THREE.Quaternion();
 const _q3 = new THREE.Quaternion();
+const _q4 = new THREE.Quaternion();   // 竿を地面から起こす回転（_keepRodOffGround 専用）
 const _euler = new THREE.Euler();
 const _axis = new THREE.Vector3();   // しなりの回転軸（_applyBend 専用）
 const _m = new THREE.Matrix4();
@@ -61,7 +62,14 @@ const MOTION_FPS = 30;
 /* Mixamo のモーションで動かす状態。ファイトと取り込みは今までの手続き生成の
    ままにする。竿先を魚へ向ける必要があり（_aimPitch）、それに当たる Mixamo の
    クリップが無いので、置き換えると «引かれても竿が反応しない» ことになる */
-const MOTION_STATES = new Set(['idle', 'charge', 'wait', 'flight', 'nibble', 'bite']);
+/* 腕と竿をクリップに任せる状態。Mixamo のキャストはここでしか使わない。
+
+   釣りの «構え» は Mixamo の Fishing Idle が竿をほぼ垂直（仰角 78 度・竿先が
+   地上 3.4m）に立てて持っていて、水面へ差し出す構えとは合わない。狙いの角度も
+   竿先から出る糸も要るので、構え・アタリ待ち・ファイトは手続き生成で作る。
+   キャストの «振り» はクリップの見せ場なので、そこは丸ごとクリップに渡す
+   （振り抜きのあいだも＝ castAnim 中も含める） */
+const MOTION_STATES = new Set(['charge']);
 /* クリップが書いた姿勢を控えておくボーン。腕と首はこのあと上書きするので、
    Mixamo が乗っているぶんを混ぜ戻すのに «元» が要る。
    名前は mixamorig を外した短い形（this.bones の索引がこれ） */
@@ -179,31 +187,25 @@ export const TUNING = {
      handMoveSpeed は左手が竿の握り位置とノブのあいだを行き来する速さ
      （spinUp より大きくして、機構の回り出しより先に手が追いつくようにしてある） */
   reel: { handleSpeed: 6.0, gearRatio: 5.2, spinUp: 9, handMoveSpeed: 18 },
-  /* Mixamo から移したモーション。
-     竿は右手のボーンへ剛体で付ける。
+  /* Mixamo から移したモーション。竿は右手のボーンへ剛体で付ける。
 
-     竿の «向き» は Mixamo から測らない。Mixamo の釣りモーションには竿そのものが
-     入っていないので向きは姿勢から推測するしかないが、拳が実際に握っている軸を
-     指の骨から測ると（rodaxis-probe.html で目で確かめられる）、Fishing Idle は
-     竿を «ほぼ垂直»（仰角 79 度・竿先が地上 3.4m）に立てて持っている。
-     水面へ差し出す釣りの構えとは、そもそも合わない。
+     使いどころを分けてある（MOTION_STATES）。
 
-     以前はここを «右手首 → 左手首» の線で推測していた。両手は竿の上に縦に
-     並んでいるのではなく 10cm 横へずれて添えられているので、その線は拳の
-     握り軸から 63 度ずれた別物になる。たまたま «前へ 38 度» という竿らしい
-     仰角になる代わりに水平が 70 度ずれ、その 70 度を «体ごと回して»
-     打ち消していた。結果として «体の向きとキャストの向きが 70 度食い違う»
-     という見え方になっていた。
+       キャストの振り … 竿ごとクリップに預ける。竿を立てて構え、体の横へ倒し、
+                        下から振り抜く大きな動きがこのクリップの見せ場。
+       それ以外       … 手続き生成。Fishing Idle は竿をほぼ垂直（仰角 78 度・
+                        竿先が地上 3.4m）に立てて持っていて、水面へ差し出す
+                        構えとは合わない。狙いの角度も竿先から出る糸も要る。
 
-     さらに Mixamo のキャストは竿を体の «横へ» 振り回す動きで、«前後» には
-     ならない（実測：ためる 0→1 で竿の水平の向きが 140 度回り、竿先が左へ
-     2.0m 出る）。ゲームは «ためる量に竿の前後が対応する» ことで距離を読ませて
-     いるので、向きをクリップに任せるとメーターと竿が噛み合わない。
+     竿がどこに付くかは «拳が握っている筒» を指の骨から実測して決める
+     （rodaxis-probe.html で目で確かめられる）。以前ここを «右手首 → 左手首»
+     の線で推測していたが、両手は竿の上に縦に並んでおらず 10cm 横へずれて
+     添えられているので、その線は握り軸から 63 度ずれた別物だった。
 
-     そこで竿の «向き» はいつもゲームが決め（構えの角度 rodPitch）、クリップは
-     «どこを持つか»＝拳の握り点だけを動かす。握り点は指の付け根の中心を
-     読み込み時に実測する（手首を握り点にすると竿が 17cm 前腕側へずれる）。
        blend : 手続き生成との行き来の速さ（大きいほど速い）
+       rodFloor : 竿先を地面から離しておく高さ（m）。Mixamo のキャストは
+               もっと短い竿で描かれていて、2.43m の竿をそのまま付けると
+               振り下ろしの底で竿先が足元より 0.6m 下＝桟橋を突き抜ける
        castBlend : ために入るときだけの速さ。メーターは 1.9 秒で往復するので、
                通常の blend（乗り切るまで 0.33 秒）だと最初の 3 割ほど竿が
                付いてこず、狙いを決める動きと連動していないように見える
@@ -215,7 +217,7 @@ export const TUNING = {
                ゲームの竿は 2.43m と長いため、下を向いた瞬間に穂先が地面へ届く。
                竿先が地上に残る 33（高さ 0.52m）で切ってある */
   motion: {
-    blend: 9, castBlend: 22,
+    blend: 9, castBlend: 22, rodFloor: 0.2,
     cast: { charge0: 9, charge1: 33, swing: 112, dur: 0.5 },
   },
 };
@@ -378,9 +380,12 @@ export class Angler {
     this.moveShownSpeed = 0;   // 脚が描いている速さ（m/s）
     this._motion = null; // 読み込んだモーション（竿の軸・握りの重み）
     this._clipQ = {};    // クリップが書いた姿勢の控え
-    /* 竿を握る点（RightHand ローカル）。指の付け根の中心を読み込み時に測る。
-       クリップが手を動かしているとき、竿はここに付く */
+    /* 竿の付き方（RightHand ローカル）。どちらも指の骨から読み込み時に測る。
+       クリップが手を動かしているとき、竿はこの点・この向きで付く
+         _gripLocal : 握る点（指の付け根の中心）
+         _rodQ      : 竿の +Y を «拳が握っている筒の軸» へ向ける回転 */
     this._gripLocal = new THREE.Vector3(0, 0.118, 0);
+    this._rodQ = new THREE.Quaternion();
     this.bodyLean = 0;
     this.fpv = false;
     this._bodyVisible = true;   // setBodyVisible(false) で体ごと消せる
@@ -509,9 +514,9 @@ export class Angler {
    * 旧素体のときは «Mixamo → 低ポリの剛体リグ» のリターゲットが要ったが、
    * Mannequin は Mixamo と同じ骨格なのでクリップをそのまま再生できる。
    * かわりに、リターゲット時にオフラインで焼いていた次の値を読み込み時に測る。
-   *   axis   : 右手のローカルで見た竿の軸。両手が同じ竿を握っているので
-   *            «左手 → 右手» がそのまま軸になる。ブレなければ剛体で付けられる
-   *   sweep  : 竿の前後の傾き。ためる量に前後の動きを比例させるのに使う
+   *   grip   : 拳が握っている点と筒の軸（指の骨から実測）。竿をここへ付ける
+   *   arc    : キャストの各フレームまでに竿が振れた «累積の角度»。ためる量に
+   *            振りの進み方を比例させるのに使う
    *   stride : «足が滑らない速さ» と 1 周の尺。歩き／走りの再生倍率に使う
    *
    * 測れなくてもゲームは動く（手続き生成のまま）ので、落とさない
@@ -574,10 +579,8 @@ export class Angler {
          その中心が握り点、その並びが筒の軸。左右の拳で軸が 5.7 度しか違わない
          ＝両手は本当に 1 本を握っている（rodaxis-probe.html で目で見られる）。
 
-         握り点は «竿をどこに付けるか» にそのまま使う。
-         軸は «クリップの竿がどれだけ前後にあるか»（sweep）を測るのに使う。
-         向きそのものには使わない：Fishing Idle の軸は仰角 79 度＝ほぼ垂直で、
-         水面へ差し出す釣りの構えには合わない */
+         握り点は «竿をどこに付けるか»、軸は «竿がどちらを向くか» にそのまま使う
+         （キャストの振りのあいだだけ。それ以外は手続き側が構えの角度で置く） */
       const fistOf = (side) => {
         const pts = FINGERS.map((f) => {
           const a = this.bones[`${side}Hand${f}1`];
@@ -601,23 +604,34 @@ export class Angler {
           axis: f.dir.applyQuaternion(_hq).clone(),
         };
       });
+      let axis;
       if (fists[0]) {
         const mean = (k) => fists.reduce((a, f) => a.add(f[k]), new THREE.Vector3())
           .multiplyScalar(1 / fists.length);
         this._gripLocal.copy(mean('grip'));
-        var axis = mean('axis').normalize();
+        axis = mean('axis').normalize();
       } else {
         // 指の骨が無いリグ。握り点は既定のまま、軸は手の +Y（子の向き）で代用
-        var axis = new THREE.Vector3(0, 1, 0);
+        axis = new THREE.Vector3(0, 1, 0);
       }
+      this._rodQ.setFromUnitVectors(_up, axis);
 
       /** 竿の向き（モデル空間。+Z が正面・+Y が上） */
       const rodDir = () => _v2.copy(axis)
         .applyQuaternion(hand.getWorldQuaternion(_hq))
         .applyQuaternion(this.model.getWorldQuaternion(_mq).invert())
         .normalize();
-      // 竿の前後の傾き
-      const sweep = sample(clip.fishCast, frames(clip.fishCast), () => rodDir().z);
+      /* 竿が振れた累積の角度。ためる量にこれを比例させると、振りが等速に見える。
+         «前後の傾き» で計ると、竿を立てたまま横へ回している前半（実測で
+         フレーム 0〜12）が «動いていない» ことになってしまう */
+      let acc = 0;
+      const prev = new THREE.Vector3();
+      const arc = sample(clip.fishCast, frames(clip.fishCast), (i) => {
+        const d = rodDir();
+        if (i > 0) acc += prev.angleTo(d);
+        prev.copy(d);
+        return acc;
+      });
 
       /* «足が滑らない速さ»。その場で回すと接地している足はちょうど地面の速さで
          後ろへ流れる。接地は «低いほう» の足で見分け、走りには両足が浮く瞬間が
@@ -644,7 +658,7 @@ export class Angler {
 
       this._motion = {
         fps: MOTION_FPS,
-        sweep,
+        arc,
         stride: { walk: strideOf(clip.walk), run: strideOf(clip.run) },
       };
 
@@ -670,8 +684,7 @@ export class Angler {
       const deg = (v) => (v * 180 / Math.PI).toFixed(0);
       console.info(
         `釣りモーション: 握り点 手首から ${(this._gripLocal.length() * 100).toFixed(1)}cm / `
-        + `クリップの竿の前後 ${Math.min(...sweep).toFixed(2)}〜${Math.max(...sweep).toFixed(2)}`
-        + `（振りかぶりの追従に使う。向きはゲームが決める） / `
+        + `振りの累積角 ${(arc[arc.length - 1] * 180 / Math.PI).toFixed(0)}度 / `
         + `足が滑らない速さ 歩き ${this._motion.stride.walk.speed.toFixed(2)} ・ `
         + `走り ${this._motion.stride.run.speed.toFixed(2)} m/s`
       );
@@ -738,14 +751,13 @@ export class Angler {
   /**
    * ためる量 0..1 → Fishing Cast のフレーム。
    *
-   * ためる範囲を等間隔に送ってはいけない。Mixamo のキャストは前半で竿を横へ
-   * 払ってから後半で後ろへ倒すので、«竿の前後» がためる量に比例しない。
-   * 実測ではためる量 0→0.5 のあいだ竿先の前後が 1.42→1.43m しか動かず、
-   * 0.5→1.0 で一気に 1.94m 動いていた。狙う距離はメーターで決めるのに、
-   * その前半で竿がまったく反応しないので «連動していない» ように見える。
+   * ためる範囲を等間隔に送ってはいけない。Mixamo のキャストは前半で竿を立てた
+   * まま向きだけ回し、後半で一気に倒すので、フレームを等間隔に送るとメーターの
+   * 前半で竿が «ほとんど動かない» ように見える（実測：フレーム 0→12 で竿の
+   * 振れは 26 度、12→33 で 131 度）。
    *
-   * クリップに焼いた «竿の前後の傾き»（grip.sweep）を逆に引いて、前後の
-   * 動きがためる量に比例するフレームを返す
+   * クリップの «累積の振れ角»（_motion.arc）を逆に引いて、竿の振れがためる量に
+   * 比例するフレームを返す
    */
   _chargeFrame(charge) {
     const C = TUNING.motion.cast;
@@ -758,12 +770,12 @@ export class Angler {
 
   /** 上の逆引きの表。ためる範囲が変わったときだけ作り直す（エディターで動かせる） */
   _chargeTable(f0, f1) {
-    const sweep = this._motion && this._motion.sweep;
-    if (!sweep) return null;
+    const arc = this._motion && this._motion.arc;
+    if (!arc) return null;
     const key = `${f0}:${f1}`;
     if (this._chargeKey !== key) {
       this._chargeKey = key;
-      this._chargeCache = chargeFrameTable(sweep, f0, f1);
+      this._chargeCache = chargeFrameTable(arc, f0, f1);
     }
     return this._chargeCache;
   }
@@ -1150,7 +1162,8 @@ export class Angler {
        一人称も落とす。Mixamo の構えは竿が立っていて（垂直から 32 度）、
        一人称のために寝かせてある fpv.waitPitch（69 度）と食い違い、穂先が
        視界の上へ抜けてしまう */
-    const useMotion = this._motion && !this.fpv && MOTION_STATES.has(st);
+    const useMotion = this._motion && !this.fpv
+      && (MOTION_STATES.has(st) || this.castAnim >= 0);
     const motionT = (useMotion ? 1 : 0) * stand;
     this.motionW = damp(this.motionW, motionT, TUNING.motion.blend, dt);
     const w = this.motionW;
@@ -1272,6 +1285,33 @@ export class Angler {
    * ロッドを手のボーンの子にせず「手の位置に置く」ようにしているので、
    * リグの癖や腕の解の揺れが竿の角度に漏れない
    */
+  /**
+   * 竿が地面へめり込まないように、竿先が地面より上へ来るまで起こす。
+   *
+   * Mixamo のキャストは «もっと短い竿» で描かれている。振り下ろしの底では
+   * 拳の握り軸が伏せ角 72 度まで倒れるので、1.5m ほどの竿なら竿先は足元の
+   * 0.2m 上に残るが、このゲームの竿は 2.43m あり、そのまま付けると足元より
+   * 0.6m 下＝桟橋を突き抜ける。
+   *
+   * 水平の向き（どちらへ振っているか）は動きの読み取りそのものなので変えない。
+   * 竿先が地面すれすれを滑るところまで «起こす» だけにする。
+   *
+   * @param {THREE.Vector3}    p 竿の根元（root ローカル。y=0 が足元の地面）
+   * @param {THREE.Quaternion} q 竿の向き（root ローカル）。ここを書き換える
+   */
+  _keepRodOffGround(p, q) {
+    const minY = TUNING.motion.rodFloor;
+    _v8.set(0, 1, 0).applyQuaternion(q);
+    const need = (minY - p.y) / ROD_TIP_Y;      // 竿先を持ち上げるのに要る dir.y
+    if (!(need > _v8.y) || need >= 1) return;   // すでに上／持ち上げようがない
+    /* 水平の成分を保ったまま dir.y を need まで起こす */
+    const h = Math.hypot(_v8.x, _v8.z);
+    const k = h > 1e-6 ? Math.sqrt(Math.max(0, 1 - need * need)) / h : 0;
+    _v9.set(_v8.x * k, need, _v8.z * k).normalize();
+    // もとの向き → 起こした向き の回転を前から掛ける（竿まわりのねじれは残す）
+    q.premultiply(_q4.setFromUnitVectors(_v8, _v9));
+  }
+
   _poseUpper() {
     const B = this.bones;
     const T = TUNING;
@@ -1307,30 +1347,35 @@ export class Angler {
     const hand = _v3.copy(_v1).add(_v2);
 
     /* --- ロッドを置く ---
-       «向き» はいつもゲームが決める（構えの角度 rodPitch）。狙いの距離とためる量に
-       竿の前後が対応しているのがゲームの読み取りなので、ここをクリップに任せては
-       いけない。Mixamo のキャストは竿を体の «横へ» 振り回す動きで、«前後» には
-       ならない（実測：ためる 0→1 で竿の水平の向きが -9 度から -149 度まで
-       140 度回り、竿先が左へ 2.0m 出る。前後が直線に見えていたのはその横振りの
-       前後成分だけを見ていたから）。
+       構え・アタリ待ち・ファイトは手続き側が «構えの角度»（rodPitch）で置く。
+       狙いの角度も、竿先から出る糸も、そこで要るから。
 
-       «どこを持つか» はクリップに任せる。手が竿を運び、向きはゲームが決める。
-       位置は root ローカルで出してから混ぜる（親子付けそのものを切り替えると、
-       乗り移る瞬間に竿が飛ぶ） */
+       キャストの振りのあいだ（w > 0）は、竿を丸ごとクリップの右手に預ける。
+       Mixamo のキャストは竿を立てて構えてから体の横へ倒し、下から振り抜く
+       大きな動きで、そこがこのクリップの見せ場。手続きの «前後に倒すだけ» に
+       置き換えると、その振りが死ぬ。
+
+       どちらも root ローカルの位置と向きで出してから混ぜる（親子付けそのものを
+       切り替えると、乗り移る瞬間に竿が飛ぶ） */
     this.root.worldToLocal(_v4.copy(hand));
     _v5.set(0, Math.cos(this.rodPitch), Math.sin(this.rodPitch));   // root ローカルでの竿の向き
     _rodP.copy(_v4).addScaledVector(_v5, -T.arm.gripY);
     _rodQt.setFromEuler(_euler.set(this.rodPitch, 0, 0));
     if (w > 1e-3) {
-      /* クリップが動かしている右の拳の «握り点» へ寄せる（向きは触らない）。
-         握り点は手首ではなく指の付け根の中心＝実測 _gripLocal。手首を握り点に
-         すると竿が 17cm 後ろ（前腕側）にずれる */
+      /* 右手のワールド姿勢から。握り点（指の付け根の中心＝実測 _gripLocal）へ
+         寄せ、竿の +Y を拳が握っている筒の軸へ向けたうえで、グリップのどこを
+         握るか（gripY）ぶん軸に沿って戻す。握り点に手首を使うと竿が 17cm
+         後ろ（前腕側）へずれる */
       B.RightHand.getWorldQuaternion(_q2);
       _v14.copy(this._gripLocal).applyQuaternion(_q2).add(B.RightHand.getWorldPosition(_v15));
+      _q2.multiply(this._rodQ);
+      _v14.addScaledVector(_v15.set(0, 1, 0).applyQuaternion(_q2), -T.arm.gripY);
       this.root.worldToLocal(_v14);
-      _v14.addScaledVector(_v5, -T.arm.gripY);
+      _q3.copy(this.root.quaternion).invert().multiply(_q2);
       _rodP.lerp(_v14, w);
+      _rodQt.slerp(_q3, w);
     }
+    this._keepRodOffGround(_rodP, _rodQt);
     this.rodMount.position.copy(_rodP);
     this.rodMount.quaternion.copy(_rodQt);
     this.rodMount.updateMatrixWorld(true);
