@@ -1,10 +1,10 @@
 /* 他プレイヤー表示。既存 Angler をそのまま使い、竿・腕IK・リール・しなり・糸を再利用する。 */
 import * as THREE from 'three';
-import { Angler } from '../angler.js?v=20260909-rodaim';
+import { Angler } from '../angler.js?v=20260909-rodfore';
 import { clamp01, TAU } from '../util.js';
 import { t } from '../i18n.js';
 import { Vec3Stream, YawStream, recvTimeSec } from './interpolation.js';
-import { gaitOfSpeed } from '../gait.js?v=20260909-rodaim';
+import { gaitOfSpeed } from '../gait.js?v=20260909-rodfore';
 
 
 const _v = new THREE.Vector3(), _lineEnd = new THREE.Vector3(), _prevPos = new THREE.Vector3();

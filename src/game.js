@@ -9,7 +9,7 @@ import { Water } from './water.js?v=20260906-props2';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
-import { Angler } from './angler.js?v=20260909-rodaim';
+import { Angler } from './angler.js?v=20260909-rodfore';
 import { UI } from './ui.js';
 import { Debug } from './debug.js';
 import { AudioEngine } from './audio.js';
@@ -32,7 +32,7 @@ import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
 /* ?v= は «読み込む側» が新しくならないと効かない。ここを上げないと、
    キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
    釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
-import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-rodaim';
+import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-rodfore';
 import { PostFX } from './postfx.js?v=20260828-bloom1';
 import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';

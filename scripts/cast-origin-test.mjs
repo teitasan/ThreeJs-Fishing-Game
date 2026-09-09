@@ -10,9 +10,13 @@
  *     竿先は体の後ろ・地面の下まで回る。実際の投げでも糸が離れるのは振り
  *     抜いた瞬間なので、狙い・予測・発射は «構えたときの竿先»（getCastOrigin）
  *     で揃える。
- *  2. ためても竿が動かない。ためる範囲をフレームの等間隔で送ると、前半が
- *     «横へ払うだけ» なので竿の前後がまったく動かない。竿の前後の傾きを
- *     逆に引いて比例させる（chargeFrameTable）。
+ *  2. ためる動きと竿が噛み合わない。Mixamo のキャストは竿を体の «横へ»
+ *     振り回す動きで、«前後» にはならない（ためる 0→1 で竿の水平の向きが
+ *     140 度回り、竿先が左へ 2.0m 出る）。ゲームは «ためる量に竿の前後が
+ *     対応する» ことで距離を読ませているので、竿の «向き» はいつもゲームが
+ *     決め（構えの角度 rodPitch）、クリップは «どこを持つか»＝拳の握り点だけを
+ *     動かす。振りかぶりの見え方がその前後と歩調を合わせるように、クリップの
+ *     フレームは竿の前後の傾きから逆に引く（chargeFrameTable）。
  *  3. 投げ終わりに竿が跳ねる。振り終わりでフレームをため始めへ戻していた。
  */
 import assert from 'node:assert';
@@ -36,9 +40,10 @@ const num = (re, what) => {
 const CHARGE0 = num(/charge0:\s*([\d.]+)/, 'motion.cast.charge0');
 const CHARGE1 = num(/charge1:\s*([\d.]+)/, 'motion.cast.charge1');
 const SWING = num(/swing:\s*([\d.]+)/, 'motion.cast.swing');
-const PALM = num(/palm:\s*([\d.]+)/, 'motion.palm');
-const HOLD = num(/holdPitch:\s*([\d.]+)/, 'motion.holdPitch');
 const GRIP_Y = num(/gripY:\s*([\d.-]+)/, 'arm.gripY');
+const POSE_PITCH = (st) => num(new RegExp(`${st}:\\s*\\{\\s*pitch:\\s*([\\d.-]+)`), `pose.${st}.pitch`);
+const IDLE_PITCH = POSE_PITCH('idle');
+const CHARGE_PITCH = POSE_PITCH('charge');
 const BLANK_Y0 = num(/const ROD_BLANK_Y0 = ([\d.]+)/, 'ROD_BLANK_Y0');
 const SEG = (() => {
   const m = angler.match(/const ROD_SEG_BASE = \[([^\]]+)\]/);
@@ -60,95 +65,157 @@ const FINGERS = ['Index', 'Middle', 'Ring', 'Pinky'];
 const WANT = new Set([HAND, ARM,
   ...FINGERS.flatMap((f) => [`mixamorig:RightHand${f}1`, `mixamorig:RightHand${f}3`])]);
 
-/* 竿の軸は angler.js と同じやり方で作る。«測る» のではなく «決め打ち» で、
-   モデル空間の «正面へ holdPitch»（+Z が正面）を、構えの間の手の向きへ
-   持ち帰った固定の回転にしてある。焼いた定数を持たないので食い違いが起きない。
+/* 拳が握っている «筒» を angler.js と同じやり方で測る。4 本の指の
+   «付け根と第 2 関節の中点» はその筒の上に並ぶので、中心が握り点・並びが軸。
+   焼いた定数を持たないので食い違いが起きない。
 
-   以前はここを «左手首 → 右手首» の線で «測って» いた。それは拳が実際に
-   握っている軸から 63 度ずれた線で（下の 6 番で確かめている）、その水平の
-   ずれを体ごと回して打ち消していたため、体の向きとキャストの向きが 70 度
-   食い違っていた */
+     握り点 … 竿をどこに付けるか（そのまま使う）
+     軸     … クリップの竿がどれだけ前後にあるか（sweep）を測るのに使う。
+              向きそのものには使わない（Fishing Idle の軸は仰角 79 度＝
+              ほぼ垂直で、水面へ差し出す釣りの構えには合わない）
+
+   以前は «左手首 → 右手首» の線を竿の軸として «測って» いた。それは握り軸から
+   63 度ずれた別物で（下の 6 番で確かめている）、その水平のずれを体ごと回して
+   打ち消していたため、体の向きとキャストの向きが 70 度食い違っていた */
 const idle = clipSampler(glb, 'FishingIdle');
-const REF_HAND = (() => {
-  let acc = [0, 0, 0, 0];
+const fistOf = (w, side) => {
+  const pts = FINGERS.map((f) => {
+    const a = w.get(`mixamorig:${side}Hand${f}1`).p;
+    const b = w.get(`mixamorig:${side}Hand${f}3`).p;
+    return a.map((v, k) => (v + b[k]) / 2);
+  });
+  const center = pts.reduce((acc, q) => acc.map((v, k) => v + q[k] / pts.length), [0, 0, 0]);
+  return { center, dir: vunit(vsub(pts[0], pts[pts.length - 1])) };
+};
+/** 手のローカルで見た握り点と筒の軸（構えを通した平均） */
+const { GRIP, FIST_AXIS } = (() => {
+  let g = [0, 0, 0], a = [0, 0, 0];
   const n = 30;
   for (let i = 0; i < n; i++) {
     const w = poseWorld(glb, idle.at((i / (n - 1)) * idle.duration), WANT);
-    let q = w.get(HAND).q;
-    if (acc[0] * q[0] + acc[1] * q[1] + acc[2] * q[2] + acc[3] * q[3] < 0) q = q.map((v) => -v);
-    acc = acc.map((v, k) => v + q[k]);
+    const h = w.get(HAND), f = fistOf(w, 'Right');
+    g = vadd(g, qapply(qinv(h.q), vsub(f.center, h.p)));
+    a = vadd(a, qapply(qinv(h.q), f.dir));
   }
-  const n2 = Math.hypot(...acc) || 1;
-  return acc.map((v) => v / n2);
+  return { GRIP: g.map((v) => v / n), FIST_AXIS: vunit(a) };
 })();
-const AXIS = qapply(qinv(REF_HAND), [0, Math.cos(HOLD), Math.sin(HOLD)]);
-const ROD_Q = qBetween([0, 1, 0], AXIS);
 
 const cast = clipSampler(glb, 'FishingCast');
 const FRAMES = Math.round(cast.duration * FPS);
 
-/** そのフレームの竿先と竿の向き（root ローカル。原点は足元・+Z が正面） */
-function rodAt(frame) {
+/** そのフレームで «クリップの竿» がどこを向いているか（モデル空間） */
+function clipRodDir(frame) {
   const w = poseWorld(glb, cast.at(Math.min(frame, FRAMES) / FPS), WANT);
+  return qapply(w.get(HAND).q, FIST_AXIS);
+}
+
+/**
+ * ためる量 charge のときの竿先と竿の向き（root ローカル。原点は足元・+Z が正面）。
+ *
+ * 向きはゲームが決める（構えの角度＝ idle→charge を charge で送ったもの）。
+ * 位置はクリップが動かしている拳の握り点。どのフレームを見せるかは
+ * chargeFrameTable が竿の前後から逆に引く。
+ */
+function rodAtCharge(charge) {
+  const dir = [0, Math.cos(rodPitchAt(charge)), Math.sin(rodPitchAt(charge))];
+  const w = poseWorld(glb, cast.at(Math.min(frameAt(charge), FRAMES) / FPS), WANT);
   const h = w.get(HAND);
-  const q = qmul(h.q, ROD_Q);
-  const dir = qapply(q, [0, 1, 0]);
-  let p = vadd(h.p, qapply(h.q, [0, -PALM, 0]));
-  p = vadd(p, qapply(q, [0, -GRIP_Y, 0]));
-  return { tip: vadd(p, dir.map((v) => v * TIP_Y)), dir };
+  const grip = vadd(h.p, qapply(h.q, GRIP));
+  const base = vadd(grip, dir.map((v) => v * -GRIP_Y));
+  return { tip: vadd(base, dir.map((v) => v * TIP_Y)), dir, frame: frameAt(charge) };
+}
+const rodPitchAt = (c) => IDLE_PITCH + (CHARGE_PITCH - IDLE_PITCH) * c;
+
+/* ためる量 → クリップのフレーム。angler.js と同じ表を作る */
+const CLIP_SWEEP = (() => {
+  const out = [];
+  for (let f = 0; f <= FRAMES; f++) out.push(clipRodDir(f)[2]);
+  return out;
+})();
+const CHARGE_TABLE = chargeFrameTable(CLIP_SWEEP, CHARGE0, CHARGE1);
+assert.ok(CHARGE_TABLE, 'ためる量 → フレームの表が作れない');
+function frameAt(charge) {
+  const x = Math.max(0, Math.min(1, charge)) * (CHARGE_TABLE.length - 1);
+  const i = Math.min(CHARGE_TABLE.length - 2, Math.floor(x));
+  return CHARGE_TABLE[i] + (CHARGE_TABLE[i + 1] - CHARGE_TABLE[i]) * (x - i);
 }
 
 /* ---------------- 1. ためている間、竿先は地面より上にあるか ---------------- */
 {
   assert.ok(CHARGE1 <= FRAMES, `charge1 (${CHARGE1}) がクリップの長さ (${FRAMES}) を超えている`);
   let worst = Infinity, worstAt = 0;
-  for (let f = Math.floor(CHARGE0); f <= Math.ceil(CHARGE1); f++) {
-    const y = rodAt(f).tip[1];
-    if (y < worst) { worst = y; worstAt = f; }
+  for (let i = 0; i <= 40; i++) {
+    const c = i / 40;
+    const y = rodAtCharge(c).tip[1];
+    if (y < worst) { worst = y; worstAt = c; }
   }
   /* 竿先が地面へ入ると、そこからウキが飛ぶ絵になる */
   assert.ok(worst > 0.15,
-    `ためている間に竿先が地面へ入る: 最低 ${worst.toFixed(2)}m @ frame ${worstAt}`
-    + `（ためる範囲 ${CHARGE0}〜${CHARGE1}）`);
-  console.log(`ためる範囲 ${CHARGE0}〜${CHARGE1}: 竿先の最低高さ ${worst.toFixed(2)}m @ frame ${worstAt}`);
+    `ためている間に竿先が地面へ入る: 最低 ${worst.toFixed(2)}m @ ためる ${worstAt.toFixed(2)}`);
+  console.log(`ためる 0〜1: 竿先の最低高さ ${worst.toFixed(2)}m @ ためる ${worstAt.toFixed(2)}`);
 }
 
 /* ---------------- 2. ためる量と竿の前後が比例しているか ---------------- */
 {
-  const sweep = [];
-  for (let f = 0; f <= FRAMES; f++) sweep.push(rodAt(f).dir[2]);
-  const foreAt = (f) => {
-    const lo = Math.floor(f), hi = Math.min(Math.ceil(f), FRAMES);
-    const a = rodAt(lo).tip[2], b = rodAt(hi).tip[2];
-    return a + (b - a) * (f - lo);
-  };
-  const N = 17;
-  const spread = (frames) => {
-    const fore = frames.map(foreAt);
-    const step = [];
-    for (let i = 1; i < fore.length; i++) step.push(fore[i - 1] - fore[i]);
-    const travel = fore[0] - fore[fore.length - 1];
-    return { travel, mean: travel / step.length, worst: Math.max(...step), min: Math.min(...step) };
-  };
-  const flat = spread([...Array(N)].map((_, k) => CHARGE0 + (CHARGE1 - CHARGE0) * (k / (N - 1))));
-  const tbl = chargeFrameTable(sweep, CHARGE0, CHARGE1);
-  assert.ok(tbl, 'ためる量 → フレームの表が作れない');
-  const even = spread([...Array(N)].map((_, k) => {
-    const x = (k / (N - 1)) * (tbl.length - 1);
-    const i = Math.min(tbl.length - 2, Math.floor(x));
-    return tbl[i] + (tbl[i + 1] - tbl[i]) * (x - i);
-  }));
+  const N = 21;
+  const at = (k) => rodAtCharge(k / (N - 1));
+  const fore = [...Array(N)].map((_, k) => at(k).tip[2]);
+  const step = [];
+  for (let i = 1; i < N; i++) step.push(fore[i - 1] - fore[i]);
+  const travel = fore[0] - fore[N - 1];
+  const mean = travel / step.length;
+  const worst = Math.max(...step), min = Math.min(...step);
 
-  assert.ok(even.travel > 1.0,
-    `ためても竿が前後に動かない（${even.travel.toFixed(2)}m しか動いていない）`);
-  assert.ok(even.min > -0.03,
-    `ためる途中で竿が逆へ戻る（最小の刻み ${even.min.toFixed(3)}m）`);
-  assert.ok(even.worst / even.mean < 1.6,
+  assert.ok(travel > 1.0, `ためても竿が前後に動かない（${travel.toFixed(2)}m しか動いていない）`);
+  assert.ok(min > -0.01, `ためる途中で竿が前へ戻る（最小の刻み ${min.toFixed(3)}m）`);
+  assert.ok(worst / mean < 1.6,
     `竿の前後がためる量に比例していない：いちばん大きい刻みが平均の `
-    + `${(even.worst / even.mean).toFixed(1)} 倍（前半で動かない等）`);
-  console.log(`竿の前後の動き: 合計 ${even.travel.toFixed(2)}m / `
-    + `刻みのばらつき 平均の ${(even.worst / even.mean).toFixed(1)} 倍`
-    + `（等間隔送りだと ${(flat.worst / flat.mean).toFixed(1)} 倍）`);
+    + `${(worst / mean).toFixed(1)} 倍`);
+
+  /* 竿は «横» を向いてはいけない。ここがゲームの読み取り（前後で距離）と
+     クリップの動き（横へ 140 度）の食い違いだったところ。
+
+     竿先が横へずれるぶんは «手がそこへ動いた» ぶんだけであるべきで、
+     2.4m 先の竿先が手より大きく横へ出たら、竿が横を向いている */
+  const sideways = Math.max(...[...Array(N)].map((_, k) => Math.abs(at(k).dir[0])));
+  assert.ok(sideways < 1e-6,
+    `竿の向きに横の成分がある（最大 ${sideways.toFixed(3)}）。`
+    + '竿の向きは «前後と上下だけ»（構えの角度）でなければならない');
+  /* 本体側でも、竿の向きがクリップに引きずられていないことを見る。
+     _rodQt をクリップの姿勢へ混ぜると横振りが戻ってくる */
+  assert.doesNotMatch(angler, /_rodQt\.slerp/,
+    '竿の向きをクリップの姿勢へ混ぜている（Mixamo の横振りが竿に乗る）');
+  assert.match(angler, /_rodQt\.setFromEuler\(_euler\.set\(this\.rodPitch, 0, 0\)\)/,
+    '竿の向きが構えの角度（rodPitch）から作られていない');
+  const side = Math.max(...[...Array(N)].map((_, k) => Math.abs(at(k).tip[0])));
+  const gripSide = Math.max(...[...Array(N)].map((_, k) => {
+    const w = poseWorld(glb, cast.at(Math.min(at(k).frame, FRAMES) / FPS), WANT);
+    const h = w.get(HAND);
+    return Math.abs(vadd(h.p, qapply(h.q, GRIP))[0]);
+  }));
+  assert.ok(side < gripSide + 0.12,
+    `竿先が手より横へ出ている（竿先 ${side.toFixed(2)}m / 手 ${gripSide.toFixed(2)}m）`);
+
+  /* 振りかぶりの見え方（クリップのフレーム）が、その前後と歩調を合わせて
+     いること。等間隔送りだと前半が «横へ払うだけ» で竿が動かない */
+  const clipFore = [...Array(N)].map((_, k) => clipRodDir(at(k).frame)[2]);
+  const cStep = [];
+  for (let i = 1; i < N; i++) cStep.push(clipFore[i - 1] - clipFore[i]);
+  const cMean = (clipFore[0] - clipFore[N - 1]) / cStep.length;
+  const flatFore = [...Array(N)].map((_, k) =>
+    clipRodDir(CHARGE0 + (CHARGE1 - CHARGE0) * (k / (N - 1)))[2]);
+  const fStep = [];
+  for (let i = 1; i < N; i++) fStep.push(flatFore[i - 1] - flatFore[i]);
+  const fMean = (flatFore[0] - flatFore[N - 1]) / fStep.length;
+  assert.ok(Math.max(...cStep) / cMean < 1.6,
+    `振りかぶりの送りが偏っている：いちばん大きい刻みが平均の `
+    + `${(Math.max(...cStep) / cMean).toFixed(1)} 倍`);
+
+  console.log(`竿の前後の動き: 合計 ${travel.toFixed(2)}m / `
+    + `刻みのばらつき 平均の ${(worst / mean).toFixed(1)} 倍 / `
+    + `横の成分なし（竿先 ${side.toFixed(2)}m ≦ 手 ${gripSide.toFixed(2)}m + 12cm）`);
+  console.log(`振りかぶりの送り: ばらつき 平均の ${(Math.max(...cStep) / cMean).toFixed(1)} 倍`
+    + `（等間隔送りだと ${(Math.max(...fStep) / fMean).toFixed(1)} 倍）`);
 }
 
 /* ---------------- 3. 構えたときの竿先は体の前にあるか ---------------- */
@@ -184,14 +251,20 @@ function rodAt(frame) {
   assert.match(game, /this\.angler\.getRodTip\(_v1\);/, '糸の描画に使う竿先まで置き換わっている');
   assert.match(game, /updateLine\(_v1,/, 'updateLine が竿先 (_v1) から描いていない');
 
-  // 振り終わりはそのフレームで止める。ため始めへ戻すと竿が跳ねる
-  const a = rodAt(Math.round(CHARGE0)).tip, b = rodAt(Math.round(SWING)).tip;
+  /* 振り終わりはそのフレームで止める。ため始めへ戻すと竿が跳ねる。
+     竿の向きはもうクリップに依らないので、跳ぶのは «握り点»＝手の位置 */
+  const gripAt = (frame) => {
+    const w = poseWorld(glb, cast.at(Math.min(frame, FRAMES) / FPS), WANT);
+    const h = w.get(HAND);
+    return vadd(h.p, qapply(h.q, GRIP));
+  };
+  const a = gripAt(Math.round(CHARGE0)), b = gripAt(Math.round(SWING));
   const jump = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  if (jump > 0.15) {
+  if (jump > 0.10) {
     assert.match(angler, /return C\.swing;/,
-      `振り終わりでフレームを保持していない（ため始めへ戻ると竿先が ${jump.toFixed(2)}m 跳ぶ）`);
+      `振り終わりでフレームを保持していない（ため始めへ戻ると握り点が ${jump.toFixed(2)}m 跳ぶ）`);
   }
-  console.log(`振り終わりの保持: 戻すと竿先が ${jump.toFixed(2)}m 跳ぶので保持している`);
+  console.log(`振り終わりの保持: 戻すと握り点が ${jump.toFixed(2)}m 跳ぶので保持している`);
 }
 
 /* ---------------- 5. 体の向きとキャストの向きが一致しているか ---------------- */
@@ -199,7 +272,7 @@ function rodAt(frame) {
   /* 竿の水平の向きは «体の正面» でなければならない。ここがずれていた時代は
      そのずれを体ごと回して打ち消していたので、体の向きとキャストの向きが
      70 度食い違って «真横を向いて投げている» ように見えていた */
-  const dir = rodAt(0).dir;
+  const dir = rodAtCharge(0).dir;
   const yaw = Math.atan2(dir[0], dir[2]) * 180 / Math.PI;
   assert.ok(Math.abs(yaw) < 5,
     `構えたときの竿が体の正面を向いていない（水平 ${yaw.toFixed(0)}度）。`
