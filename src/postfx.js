@@ -17,284 +17,9 @@ import {
   EffectAttribute,
 } from 'postprocessing';
 import * as THREE from 'three';
-import { waveGLSL } from './water.js?v=20260924-clearwater4';
 
 /* Bloom の基準強度。水中では updateUnderwater がここから下げる */
 const BLOOM_INTENSITY = 0.35;
-
-const CLEARWATER_SURFACE_FRAG = /* glsl */ `
-${waveGLSL()}
-uniform float uTime;
-uniform float uWind;
-uniform float uUnderwater;
-uniform vec3 uCamPos;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uZenith;
-uniform vec3 uHorizon;
-uniform vec3 uShallow;
-uniform vec3 uDeep;
-uniform vec3 uAbsorb;
-uniform float uNight;
-uniform float uRain;
-uniform float uFogNear;
-uniform float uFogFar;
-uniform float uRegion;
-uniform float uShoreLift;
-uniform float uClearwaterPatch;
-uniform float uClearwaterRippleSize;
-uniform vec2 uClearwaterRippleCenter;
-uniform float uHasRefl;
-uniform float uReflTexel;
-uniform sampler2D uHeightTex;
-uniform sampler2D uClearwaterField;
-uniform sampler2D uClearwaterRipple;
-uniform sampler2D uReflColor;
-uniform sampler2D uFoamTex;
-uniform sampler2D uRainRing;
-uniform mat4 uInvProj;
-uniform mat4 uCamWorld;
-uniform mat4 uProjView;
-uniform mat4 uTexMat;
-
-float waterFresnel(float ci, float eta) {
-  ci = clamp(abs(ci), 0.0, 1.0);
-  float sinT2 = (1.0-ci*ci)/(eta*eta);
-  if (sinT2 >= 1.0) return 1.0;
-  float ct = sqrt(1.0-sinT2);
-  float rs = (ci-eta*ct)/(ci+eta*ct);
-  float rp = (eta*ci-ct)/(eta*ci+ct);
-  return 0.5*(rs*rs+rp*rp);
-}
-
-vec3 worldAt(vec2 uv, float depth) {
-  vec4 p = uInvProj * vec4(uv*2.0-1.0, depth*2.0-1.0, 1.0);
-  return (uCamWorld * vec4(p.xyz/p.w, 1.0)).xyz;
-}
-
-float groundAt(vec2 xz) {
-  vec2 uv = clamp(xz/uRegion+0.5, vec2(0.0005), vec2(0.9995));
-  return texture2D(uHeightTex, uv).r;
-}
-
-void clearwaterWave(vec2 xz, out float height, out vec2 slope, out float variance) {
-  vec4 a = texture2D(uClearwaterField, xz/uClearwaterPatch);
-  mat2 domain = mat2(0.8, -0.6, 0.6, 0.8);
-  vec4 b = texture2D(uClearwaterField, domain*xz/(uClearwaterPatch*0.68)+0.37);
-  height = a.x*0.72 + b.x*0.30;
-  slope = a.yz*0.72 + transpose(domain)*b.yz*0.30/0.68;
-  variance = max(a.w-dot(a.yz,a.yz),0.0)
-           + max(b.w-dot(b.yz,b.yz),0.0)*0.12;
-}
-
-float rainHash(vec2 p) {
-  p = fract(p*vec2(123.34,456.21));
-  p += dot(p,p+45.32);
-  return fract(p.x*p.y);
-}
-
-vec3 skyAt(vec3 direction) {
-  float elevation = pow(clamp(direction.y, 0.0, 1.0), 0.42);
-  return mix(uHorizon, uZenith, elevation);
-}
-
-void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
-  if (uUnderwater > 0.5) {
-    outputColor = inputColor;
-    return;
-  }
-
-  float sceneDepth = readDepth(uv);
-  vec3 rayPoint = worldAt(uv, 0.99999);
-  vec3 ray = normalize(rayPoint-uCamPos);
-  if (ray.y >= -0.0001) {
-    outputColor = inputColor;
-    return;
-  }
-
-  float rayDistance = max(0.0, -uCamPos.y/ray.y);
-  vec3 p = uCamPos+ray*rayDistance;
-  float floorHeight = 0.0;
-  float depth = 0.0;
-  float wet = 0.0;
-  float waveHeightAtP = 0.0;
-  float spectralHeight = 0.0;
-  vec2 spectrumSlope = vec2(0.0);
-  float spectrumVariance = 0.0;
-  for (int i=0; i<3; i++) {
-    if (abs(p.x) > uRegion*0.5 || abs(p.z) > uRegion*0.5) break;
-    floorHeight = groundAt(p.xz);
-    depth = max(-floorHeight, 0.0);
-    wet = -floorHeight + shoreRunUp(p.xz, uTime)*uWind;
-    clearwaterWave(p.xz, spectralHeight, spectrumSlope, spectrumVariance);
-    vec2 rippleUvAtP = (p.xz-uClearwaterRippleCenter)/uClearwaterRippleSize+0.5;
-    float rippleHeightAtP = texture2D(uClearwaterRipple,rippleUvAtP).x;
-    waveHeightAtP = (spectralHeight*uWind+rippleHeightAtP)*shoalGain(depth);
-    float sheet = min(floorHeight+uShoreLift, uShoreLift+0.36*uWind);
-    waveHeightAtP = max(waveHeightAtP, sheet);
-    rayDistance = (waveHeightAtP-uCamPos.y)/ray.y;
-    p = uCamPos+ray*rayDistance;
-  }
-  if (abs(p.x) <= uRegion*0.5 && abs(p.z) <= uRegion*0.5) {
-    floorHeight = groundAt(p.xz);
-    depth = max(-floorHeight,0.0);
-    wet = -floorHeight+shoreRunUp(p.xz,uTime)*uWind;
-    clearwaterWave(p.xz, spectralHeight, spectrumSlope, spectrumVariance);
-    vec2 rippleUvAtP = (p.xz-uClearwaterRippleCenter)/uClearwaterRippleSize+0.5;
-    float rippleHeightAtP = texture2D(uClearwaterRipple,rippleUvAtP).x;
-    waveHeightAtP = max((spectralHeight*uWind+rippleHeightAtP)*shoalGain(depth),
-      min(floorHeight+uShoreLift,uShoreLift+0.36*uWind));
-    rayDistance = (waveHeightAtP-uCamPos.y)/ray.y;
-    p = uCamPos+ray*rayDistance;
-  }
-
-  if (rayDistance <= 0.0 || abs(p.x) > uRegion*0.5 || abs(p.z) > uRegion*0.5 || wet <= 0.004) {
-    outputColor = inputColor;
-    return;
-  }
-
-  vec3 scenePoint = worldAt(uv, sceneDepth);
-  float sceneDistance = sceneDepth >= 0.99999 ? 1e6 : length(scenePoint-uCamPos);
-  if (sceneDistance < rayDistance-0.035) {
-    outputColor = inputColor;
-    return;
-  }
-
-  clearwaterWave(p.xz, spectralHeight, spectrumSlope, spectrumVariance);
-  vec2 rippleUv = (p.xz-uClearwaterRippleCenter)/uClearwaterRippleSize+0.5;
-  vec4 impact = texture2D(uClearwaterRipple, rippleUv);
-  float shoreFade = smoothstep(0.0, 0.32, depth);
-  vec2 slope = spectrumSlope*uWind*shoalGain(depth) + impact.yz*shoreFade;
-  vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
-  vec3 V = normalize(uCamPos-p);
-  float fresnel = waterFresnel(dot(N,V), 1.3335);
-  float variance = spectrumVariance;
-
-  vec3 reflectedDirection = reflect(-V,N);
-  reflectedDirection.y = abs(reflectedDirection.y);
-  vec3 reflected = skyAt(reflectedDirection);
-  if (uHasRefl > 0.5) {
-    vec4 reflectedClip = uTexMat*vec4(p+reflectedDirection*(0.35+rayDistance*0.10),1.0);
-    if (reflectedClip.w > 0.001) {
-      vec2 reflectedUv = reflectedClip.xy/reflectedClip.w*0.5+0.5;
-      if (all(greaterThan(reflectedUv,vec2(0.002))) && all(lessThan(reflectedUv,vec2(0.998)))) {
-        float rough = clamp(length(slope)*1.55+smoothstep(70.0,300.0,rayDistance)*0.7,0.0,1.6);
-        float blur = uReflTexel*(1.4+rough*7.0);
-        vec3 mirror = texture2D(uReflColor,reflectedUv+vec2(0.0,-blur)).rgb*0.27
-                    + texture2D(uReflColor,reflectedUv).rgb*0.46
-                    + texture2D(uReflColor,reflectedUv+vec2(0.0,blur)).rgb*0.27;
-        reflected = mix(reflected,mirror,smoothstep(0.02,0.25,fresnel)*0.85);
-      }
-    }
-  }
-
-  float path = max(0.0,sceneDistance-rayDistance);
-  vec3 refractedRay = refract(-V,N,1.0/1.3335);
-  vec4 refractedClip = uProjView*vec4(p+refractedRay*min(path,8.0),1.0);
-  vec2 refractedUv = uv;
-  if (refractedClip.w > 0.001) {
-    vec2 projectedUv = refractedClip.xy/refractedClip.w*0.5+0.5;
-    if (all(greaterThan(projectedUv,vec2(0.001))) && all(lessThan(projectedUv,vec2(0.999)))) {
-      refractedUv = projectedUv;
-    }
-  }
-  float refractedDepth = readDepth(refractedUv);
-  vec3 refractedPoint = worldAt(refractedUv,refractedDepth);
-  if (refractedPoint.y > waveHeightAtP+0.05 || abs(length(refractedPoint-uCamPos)-sceneDistance)>2.5) {
-    refractedUv = uv;
-    refractedPoint = scenePoint;
-  }
-  vec3 sceneColor = texture2D(inputBuffer,refractedUv).rgb;
-  path = clamp(length(refractedPoint-p),0.0,80.0);
-  vec3 transmittance = exp(-uAbsorb*path);
-  vec3 body = mix(uShallow,uDeep,smoothstep(0.4,13.0,path));
-  vec3 transmitted = sceneColor*transmittance+body*(1.0-transmittance);
-
-  float NoL = max(dot(N,uSunDir),0.0);
-  float NoV = max(dot(N,V),1e-4);
-  vec3 H = normalize(V+uSunDir);
-  float NoH = clamp(dot(N,H),0.0,1.0);
-  float c2 = max(NoH*NoH,1e-4);
-  float roughVariance = 0.00012+1.2*variance;
-  float tan2 = (1.0-c2)/c2;
-  float D = exp(-tan2/roughVariance)/(3.14159265*roughVariance*c2*c2);
-  float Vis = 0.5/(NoL*sqrt(NoV*NoV*(1.0-roughVariance)+roughVariance)
-                 +NoV*sqrt(NoL*NoL*(1.0-roughVariance)+roughVariance)+1e-5);
-  float glint = min(D*Vis*waterFresnel(max(dot(H,V),0.0),1.3335)*NoL,60.0);
-  vec3 glints = uSunColor*glint*(1.0-uNight)*(1.0-uRain*0.4);
-  vec3 moonHalf = normalize(V-uSunDir);
-  float moonNoL = max(dot(N,-uSunDir),0.0);
-  float moonNoH = clamp(dot(N,moonHalf),0.0,1.0);
-  float moonC2 = max(moonNoH*moonNoH,1e-4);
-  float moonD = exp(-(1.0-moonC2)/(moonC2*roughVariance))
-              /(3.14159265*roughVariance*moonC2*moonC2);
-  float moonVis = 0.5/(moonNoL*sqrt(NoV*NoV*(1.0-roughVariance)+roughVariance)
-                     +NoV*sqrt(moonNoL*moonNoL*(1.0-roughVariance)+roughVariance)+1e-5);
-  float moon = min(moonD*moonVis*waterFresnel(max(dot(moonHalf,V),0.0),1.3335)*moonNoL,45.0);
-  glints += vec3(0.80,0.87,1.0)*moon*uNight*(1.0-uRain*0.4);
-
-  vec3 waterColor = mix(transmitted,reflected,fresnel)+glints;
-  float shallowFoam = (1.0-smoothstep(0.05,0.48,depth))*smoothstep(0.0,0.16,wet);
-  float lace = texture2D(uFoamTex,p.xz*3.4+vec2(uTime*0.16,-uTime*0.11)).r;
-  waterColor = mix(waterColor,vec3(0.72,0.84,0.82),shallowFoam*smoothstep(0.42,0.78,lace)*0.62);
-  if (uRain > 0.02) {
-    vec2 rainUv = p.xz*3.4;
-    float rainTime = uTime*3.0;
-    float rainPhase = fract(rainTime);
-    vec2 rainCell = floor(rainUv);
-    if (rainHash(rainCell+floor(rainTime)*7.1) > 0.86) {
-      float grow = mix(0.34,1.0,rainPhase);
-      vec2 localUv = (fract(rainUv)-0.5)/grow+0.5;
-      if (all(greaterThan(localUv,vec2(0.0))) && all(lessThan(localUv,vec2(1.0)))) {
-        float frame = floor(rainPhase*16.0);
-        vec2 cell = vec2(mod(frame,4.0),3.0-floor(frame*0.25));
-        float ring = texture2D(uRainRing,(localUv+cell)*0.25).a;
-        waterColor += vec3(0.62,0.68,0.72)*ring*(1.0-rainPhase)*(0.55+uRain*1.5);
-      }
-    }
-  }
-  float fog = smoothstep(uFogNear,uFogFar,rayDistance);
-  waterColor = mix(waterColor,uHorizon,fog);
-  outputColor = vec4(waterColor,inputColor.a);
-}
-`;
-
-class ClearwaterSurfaceEffect extends Effect {
-  constructor(water, camera) {
-    const w = water.uniforms;
-    super('ClearwaterSurfaceEffect', CLEARWATER_SURFACE_FRAG, {
-      attributes: EffectAttribute.DEPTH,
-      uniforms: new Map([
-        ['uTime', w.uTime], ['uWind', w.uWind], ['uCamPos', w.uCamPos],
-        ['uSunDir', w.uSunDir], ['uSunColor', w.uSunColor], ['uZenith', w.uZenith],
-        ['uHorizon', w.uHorizon], ['uShallow', w.uShallow], ['uDeep', w.uDeep],
-        ['uAbsorb', w.uAbsorb], ['uNight', w.uNight], ['uRain', w.uRain],
-        ['uFogNear', w.uFogNear], ['uFogFar', w.uFogFar], ['uRegion', w.uRegion],
-        ['uShoreLift', w.uShoreLift], ['uClearwaterPatch', w.uClearwaterPatch],
-        ['uClearwaterRippleSize', w.uClearwaterRippleSize],
-        ['uClearwaterRippleCenter', w.uClearwaterRippleCenter],
-        ['uHeightTex', w.uHeightTex], ['uClearwaterField', w.uClearwaterField],
-        ['uClearwaterRipple', w.uClearwaterRipple], ['uReflColor', w.uReflColor],
-        ['uFoamTex', w.uFoamTex], ['uRainRing', w.uRainRing], ['uHasRefl', w.uHasRefl],
-        ['uReflTexel', w.uReflTexel], ['uTexMat', w.uTexMat],
-        ['uInvProj', new THREE.Uniform(new THREE.Matrix4())],
-        ['uCamWorld', new THREE.Uniform(new THREE.Matrix4())],
-        ['uProjView', w.uProjView],
-        ['uUnderwater', new THREE.Uniform(0)],
-      ]),
-    });
-    this.water = water;
-    this.camera = camera;
-  }
-
-  update() {
-    const camera = this.camera;
-    camera.updateMatrixWorld();
-    this.uniforms.get('uInvProj').value.copy(camera.projectionMatrixInverse);
-    this.uniforms.get('uCamWorld').value.copy(camera.matrixWorld);
-    this.uniforms.get('uUnderwater').value = this.water._underwaterView ? 1 : 0;
-  }
-}
 
 const UNDERWATER_FRAG = /* glsl */ `
 uniform float uStrength;
@@ -495,11 +220,9 @@ export class PostFX {
     this.renderer = renderer;
     this.scene = scene;
     this.camera = camera;
-    this.water = opts.water || null;
     this.quality = opts.quality || 'mid';
     this.composer = null;
     this.underwater = null;
-    this.clearwaterSurface = null;
     this.bloom = null;
     this.toneMapping = null;
     this.effectPass = null;
@@ -522,7 +245,6 @@ export class PostFX {
     const high = q === 'high';
     // EffectPass は dispose 時に Effect も破棄するため、品質変更ごとに作り直す。
     this.underwater = new UnderwaterEffect();
-    this.clearwaterSurface = this.water ? new ClearwaterSurfaceEffect(this.water, this.camera) : null;
 
     this.composer = new EffectComposer(this.renderer, {
       frameBufferType: high ? THREE.HalfFloatType : undefined,
@@ -531,7 +253,6 @@ export class PostFX {
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
     const effects = [];
-    if (this.clearwaterSurface) effects.push(this.clearwaterSurface);
     if (high) {
       /* しきい値が低いと空や明るい浅場まで滲み、その滲みが竿や釣り人・
          桟橋のような細い/暗い物の上へかぶって黄色いモヤに見える
@@ -598,15 +319,8 @@ export class PostFX {
   }
 
   render(dt) {
-    const mesh = this.water?.mesh;
-    const wasVisible = mesh?.visible;
-    if (mesh && !this.water._underwaterView) mesh.visible = false;
-    try {
-      if (this.composer) this.composer.render(dt);
-      else this.renderer.render(this.scene, this.camera);
-    } finally {
-      if (mesh) mesh.visible = wasVisible;
-    }
+    if (this.composer) this.composer.render(dt);
+    else this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
@@ -615,7 +329,6 @@ export class PostFX {
       this.composer = null;
     }
     this.effectPass = null;
-    this.clearwaterSurface = null;
     this.bloom = null;
     this.toneMapping = null;
     this.underwater = null;

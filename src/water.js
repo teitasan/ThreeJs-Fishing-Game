@@ -6,8 +6,8 @@ import * as THREE from 'three';
 import { COMMON_GLSL } from './shaders.js?v=20260830-zone5';
 import { WATER_REGION } from './lakefield.js';
 import { rand, TAU, clamp, smoothstep } from './util.js?v=20260830-zone5';
+import { makeTileableHeightField } from './tileableNoise.js?v=20260827-orgnoise4';
 import { reflectCameraMatrixY } from './reflectionMath.js?v=20260827-lkwgfx';
-import { ClearwaterWaterField } from './clearwaterWaterField.js?v=20260924-clearwater2';
 import {
   WAVES, MAX_WAVE_AMP, waveGLSL, waveHeight, waveSlope, waveDisplace, shoreRunUp, shoalGain,
   wavePhaseOffset, wavePhaseOffsetGrad,
@@ -16,7 +16,7 @@ import {
 /* 波の定義そのものは waveField.js（CPU/GPU 共通の単一定義元）にある。
    従来の import 経路を壊さないよう、ここから再輸出しておく */
 export {
-  WAVES, MAX_WAVE_AMP, waveGLSL, waveHeight, waveSlope, waveDisplace, shoreRunUp, shoalGain,
+  WAVES, MAX_WAVE_AMP, waveHeight, waveSlope, waveDisplace, shoreRunUp, shoalGain,
   wavePhaseOffset, wavePhaseOffsetGrad,
 };
 
@@ -58,11 +58,39 @@ function _calcOblique(proj, clip) {
  * 極小リップルだけをスクロールする法線テクスチャへ逃がすことで、
  * fragment ごとの vnoise 評価を抑える。
  */
-function createZeroFieldTexture() {
-  const tex = new THREE.DataTexture(
-    new Float32Array([0, 0, 0, 0]), 1, 1, THREE.RGBAFormat, THREE.FloatType
-  );
+function createRippleNormalTexture() {
+  /* フラグメント側の fbm を全部ここへ寄せるので、以前の 128 では
+     低周波レイヤに使ったときに解像度が足りない。256 / 5 octave にする */
+  const size = 256;
+  const data = new Uint8Array(size * size * 4);
+  const height = makeTileableHeightField(size, 0xa1f0001, {
+    octaves: 5,
+    baseFrequency: 4,
+    secondaryFrequency: 9,
+    secondaryMix: 0.34,
+    gain: 0.54,
+    amplitude: 4.2,
+  });
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (height(x + 1, y) - height(x - 1, y)) * 0.72;
+      const dy = (height(x, y + 1) - height(x, y - 1)) * 0.72;
+      const inv = 1 / Math.hypot(dx, dy, 1);
+      const i = (y * size + x) * 4;
+      data[i] = Math.round((-dx * inv * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.round((-dy * inv * 0.5 + 0.5) * 255);
+      data[i + 2] = Math.round((inv * 0.5 + 0.5) * 255);
+      data[i + 3] = 255;
+    }
+  }
+
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
   tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
   tex.needsUpdate = true;
   return tex;
 }
@@ -178,8 +206,7 @@ export class Water {
     this.terrain = terrain;
     this.time = 0;
     this.wind = 1;
-    this.clearwaterField = opts.renderer ? new ClearwaterWaterField(opts.renderer, opts.quality) : null;
-    this._zeroFieldTexture = this.clearwaterField ? null : createZeroFieldTexture();
+    this.rippleNormalTex = createRippleNormalTexture();
 
     const segs = opts.quality === 'low' ? 150 : opts.quality === 'high' ? 300 : 230;
     const geo = new THREE.PlaneGeometry(WATER_REGION, WATER_REGION, segs, segs);
@@ -224,11 +251,7 @@ export class Water {
       uCamFar: { value: 3000 },
       // 1m あたりの吸収（赤から先に消える）
       uAbsorb: { value: new THREE.Vector3(0.18, 0.075, 0.045) },
-      uClearwaterField: { value: this.clearwaterField?.surfaceTexture || this._zeroFieldTexture },
-      uClearwaterRipple: { value: this.clearwaterField?.rippleTexture || this._zeroFieldTexture },
-      uClearwaterPatch: { value: 32 },
-      uClearwaterRippleCenter: { value: this.clearwaterField?.center || new THREE.Vector2() },
-      uClearwaterRippleSize: { value: this.clearwaterField?.rippleSize || 20 },
+      uRippleNormal: { value: this.rippleNormalTex },
       /* 渚の泡もランタイムで詰めたいので出しておく
          x,y = 先端の白線の内外幅 / z,w = 後方の泡帯の内外幅 */
       uFoamTex: { value: loadFoamTexture((tex) => { this.uniforms.uFoamTex.value = tex; }) },
@@ -269,9 +292,7 @@ export class Water {
         ${waveGLSL()}
         #include <clipping_planes_pars_vertex>
         uniform float uTime, uWind, uRegion, uShoreLift;
-        uniform sampler2D uHeightTex, uClearwaterField, uClearwaterRipple;
-        uniform float uClearwaterPatch, uClearwaterRippleSize;
-        uniform vec2 uClearwaterRippleCenter;
+        uniform sampler2D uHeightTex;
         varying vec3 vWorld;
         varying vec2 vWaveD;
         varying float vDepth;
@@ -284,30 +305,22 @@ export class Water {
           return texture2D(uHeightTex, uv).r;
         }
 
-        void clearwaterSpectrumAt(vec2 xz, out float height, out vec2 slope) {
-          vec4 a = texture2D(uClearwaterField, xz/uClearwaterPatch);
-          mat2 domain = mat2(0.8, -0.6, 0.6, 0.8);
-          vec4 b = texture2D(uClearwaterField, domain*xz/(uClearwaterPatch*0.68)+0.37);
-          height = a.x*0.72 + b.x*0.30;
-          slope = a.yz*0.72 + transpose(domain)*b.yz*0.30/0.68;
-        }
-
         void main() {
           vec4 wp = modelMatrix * vec4(position, 1.0);
 
-          /* FFT 波を高さ場として読む。波紋の高さ・傾きは局所波動場から加える */
+          /* Gerstner 水平変位。岸では 0 に落として地形へ乗り上げないようにする */
+          float depth = max(0.0, -groundAt(wp.xz));
+          wp.xz += waveDisp(wp.xz, uTime) * uWind * shoalGain(depth);
+
+          // 変位後の位置で水深を取り直す（浅場の見た目がずれないように）
           float ground = groundAt(wp.xz);
-          float depth = max(0.0, -ground);
+          depth = max(0.0, -ground);
           vDepth = depth;
-          float spectrumHeight = 0.0;
-          vec2 spectrumSlope = vec2(0.0);
-          clearwaterSpectrumAt(wp.xz, spectrumHeight, spectrumSlope);
-          vec2 rippleUv = (wp.xz-uClearwaterRippleCenter)/uClearwaterRippleSize+0.5;
-          vec4 impact = texture2D(uClearwaterRipple, rippleUv);
+
           float gain = shoalGain(depth) * uWind;
-          float h = spectrumHeight * gain + impact.x;
+          float h = waveH(wp.xz, uTime) * gain;
           vWaveH = h;
-          vWaveD = spectrumSlope * gain;
+          vWaveD = waveD(wp.xz, uTime) * gain;
 
           /* 渚：水は薄いシートになって砂に沿って登る。
              ground + uShoreLift が波面より高いのは水際の数十cmだけなので、
@@ -331,8 +344,7 @@ export class Water {
         ${waveGLSL()}
         uniform vec3 uSunDir, uSunColor, uZenith, uHorizon, uFogColor, uShallow, uDeep, uCamPos, uAbsorb;
         uniform float uTime, uNight, uRain, uFogNear, uFogFar, uExposure, uWind, uCamNear, uCamFar;
-        uniform sampler2D uSceneColor, uSceneDepth, uReflColor, uHeightTex;
-        uniform sampler2D uClearwaterField, uClearwaterRipple;
+        uniform sampler2D uSceneColor, uSceneDepth, uReflColor, uRippleNormal, uHeightTex;
         uniform sampler2D uFoamTex;
         uniform sampler2D uRainRing;
         uniform mat4 uTexMat;
@@ -344,8 +356,6 @@ export class Water {
         uniform float uDebug;
         uniform float uLinearOut;
         uniform float uRegion;
-        uniform float uClearwaterPatch, uClearwaterRippleSize;
-        uniform vec2 uClearwaterRippleCenter;
         #include <clipping_planes_pars_fragment>
         varying vec3 vWorld;
         varying vec2 vWaveD;
@@ -359,13 +369,30 @@ export class Water {
           return texture2D(uHeightTex, uv).r;
         }
 
-        /* Clearwater の水面シミュレーションと岸の泡で共有する回転関数 */
+        /* 微細リップルはすべてスクロールする法線テクスチャで作る。
+           以前は fbm2 を差分法で 6 回評価していて 1 px あたり hash が 48 回
+           走っていた。回転させた 5 枚のタップに寄せると、表情を保ったまま
+           テクスチャフェッチ 5 回で済む（帯域は mipmap が面倒を見る）。 */
         const float PI_W = 3.14159265;
+
+        vec2 rippleTexSlope(vec2 uv) {
+          return texture2D(uRippleNormal, uv).xy * 2.0 - 1.0;
+        }
 
         /* 各レイヤを違う角度へ回して、タイルの格子が重なるのを避ける */
         vec2 rot(vec2 p, float a) {
           float c = cos(a), s = sin(a);
           return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+        }
+
+        vec2 rippleSlope(vec2 xz, float t) {
+          vec2 d = vec2(0.0);
+          d += rot(rippleTexSlope(rot(xz, 0.00) * 0.185 + vec2(0.21, -0.61) * t * 0.030), -0.00) * 0.185;
+          d += rot(rippleTexSlope(rot(xz, 0.91) * 0.390 + vec2(0.83, 0.37) * t * 0.055 + vec2(0.19, 0.53)), -0.91) * 0.125;
+          d += rot(rippleTexSlope(rot(xz, 2.05) * 0.760 + vec2(-0.47, 0.79) * t * 0.090 + vec2(0.61, 0.11)), -2.05) * 0.100;
+          d += rot(rippleTexSlope(rot(xz, 3.44) * 1.480 + vec2(0.62, -0.72) * t * 0.135 + vec2(0.37, 0.81)), -3.44) * 0.060;
+          d += rot(rippleTexSlope(rot(xz, 4.77) * 2.850 + vec2(-0.91, -0.28) * t * 0.190 + vec2(0.73, 0.29)), -4.77) * 0.035;
+          return d;
         }
 
         /* --- 円盤光源のマイクロファセット鏡面（GGX / Cook-Torrance） ---
@@ -437,15 +464,12 @@ export class Water {
           if (wet <= 0.004) discard;
           float depth = max(still, 0.0);
 
-          // --- 法線（Clearwater FFT 波 + 着水波紋） ---
-          vec4 spectral = texture2D(uClearwaterField, vWorld.xz / uClearwaterPatch);
-          vec2 rippleUv = (vWorld.xz - uClearwaterRippleCenter) / uClearwaterRippleSize + 0.5;
-          vec4 impact = texture2D(uClearwaterRipple, rippleUv);
+          // --- 法線（大波 + 細かいリップル） ---
+          vec2 rip = rippleSlope(vWorld.xz, uTime);
           float farRip = mix(1.0, 0.38, smoothstep(75.0, 220.0, vFogDepth));
-          float detailGain = (0.72 + uRain * 0.38) * smoothstep(0.0, 0.35, depth) * farRip;
-          vec2 detailSlope = impact.yz * detailGain;
-          vec2 slope = vWaveD + detailSlope;
-          vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
+          float ripAmt = (0.34 + uRain * 0.90) * smoothstep(0.0, 1.2, depth) * farRip;
+          vec2 slope = vec2(vWaveD.x + rip.x * ripAmt, vWaveD.y + rip.y * ripAmt);
+          vec3 N = normalize(vec3(-vWaveD.x - rip.x * ripAmt, 1.0, -vWaveD.y - rip.y * ripAmt));
 
           /* この 1 px の中で法線がどれだけ暴れているか。«解決できていない
              粗さ» の主役で、遠景ほど 1 px に多くの波が入るので自動的に
@@ -620,7 +644,7 @@ export class Water {
                (1) 1 px 内での法線の暴れ（dN）
                (2) 距離 LOD で寝かせたリップルぶん。描かないがばらつきは在る
                (3) 描いていない毛細波。雨はこれを増やす */
-          float lodRough = 0.050 * (1.0 - farRip) + sqrt(max(spectral.w, 0.0)) * detailGain * 0.45;
+          float lodRough = 0.050 * (1.0 - farRip);
           float capRough = 0.018 + 0.045 * uRain;
           float rough = sqrt(dot(dN, dN) * 0.35
                            + lodRough * lodRough + capRough * capRough);
@@ -1006,11 +1030,6 @@ export class Water {
   /* ---------------- 波紋 ---------------- */
   _buildRipples() {
     this.ripples = [];
-    if (this.clearwaterField) {
-      // 着水時の輪ではなく、シミュレーション場へ高さ・速度を注入する。
-      this._rippleIdx = 0;
-      return;
-    }
     const geo = new THREE.RingGeometry(0.62, 0.98, 40, 1);
     geo.rotateX(-Math.PI / 2);
     for (let i = 0; i < 18; i++) {
@@ -1028,10 +1047,6 @@ export class Water {
   }
 
   addRipple(x, z, size = 1, dur = 1.6) {
-    if (this.clearwaterField) {
-      this.clearwaterField.addRipple(x, z, size);
-      return;
-    }
     const r = this.ripples[this._rippleIdx++ % this.ripples.length];
     r.life = 0; r.dur = dur; r.size = size; r.x = x; r.z = z;
     r.mesh.visible = true;
@@ -1350,7 +1365,6 @@ export class Water {
   /* ---------------- 更新 ---------------- */
   update(dt, camera, env) {
     this.time += dt;
-    this.clearwaterField?.update(dt, this.time, camera);
     const u = this.uniforms;
     u.uTime.value = this.time;
     this.wind = 1 + env.rainIntensity * 0.92 + env.cloudiness * 0.14;
