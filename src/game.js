@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { Environment } from './sky.js?v=20260828-uwgfx18';
 import { Terrain, WATER_REGION, WALK_INLAND } from './terrain.js?v=20260906-wood1';
 import { resolveLake } from './lakefield.js';
-import { Water } from './water.js?v=20260906-props2';
+import { Water } from './water.js?v=20260924-clearwater4';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
@@ -33,7 +33,7 @@ import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
    キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
    釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
 import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-castsync';
-import { PostFX } from './postfx.js?v=20260828-bloom1';
+import { PostFX } from './postfx.js?v=20260924-clearwater4';
 import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';
 
@@ -382,7 +382,7 @@ export class Game {
 
     await onProgress(t('ui.loadingWater'));
     this.water = new Water(this.scene, this.terrain, {
-      quality: q, exposure: EXPOSURE, causticsUniforms,
+      quality: q, exposure: EXPOSURE, causticsUniforms, renderer: this.renderer,
       skyUniforms: this.env.skyUniforms,
     });
 
@@ -1609,13 +1609,13 @@ export class Game {
       this.perf?.beginRender(updateEnd);
       // 水越しの絵のために、水面を隠したシーンを 1 枚描いておく
       this.perf?.beginPass('capture');
-      this.water.capture(this.renderer, this.scene, this.camera);
+      if (this.water._underwaterView) this.water.capture(this.renderer, this.scene, this.camera);
       this.perf?.endPass('capture');
       // 水上mainではWaterがcapture結果を合成するため、同じ水中propを二重描画しない。
       if (uwPropGroup) uwPropGroup.visible = false;
       // 水面の映り込み（30Hz に間引き）
       this.perf?.beginPass('reflection');
-      this.water.captureReflection(this.renderer, this.scene, this.camera);
+      if (!this.water._underwaterView) this.water.captureReflection(this.renderer, this.scene, this.camera);
       this.perf?.endPass('reflection');
       const uwCtx = this.water.getUnderwaterContext(this.camera);
       uwCtx.cloud = this.env.cloudiness;
