@@ -121,7 +121,7 @@ export class Terrain {
    */
   get heightTexture() {
     const hf = this.gfx?.heightfield;
-    const t = hf?.nearTexture || hf?.textures?.near || null;
+    const t = hf?.uniforms?.ngHeightNear?.value || null;
     if (t) return t;
     if (!this._heightTex && this.grids?.near) {
       const g = this.grids.near;

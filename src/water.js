@@ -115,13 +115,13 @@ export class Water {
   /** 屈折用のシーンのコピー（sceneColor）。performance.js の RT 見積もりが読む */
   get rt() {
     const p = this.gfx?.pipeline;
-    return p?.targets?.sceneColor || p?.sceneColor || null;
+    return p?.targets?.copy || p?.targets?.sceneColor || null;
   }
 
   /** 平面反射の RT（反射を描かない品質・水中では null のこともある） */
   get reflRT() {
     const p = this.gfx?.pipeline;
-    return p?.targets?.reflection || p?.reflRT || null;
+    return p?.targets?.refl || p?.targets?.reflection || null;
   }
 
   /* ---------------- CPU 側のサンプリング（ゲームの物理） ---------------- */
