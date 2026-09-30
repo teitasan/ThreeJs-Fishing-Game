@@ -24,8 +24,9 @@ export const NG_LIGHTS_ANCHOR = 'getDirectionalLightInfo( directionalLight, dire
 /** 平行光ブロックの RE_Direct（ここで影の掛かった後の色を読む） */
 export const NG_LIGHTS_RE_DIRECT = 'RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
 const DIR_BLOCK_START = '#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )';
-/** 影の読みの差し替え位置：getShadow の定義と、その中の PCF の分岐 */
+/** 影の読みの差し替え位置 1：getShadow の定義（この直前に ngShadowPCF を置く） */
 export const NG_SHADOW_GETSHADOW = 'float getShadow( sampler2D shadowMap, vec2 shadowMapSize, float shadowIntensity, float shadowBias, float shadowRadius, vec4 shadowCoord ) {';
+/** 影の読みの差し替え位置 2：getShadow の中の PCF の分岐（NG_FRAME の枝を頭に足す） */
 export const NG_SHADOW_PCF_BRANCH = '#if defined( SHADOWMAP_TYPE_PCF )';
 
 /* 3×3 テクセルの二次 B スプライン（重みの和は 1、テクセルの境で連続）の PCF。

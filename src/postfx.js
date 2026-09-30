@@ -19,6 +19,9 @@ function warnOnce(tag, e) {
   console.warn(`[postfx] ${tag}`, e);
 }
 
+/**
+ * game.js の PostFX（CONTRACT §4.4）。中身は描画の芯のパイプラインと post モジュール
+ */
 export class PostFX {
   /**
    * @param {THREE.WebGLRenderer} renderer

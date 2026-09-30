@@ -22,6 +22,7 @@ export const CAUSTICS_PLACEHOLDER_LAYERS = 1;
 /** 焼くタイルの形（underwater のスタブと GLSL が共有）：一辺の画素、時刻のフレーム数、網 A / B のタイル当たりのセル数、一巡の秒 */
 export const CAUSTICS_TILE = Object.freeze({ size: 256, frames: 16, cellsA: 6, cellsB: 10, loopSec: 8 });
 
+/** vec3 causticLight(vec3 worldPos, vec3 viewNormal) と 16 個の uCaust*（魚・湖底・水中の小物が共有） */
 export const CAUSTICS_GLSL = /* glsl */ `
 uniform float uCaustTime;
 uniform vec3 uCaustSunDir;

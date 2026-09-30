@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { CAUSTICS_GLSL, CAUSTICS_PLACEHOLDER_LAYERS } from './gfx/underwater/caustics.glsl.js';
 
+/** caustics の GLSL（underwater モジュールの本体を再 export。魚の onBeforeCompile が #include <common> の後へ入れる） */
 export { CAUSTICS_GLSL };
 
 /** 契約で固定された 16 個の uniform 名（名前も数も変えない） */

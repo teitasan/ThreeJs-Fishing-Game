@@ -68,3 +68,66 @@
 
 - 光のリグは起動時に固定する（§0）ので、灯籠の PointLight（2200K、intensity 0、`name = 'ng-lamp'`）は Environment が作って
   `setLightRig({ lamp })` で渡す。位置は `(0, -1000, 0)` のまま。hardscape が `placement.lamp`（x, z, top）の位置へ動かし、`setLamp(night, dt)` で強さを決める。
+
+---
+
+## Core-A（描画の芯・lab・撮影）から
+
+### A-1. 近景の影の PCF を差し替えた（§4.5 の «PCFShadowMap と radius» からのずれ）
+
+- three r180 の PCFShadowMap は 1 断片あたり 17 回の RGBA 読み + アンパック。水面だけで ≈1.3ms（2560×1440）かかった。
+- `shadowmap_pars_fragment` の PCF の分岐に `#if defined( SHADOWMAP_TYPE_PCF ) && defined( NG_FRAME )` の枝を足し、
+  3×3 テクセルの二次 B スプライン重みの `ngShadowPCF`（9 回の読み、テクセルの境で重みが連続）にした。半影 ≈1.5 テクセル（high ≈5cm）。
+- `renderer.shadowMap.type` は PCFShadowMap のまま。`quality` の `nearShadow.radius` は NG_FRAME の無いシェーダ（chunks の自己検査が落ちた degraded）だけに効く。
+- 影をもっと柔らかくしたいモジュールは自前で広げず core に要望を（段ごとの uniform で重みの幅を変える案がある）。
+
+### A-2. high は M1 Pro の 2560×1440 で 2× + SMAA に落ちる（§3.2 の判定を入れた結果）
+
+- `docs/nextgen/spikes.md` S-1。4× − 2× の上乗せ 1.4–2.1ms > 閾値 0.9ms。1280×720 では 4× のまま。
+- `quality.profile` は降格すると `msaa: 2, postAA: 'smaa'` を返す。post モジュールは `profile.postAA` を見て AA を選ぶこと（high = 'none' と決め打ちしない）。
+
+### A-3. 雲影は頂点で評価して varying で渡す（§4.2 の lights のフックの式からのずれ）
+
+- fog_vertex が `vNgCloud = ngCloudShadow( vNgWorld )`。lights のフックは `ngKeyVis = vNgCloud * ngHfShadowAnalytic( vNgWorld ); directLight.color *= ngKeyVis;`。
+- 雲の斑は 900m 規模なので頂点の間隔で足りる（全画面で 0.43ms の節約）。100m を超える三角形では線形補間になる（遠景の稜線リングなど。見た目の差は無い）。
+- ngExtendStandard の caustics は `ngKeyVis * ngNearVis` を使い回す。fog チャンクを含む自前シェーダは `ngSunVisibilityC(P, nearVis, vNgCloud)` を使う（`ngSunVisibility` は断片で雲影を評価する版として残す）。
+
+### A-4. caustics のグレーボックスは «焼いたタイル»（underwater モジュールへ）
+
+- `CAUSTICS_GLSL` は解析の Worley をやめ、uCaustTex（sampler2DArray、層 = 時刻のフレーム、R/G = 網 A/B）を 4 回読む。
+  弱める係数（視距離・深さ・面の向き・夜・雨・雲・太陽）を先に掛けて 0 なら読まない（全画面 2.58 → 0.17ms）。
+- タイルは underwater のスタブが起動時に `forge.bakeArrayPixels` で焼いて `updateCausticsTexture` で入れる（テクスチャのオブジェクトは同じ）。
+  1 層のプレースホルダのままなら caustics は 0（一様な光を出さない）。形は `CAUSTICS_TILE`（caustics.glsl.js）。
+- 本番の underwater は屈折格子の面積比（Evan Wallace 式）の焼き込みに置き換えてよい。契約（16 名・署名・y > −0.02 で 0・sampler2DArray だけ）は caustics-contract が固定。
+
+### A-5. 予算の実測が §7 の表に届かない所
+
+- core の取り分（2560×1440 high、全モジュールを隠した lab）：copy 0.6ms + 空の late 0.6–0.8ms（MSAA の読み戻しと 2 回目の resolve）+ post 0.9–1.0ms。
+  §7 の core 0.70ms（コピー 0.15・resolve 0.35）は RGBA16F の 2560×1440 では無理。**core の行を 1.3ms、post を 1.0ms で見込み直す**ことを提案。
+- G0 の «グレーボックスの GPU < 5ms»：本編の全スタブで high 2560×1440 は 9.0–11.1ms（水上）/ 6.9–8.1ms（水中）、mid 1920×1080 は 5.5–6.5ms / 3.5–4.0ms。
+  スタブは placement の全部（木 2 万本・岩・桟橋）を描くので «何も無い» グレーボックスより重い。スタブの反射（1.8–2.3ms）は
+  «植生は LOD +1、草なし» を担当者が入れれば下がる。数字は `docs/nextgen/spikes.md` S-3。
+
+### A-6. プログラム数とサンプラーの余裕が少ない
+
+- グレーボックスだけで 52–58 本（§4.4 の上限 60）。customProgramCacheKey に tier が入るので、段の切り替えの直後は古い段のプログラムも一時的に数に入る。
+  10 モジュールが入ると超える見込み。**上限を 90 に上げるか、各モジュールの予算を «4 本まで» と決める**ことを統合時に判断してほしい。
+- terrain のスタブの断片のサンプラーは 11/12（高さ場ライブラリが 8 枚：高さ ×2・法線 ×2・汀線・底質・樹冠・被覆）。
+  terrain の担当者は素材の配列 2 枚を足すと超えるので、`ngShoreDist`（R16F）・`ngBedMap`・`ngCoverMap` を 1 枚の RGBA16F に詰める変更を core に頼むこと（要望があれば Phase 1 の途中でも入れる）。
+
+### A-7. core の API に足したもの（§4 の凍結に追記）
+
+- `forge.bakeArrayPixels({ w, h, layers, frag, uniforms }) → { data, width, height, depth }`（参照を差し替えられない DataArrayTexture へ中身を入れる）
+- GLSL：`NG_CLOUD_GLSL`（medium.glsl.js から分けた雲だけの部品）、`vNgCloud`・`ngKeyVis`（fog / lights のチャンク）、`ngSunVisibilityC`、`ngVNoise2D`（値ノイズと解析的な勾配）、
+  `ngShadowPCF`（chunks）
+- `NG_SHADOW_GETSHADOW` / `NG_SHADOW_PCF_BRANCH`（chunks のアンカー。core-chunks テストが vendored の three に対して検査）
+- lab：`__lab.bench / moduleCosts / programAudit / fishCheck / msaa / glsl / meanLuminance / views`。
+  撮影：`scenarios/lab-matrix.mjs`・`game-matrix.mjs`・`core-robust.mjs`・`core-glsl-cost.mjs`・`lab-bench.mjs`、判定 `scripts/gfx/art-metrics.mjs`、PNG の読み書き `scripts/gfx/png.mjs`
+
+### A-8. グレーボックスの見た目は art-metrics に通らない（sky / water / post の担当者の出発点）
+
+- `lab-matrix`（dock-3p・noon-fp-down・dawn-3p × 5:40–23:30 × 晴れ・雨）で：17:45 の黒つぶれ 17–54%（低い太陽が山の陰・雨で key がほぼ 0・
+  post のスタブは画面輝度の順応 ±1EV を持たない）、noon-fp-down の水の色相 204–229°（160–200° の外）。真夜中／真昼の比 0.25（下限ぎりぎり）。
+- 露出の順応（§2 の adapt）は post モジュールの仕事として残した（スタブは時刻表 × 水中だけ）。
+- sky のスタブの SH が «4Hz の実時間» でしか更新されず、時間を止めた撮影で時刻を変えると昼の環境光が残っていた。時刻の跳び（0.05h）と
+  天候の即時切り替えでも射影し直すようにした。本番の sky モジュールも同じ条件を入れること。

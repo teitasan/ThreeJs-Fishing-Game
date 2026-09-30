@@ -33,6 +33,7 @@ import * as STUBS from './stubs/index.js';
 
 /** chunks の状態（import 時に 1 回） */
 export const ngChunks = installNg(THREE);
+/** ファサードとモジュールが core の入口だけから import できるように再 export する */
 export { installNg, NG_LAYER, NG_MASK, NG_PASS, NG, ngFrameData, ngOwn, NG_TIERS };
 
 /* モジュールの本体（担当者の index.js）。読み込み失敗はスタブで受ける */
