@@ -26,7 +26,7 @@ const RINGS = 5;
 const RIPPLES = 16;
 const GRID_N = { low: 64, mid: 96, high: 128 };
 
-const VS = NG_HEIGHTFIELD_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
+const VS = NG_HEIGHTFIELD_GLSL + NG_WIND_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
 #include <common>
 #include <shadowmap_pars_vertex>
 #include <fog_pars_vertex>
@@ -36,6 +36,8 @@ uniform float uWind;
 in vec3 aEdge;
 out vec3 vWorld;
 out float vViewZ;
+out float vDepthW;
+out vec4 vWnd;
 float ngWaterAt(vec2 p) {
   float d = ngDepth(p);
   return d <= 0.0 ? 0.0 : ngWaveH(p, uTime) * uWind * ngShoalGain(d);
@@ -45,6 +47,9 @@ void main() {
   float h = aEdge.z > 0.5 ? 0.5 * (ngWaterAt(p - aEdge.xy) + ngWaterAt(p + aEdge.xy)) : ngWaterAt(p);
   vec4 worldPosition = vec4(p.x, h, p.y, 1.0);
   vWorld = worldPosition.xyz;
+  /* 水深と風の斑は頂点で（どちらも数 m〜数十 m の規模。中心のリングは 0.25m 間隔） */
+  vDepthW = ngDepth(p);
+  vWnd = ngWindAt(p);
   vec4 mvPosition = viewMatrix * worldPosition;
   vViewZ = -mvPosition.z;
   gl_Position = projectionMatrix * mvPosition;
@@ -54,7 +59,7 @@ void main() {
 }
 `;
 
-const FS = NG_HEIGHTFIELD_GLSL + NG_SKYSPEC_GLSL + NG_WIND_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
+const FS = NG_HEIGHTFIELD_GLSL + NG_SKYSPEC_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
 #include <common>
 #include <packing>
 #include <lights_pars_begin>
@@ -70,10 +75,13 @@ uniform float ngReflValid;
 uniform vec4 ngScreen;
 uniform float uTime;
 uniform float uWind;
-uniform vec4 uRipple[${RIPPLES}];   // x, z, 開始時刻, 大きさ
+uniform vec4 uRipple[${RIPPLES}];   // x, z, 開始時刻, 大きさ（生きている物だけを先頭に詰める）
 uniform float uRippleDur[${RIPPLES}];
+uniform int uRippleN;               // 生きている波紋の数
 in vec3 vWorld;
 in float vViewZ;
+in float vDepthW;
+in vec4 vWnd;
 
 /* 細かい波の勾配：風で強さが変わる 2 スケールの値ノイズの解析的な勾配（猫足の斑と凪）。
    差分で何度も評価しない（水面は画面の半分を覆うので断片の手数がそのまま効く） */
@@ -82,14 +90,16 @@ vec2 ngDetailSlope(vec2 p, float t, float amp) {
   vec3 b = ngVNoise2D(p * 2.3 - vec2(t * 0.52, -t * 0.4));
   return (a.yz * 0.9 * 0.012 + b.yz * 2.3 * 0.006) * amp;
 }
-/* 波紋の輪（最新 16 件）。r = 経過 × 速さ、減衰する sin の帯 */
+/* 波紋の輪（最新 16 件）。r = 経過 × 速さ、減衰する sin の帯。
+   生きている物だけを CPU が先頭に詰めて数を渡す（空の 16 回の周回でも全画面で ≈1.5ms かかった） */
 vec2 ngRippleSlope(vec2 p) {
   vec2 g = vec2(0.0);
   for (int i = 0; i < ${RIPPLES}; i++) {
+    if (i >= uRippleN) break;
     vec4 R = uRipple[i];
     float age = uTime - R.z;
     float dur = uRippleDur[i];
-    if (R.w <= 0.0 || age < 0.0 || age > dur) continue;
+    if (age < 0.0 || age > dur) continue;
     vec2 dv = p - R.xy;
     float d = length(dv);
     float rr = age * 0.75 * (0.6 + 0.4 * R.w);
@@ -103,9 +113,9 @@ float ngGGX(float NoH, float a) { float a2 = a * a; float d = NoH * NoH * (a2 - 
 
 void main() {
   vec2 p = vWorld.xz;
-  float depthW = ngDepth(p);
+  float depthW = vDepthW;
   float shoal = depthW <= 0.0 ? 0.0 : ngShoalGain(depthW);
-  vec4 wnd = ngWindAt(p);
+  vec4 wnd = vWnd;
   vec2 slope = ngWaveD(p, uTime) * uWind * shoal;
   slope += ngDetailSlope(p, ngEnvTime, 0.35 + 0.35 * wnd.z) + ngRippleSlope(p) + ngRainRings(p, ngEnvTime, ngRain) * 3.0;
   vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
@@ -136,7 +146,9 @@ void main() {
     /* 岸の 0–3cm では硬い縁を出さない */
     float edge = smoothstep(0.0, 0.03, thick);
     F *= edge;
-    float vis = ngSunVisibilityC(vWorld, getShadowMask(), vNgCloud);
+    /* 近景の影の外（0.8R〜R より先）は影マップを読まない（高さ場影だけ） */
+    float nearW = ngNearToFar(vWorld);
+    float vis = ngSunVisibilityC(vWorld, nearW < 1.0 ? getShadowMask() : 1.0, vNgCloud);
     vec3 T, Lin;
     ngMediumTerms(vWorld, T, Lin);
     vec3 scatter = (1.0 - F) * ngWaterInsc * 0.15 * vis * edge;
@@ -207,12 +219,14 @@ export class WaterStub extends NgModule {
   constructor(ctx) {
     super(ctx);
     const T = ctx.THREE;
-    this._ripples = Array.from({ length: RIPPLES }, () => new T.Vector4(0, 0, -1e9, 0));
-    this._rippleDur = new Array(RIPPLES).fill(1);
+    /* 予約のリングバッファ（x, z, 開始時刻, 大きさ）と、シェーダへ渡す «生きている物を詰めた» 写し */
+    this._ring = Array.from({ length: RIPPLES }, () => new T.Vector4(0, 0, -1e9, 0));
+    this._ringDur = new Array(RIPPLES).fill(1);
     this._next = 0;
     this.uniforms = {
       uSnap: { value: new T.Vector2() }, uTime: { value: 0 }, uWind: { value: 1 },
-      uRipple: { value: this._ripples }, uRippleDur: { value: this._rippleDur },
+      uRipple: { value: Array.from({ length: RIPPLES }, () => new T.Vector4()) }, uRippleDur: { value: new Array(RIPPLES).fill(1) },
+      uRippleN: { value: 0 },
       ngSkyViewTex: { value: null }, ngSkyViewMips: { value: 6 },
     };
     this.mesh = null;
@@ -259,14 +273,29 @@ export class WaterStub extends NgModule {
     if (!Number.isFinite(x) || !Number.isFinite(z) || !(size > 0) || !(dur > 0)) return;
     const k = this._next;
     this._next = (k + 1) % RIPPLES;
-    this._ripples[k].set(x, z, this.uniforms.uTime.value, Math.min(size, 6));
-    this._rippleDur[k] = Math.min(dur, 8);
+    this._ring[k].set(x, z, this.uniforms.uTime.value, Math.min(size, 6));
+    this._ringDur[k] = Math.min(dur, 8);
+  }
+
+  /* 生きている波紋を uniforms の先頭へ詰める */
+  _packRipples(t) {
+    const u = this.uniforms, dst = u.uRipple.value, dur = u.uRippleDur.value;
+    let n = 0;
+    for (let k = 0; k < RIPPLES; k++) {
+      const R = this._ring[k], age = t - R.z;
+      if (R.w <= 0 || age < 0 || age > this._ringDur[k]) continue;
+      dst[n].copy(R);
+      dur[n] = this._ringDur[k];
+      n++;
+    }
+    u.uRippleN.value = n;
   }
 
   update(f) {
     const u = this.uniforms;
     u.uTime.value = f.waterTime;
     u.uWind.value = f.waterWind;
+    this._packRipples(f.waterTime);
     const s = 32 / this._n;
     const c = f.camera?.position;
     if (c) u.uSnap.value.set(Math.round(c.x / s) * s, Math.round(c.z / s) * s);

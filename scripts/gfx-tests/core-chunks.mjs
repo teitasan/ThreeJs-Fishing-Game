@@ -13,12 +13,12 @@ import { pathToFileURL } from 'node:url';
 import { ROOT, check, done } from './lib/env.mjs';
 
 const THREE = await import(pathToFileURL(path.join(ROOT, 'vendor/three.module.min.js')).href);
-const { installNg, ngChunkPatches, NG_EXTEND_ANCHORS: A, NG_LIGHTS_ANCHOR, NG_LIGHTS_RE_DIRECT } = await import(pathToFileURL(path.join(ROOT, 'src/gfx/core/chunks.js')).href);
+const { installNg, ngChunkPatches, NG_EXTEND_ANCHORS: A, NG_LIGHTS_ANCHOR, NG_LIGHTS_RE_DIRECT, NG_SHADOW_GETSHADOW, NG_SHADOW_PCF_BRANCH } = await import(pathToFileURL(path.join(ROOT, 'src/gfx/core/chunks.js')).href);
 const { ngFrameData } = await import(pathToFileURL(path.join(ROOT, 'src/gfx/core/frame.js')).href);
 
 const SC = THREE.ShaderChunk, SL = THREE.ShaderLib;
 const orig = {};
-for (const k of ['fog_pars_vertex', 'fog_vertex', 'fog_pars_fragment', 'fog_fragment', 'lights_fragment_begin']) orig[k] = SC[k];
+for (const k of ['fog_pars_vertex', 'fog_vertex', 'fog_pars_fragment', 'fog_fragment', 'lights_fragment_begin', 'shadowmap_pars_fragment']) orig[k] = SC[k];
 
 /* アンカー（差し替え前の vendored の文字列に対して） */
 for (const [k, a] of Object.entries(A.vertex)) check(SL.physical.vertexShader.includes(a), `physical の頂点に ${k} のアンカー ${a}`);
@@ -31,6 +31,9 @@ for (const lib of ['depth', 'distanceRGBA']) {
 }
 const dirBlock = orig.lights_fragment_begin.slice(orig.lights_fragment_begin.indexOf('NUM_DIR_LIGHTS > 0'));
 check(dirBlock.includes(NG_LIGHTS_ANCHOR) && dirBlock.includes(NG_LIGHTS_RE_DIRECT), 'lights_fragment_begin の平行光ブロックのアンカー');
+const gs = orig.shadowmap_pars_fragment.indexOf(NG_SHADOW_GETSHADOW);
+check(gs > 0 && orig.shadowmap_pars_fragment.indexOf(NG_SHADOW_PCF_BRANCH, gs) > gs, 'shadowmap_pars_fragment の getShadow と PCF の分岐のアンカー');
+check(orig.shadowmap_pars_fragment.indexOf('float texture2DCompare(') < gs, 'texture2DCompare は getShadow より前にある（ngShadowPCF が使う）');
 for (const k of ['fog_pars_vertex', 'fog_vertex', 'fog_pars_fragment', 'fog_fragment']) {
   for (const lib of ['standard', 'physical', 'lambert', 'basic']) {
     const src = k.endsWith('vertex') ? SL[lib].vertexShader : SL[lib].fragmentShader;
@@ -59,6 +62,9 @@ check(SC.lights_fragment_begin.includes('ngKeyVis = vNgCloud * ngHfShadowAnalyti
 check(SC.fog_vertex.includes('vNgCloud = ngCloudShadow( vNgWorld )'), 'fog_vertex が雲影を頂点で評価する');
 check(SC.fog_pars_fragment.includes('varying float vNgCloud;') && SC.fog_pars_vertex.includes('varying float vNgCloud;'), 'vNgCloud の varying が両段にある');
 check((SC.lights_fragment_begin.match(/UNROLLED_LOOP_INDEX == 0/g) || []).length === 2, 'フックは平行光 0 番だけ');
+check(state.pcf && SC.shadowmap_pars_fragment.includes('#if defined( SHADOWMAP_TYPE_PCF ) && defined( NG_FRAME )')
+  && SC.shadowmap_pars_fragment.includes('float ngShadowPCF('), 'PCF は NG_FRAME のとき 9 回の読みの ngShadowPCF');
+check(SC.shadowmap_pars_fragment.includes('#elif defined( SHADOWMAP_TYPE_PCF )'), 'NG_FRAME の無いシェーダは three の PCF のまま');
 
 /* cloneUniforms は Float32Array を参照のまま（組込みマテリアルの共有の前提） */
 const cl = THREE.UniformsUtils.clone(SL.physical.uniforms);

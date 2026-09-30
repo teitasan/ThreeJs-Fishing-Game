@@ -16,15 +16,17 @@ import { TIER_DENSITY } from '../../../world/placement.js';
 
 const CELL = 120;
 
-/* 揺れ：局所の高さ（0..1）の 2 乗で曲げる。量は世界の m で決めてから、
-   インスタンスの行列の逆でローカルへ戻す（回転と拡大を打ち消す） */
+/* 揺れ：局所の高さ（0..1）の 2 乗で曲げる。量は世界の m で決めてから、インスタンスの行列の逆で
+   ローカルへ戻す。行列は «y 軸の回転 × 拡大» なので逆は Mᵀ を列の長さの 2 乗で割るだけ
+   （頂点ごとの inverse(mat3) は重い。影のパスでも同じ頂点シェーダが走る） */
 const SWAY = /* glsl */ `
 #ifdef USE_INSTANCING
   vec3 ngRoot = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-  float ngH = length(instanceMatrix[1].xyz);
+  mat3 ngM = mat3(instanceMatrix);
+  vec3 ngS2 = vec3(dot(ngM[0], ngM[0]), dot(ngM[1], ngM[1]), dot(ngM[2], ngM[2]));
   vec4 ngW = ngWindAt(ngRoot.xz);
-  float ngA = 0.012 * ngH * (ngW.z / 5.0) * position.y * position.y * (0.75 + 0.25 * sin(ngEnvTime * 1.3 + ngRoot.x * 0.3));
-  transformed += inverse(mat3(instanceMatrix)) * vec3(ngW.x * ngA, 0.0, ngW.y * ngA);
+  float ngA = 0.012 * sqrt(ngS2.y) * (ngW.z / 5.0) * position.y * position.y * (0.75 + 0.25 * sin(ngEnvTime * 1.3 + ngRoot.x * 0.3));
+  transformed += (transpose(ngM) * vec3(ngW.x * ngA, 0.0, ngW.y * ngA)) / ngS2;
 #endif
 `;
 
@@ -48,7 +50,7 @@ export class TreesStub extends NgModule {
     this.mats = { crown: make('trees-stub-crown', 0xffffff), trunk: make('trees-stub-trunk', 0xffffff) };
     const cone = new T.ConeGeometry(1, 1, 9, 1);
     cone.translate(0, 0.5, 0);
-    const blob = new T.IcosahedronGeometry(0.5, 1);
+    const blob = new T.IcosahedronGeometry(0.5, 0);   // 20 面。グレーボックスは形より本数（影のパスも頂点で効く）
     blob.scale(1, 0.8, 1);
     blob.translate(0, 0.5, 0);
     const trunk = new T.CylinderGeometry(0.8, 1, 1, 7, 1);

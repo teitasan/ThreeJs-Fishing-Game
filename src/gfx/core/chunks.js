@@ -6,6 +6,8 @@
      （ngFrame を持たない他人の ShaderMaterial を壊さない）
    - lights_fragment_begin：key（平行光 0 番）に雲影と高さ場影を掛け（その積が ngKeyVis）、
      three の近景の影だけの比 ngNearVis を取り出す（caustics・透過が使う）
+   - shadowmap_pars_fragment：NG_FRAME のとき PCF を 3×3 テクセルの二次 B スプライン重み（9 回の読み）に
+     差し替える（three の PCF は 17 回。近景の影は画面のほぼ全部の断片が払う。spikes.md S-3）
    - 雲影は頂点で 1 回だけ評価して vNgCloud で渡す（900m 規模の斑なので頂点の間隔で足りる。
      断片の 3 オクターブ × 4 ハッシュは全画面で ≈0.45ms。docs/nextgen/spikes.md S-3）
    - NG_FRAME の #define は ShaderLib の文字列の先頭と ng マテリアルにだけ入れる
@@ -22,6 +24,29 @@ export const NG_LIGHTS_ANCHOR = 'getDirectionalLightInfo( directionalLight, dire
 /** 平行光ブロックの RE_Direct（ここで影の掛かった後の色を読む） */
 export const NG_LIGHTS_RE_DIRECT = 'RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
 const DIR_BLOCK_START = '#if ( NUM_DIR_LIGHTS > 0 ) && defined( RE_Direct )';
+/** 影の読みの差し替え位置：getShadow の定義と、その中の PCF の分岐 */
+export const NG_SHADOW_GETSHADOW = 'float getShadow( sampler2D shadowMap, vec2 shadowMapSize, float shadowIntensity, float shadowBias, float shadowRadius, vec4 shadowCoord ) {';
+export const NG_SHADOW_PCF_BRANCH = '#if defined( SHADOWMAP_TYPE_PCF )';
+
+/* 3×3 テクセルの二次 B スプライン（重みの和は 1、テクセルの境で連続）の PCF。
+   three の PCF（17 回の読み・半径で広げる）の約半分の読みで、縁が段にも縞にもならない。
+   半影は約 1.5 テクセル（high 3072² ±48m で ≈5cm） */
+const NG_PCF_GLSL = `
+#ifdef NG_FRAME
+	float ngShadowRow( sampler2D map, vec2 p, vec2 inv, vec3 wx, float z ) {
+		return wx.x * texture2DCompare( map, p - vec2( inv.x, 0.0 ), z ) + wx.y * texture2DCompare( map, p, z )
+			+ wx.z * texture2DCompare( map, p + vec2( inv.x, 0.0 ), z );
+	}
+	float ngShadowPCF( sampler2D map, vec2 size, vec2 uv, float z ) {
+		vec2 t = uv * size, c = floor( t ), d = t - c - 0.5;
+		vec2 w0 = 0.5 * ( 0.5 - d ) * ( 0.5 - d ), w1 = 0.75 - d * d, w2 = 0.5 * ( 0.5 + d ) * ( 0.5 + d );
+		vec2 inv = 1.0 / size, p = ( c + 0.5 ) * inv;
+		vec3 wx = vec3( w0.x, w1.x, w2.x );
+		return w0.y * ngShadowRow( map, p - vec2( 0.0, inv.y ), inv, wx, z ) + w1.y * ngShadowRow( map, p, inv, wx, z )
+			+ w2.y * ngShadowRow( map, p + vec2( 0.0, inv.y ), inv, wx, z );
+	}
+#endif
+`;
 
 /**
  * ngExtendStandard が使うアンカー（vendored の ShaderLib に存在することを Node テストが検査する）。
@@ -54,7 +79,9 @@ export const NG_EXTEND_ANCHORS = Object.freeze({
 export function ngChunkPatches(orig) {
   const fogFrag = orig.fog_fragment.replace('#ifdef USE_FOG', '').replace(/#endif\s*$/, '');
   const lights = patchLights(orig.lights_fragment_begin);
+  const shadow = patchShadow(orig.shadowmap_pars_fragment);
   return {
+    shadowmap_pars_fragment: shadow,
     fog_pars_vertex: orig.fog_pars_vertex + `
 #ifdef NG_FRAME
 ${NG_FRAME_GLSL}
@@ -89,6 +116,18 @@ ${fogFrag}
   };
 }
 
+/* getShadow の前に ngShadowPCF を置き、PCF の分岐の頭に NG_FRAME の枝を足す。見つからなければ null（元の PCF のまま） */
+function patchShadow(src) {
+  const g = src.indexOf(NG_SHADOW_GETSHADOW);
+  if (g < 0) return null;
+  const b = src.indexOf(NG_SHADOW_PCF_BRANCH, g);
+  if (b < 0) return null;
+  return src.slice(0, g) + NG_PCF_GLSL + src.slice(g, b)
+    + `#if defined( SHADOWMAP_TYPE_PCF ) && defined( NG_FRAME )
+			shadow = ngShadowPCF( shadowMap, shadowMapSize, shadowCoord.xy, shadowCoord.z );
+		#elif defined( SHADOWMAP_TYPE_PCF )` + src.slice(b + NG_SHADOW_PCF_BRANCH.length);
+}
+
 /* 平行光ブロックだけを対象に、アンカーの直後と RE_Direct の直前へ差し込む。
    見つからなければ null（installNg はフックを諦めて警告する。霧は生きる） */
 function patchLights(src) {
@@ -119,17 +158,18 @@ vec3 ngKeyPreShadow = vec3( 0.0 );
 /**
  * ShaderChunk と ShaderLib を差し替える（冪等）。
  * @param {typeof import('three')} THREE
- * @returns {{installed:boolean, degraded:string|null, lightsHook:boolean, libKeys:string[]}} 状態（同じオブジェクトを返し続ける）
+ * @returns {{installed:boolean, degraded:string|null, lightsHook:boolean, pcf:boolean, libKeys:string[]}} 状態（同じオブジェクトを返し続ける）
  */
 export function installNg(THREE) {
   const SC = THREE.ShaderChunk, SL = THREE.ShaderLib;
   if (SC[STATE]) return SC[STATE];
-  const names = ['fog_pars_vertex', 'fog_vertex', 'fog_pars_fragment', 'fog_fragment', 'lights_fragment_begin'];
+  const names = ['fog_pars_vertex', 'fog_vertex', 'fog_pars_fragment', 'fog_fragment', 'lights_fragment_begin', 'shadowmap_pars_fragment'];
   const orig = Object.fromEntries(names.map((n) => [n, SC[n]]));
   const patch = ngChunkPatches(orig);
-  const state = { installed: true, degraded: null, lightsHook: !!patch.lights_fragment_begin, libKeys: [], orig };
+  const state = { installed: true, degraded: null, lightsHook: !!patch.lights_fragment_begin, pcf: !!patch.shadowmap_pars_fragment, libKeys: [], orig };
   for (const n of names) if (patch[n]) SC[n] = patch[n];
   if (!state.lightsHook) console.warn('[ng] lights_fragment_begin のアンカーが無いので雲影のフックを省略');
+  if (!state.pcf) console.warn('[ng] shadowmap_pars_fragment のアンカーが無いので three の PCF のまま');
   for (const k of Object.keys(SL)) {
     const lib = SL[k];
     if (!lib.uniforms || !lib.uniforms.fogColor) continue;

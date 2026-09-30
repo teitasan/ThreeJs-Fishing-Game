@@ -43,9 +43,11 @@ const TERRAIN_NORMAL = /* glsl */ `
 
 const GROUND_GLSL = NG_HEIGHTFIELD_GLSL + NG_SURFACE_GLSL + /* glsl */ `
 float ngTerrRough = 0.9;
+vec3 ngTerrNrm = vec3(0.0, 1.0, 0.0);   // 色を決めるときに読んだ法線（normal の口で使い回す）
 vec3 ngStubGround(vec3 P) {
   vec2 xz = P.xz;
   vec3 n = ngTerrainN(xz);
+  ngTerrNrm = n;
   float slope = sqrt(max(1.0 - n.y * n.y, 0.0)) / max(n.y, 0.05);
   float sd = ngShoreD(xz);
   vec4 bed = ngBed(xz);
@@ -99,7 +101,7 @@ export class TerrainStub extends NgModule {
       fragment: {
         pars: GROUND_GLSL,
         surface: 'diffuseColor.rgb = ngStubGround( vNgWorld );',
-        normal: 'normal = normalize( ( viewMatrix * vec4( ngTerrainN( vNgWorld.xz ), 0.0 ) ).xyz );',
+        normal: 'normal = normalize( ( viewMatrix * vec4( ngTerrNrm, 0.0 ) ).xyz );',
         rough: 'roughnessFactor = ngTerrRough;',
       },
       caustics: true, hfShadow: true, depth: true,
