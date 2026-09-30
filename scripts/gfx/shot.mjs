@@ -118,8 +118,42 @@ async function main() {
       await page.waitForFunction(fn, arg, { timeout: timeoutSec * 1000, polling: 250 });
     },
     eval: (fn, arg) => page.evaluate(fn, arg),
-    /* 本編（index.html）を開いて、読み込み完了→ゲーム開始まで進める */
-    async bootGame({ quality = 'high', lang = 'ja', start = true, query = '' } = {}) {
+    /** ここまでの console のエラー・警告・ページ例外の数と、ログの行（シナリオの合否判定用） */
+    counts: () => ({ errors, warnings, pageErrors: logs.filter((l) => l.startsWith('[pageerror]')).length }),
+    logs,
+    /* 本編（index.html）を開いて、読み込み完了→ゲーム開始まで進める。
+       seed / bootQuality を渡すと、読み込み前にセーブ（localStorage）へ書いてから開く
+       （その品質で «起動» させる。湖も固定できる）。読み込みの各段の時刻は window.__loadMarks に残る */
+    async bootGame({ quality = 'high', lang = 'ja', start = true, query = '', seed = null, bootQuality = null } = {}) {
+      await page.addInitScript(({ seed, bootQuality }) => {
+        try {
+          if (seed != null || bootQuality) {
+            const KEY = 'lakeside-fishing-save-v1';
+            const cur = JSON.parse(localStorage.getItem(KEY) || '{}');
+            if (seed != null) cur.seed = seed;
+            /* 前の起動が «デバッグ表示 ON» を保存していても、撮影は OFF から始める */
+            if (bootQuality) cur.settings = { ...(cur.settings || {}), quality: bootQuality, debug: false };
+            localStorage.setItem(KEY, JSON.stringify(cur));
+          }
+        } catch (e) { /* 保存領域が無い */ }
+        /* 読み込みの段（#loading の文言）の時刻を記録する。MutationObserver はマイクロタスクで来るので正確 */
+        const marks = window.__loadMarks = [{ label: 'nav', t: performance.now() }];
+        const watch = () => {
+          const el = document.getElementById('loading');
+          if (!el) { requestAnimationFrame(watch); return; }
+          let last = '';
+          const note = () => {
+            const txt = (el.querySelector('span')?.textContent || '').trim();
+            if (txt && txt !== last) { last = txt; marks.push({ label: txt, t: performance.now() }); }
+            if ((el.classList.contains('done') || el.style.display === 'none') && !marks.some((m) => m.label === 'done')) {
+              marks.push({ label: 'done', t: performance.now() });
+            }
+          };
+          new MutationObserver(note).observe(el, { subtree: true, childList: true, characterData: true, attributes: true });
+          note();
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch); else watch();
+      }, { seed, bootQuality });
       await h.open('index.html' + query);
       await h.waitFor(() => !!(window.__game && window.__game.ui));
       await h.waitFor(() => {
