@@ -66,6 +66,8 @@ function insertBefore(src, anchor, code) {
  *   normal は normal_fragment_maps の後（normal はビュー空間）、rough / ao / emissive はそれぞれの後、
  *   lights は lights_fragment_end の後（reflectedLight に透過や空の鏡面を足す。ngNearVis が使える）。
  *   世界座標は vNgWorld（fog チャンクが渡す）。
+ *   depth: true の影用は vertex の pars / normal / begin と fragment の pars / alpha だけを使う
+ *   （depth のシェーダに worldpos_vertex は無い。影に効く変形は begin に書く）。
  * @returns {THREE.MeshStandardMaterial} mat
  */
 export function ngExtendStandard(mat, spec) {
@@ -137,10 +139,10 @@ function buildDepthVariants(mat, spec, head, shared, extra) {
     assertAnchors(lib.vertexShader, D, 'depth の頂点シェーダ', ['begin', 'project']);
     if (f.alpha) assertAnchors(lib.fragmentShader, DF, 'depth の断片シェーダ', ['alpha']);
   }
-  const common = { map: mat.map, alphaMap: mat.alphaMap, alphaTest: mat.alphaTest, side: mat.side };
+  const defTag = spec.defines && Object.keys(spec.defines).length ? ':' + JSON.stringify(spec.defines) : '';
   const make = (m, kind) => {
-    Object.assign(m, common);
-    m.customProgramCacheKey = () => `ng:${spec.key}:${kind}:${ngExtendContext.tier}`;
+    syncDepth(m, mat);
+    m.customProgramCacheKey = () => `ng:${spec.key}:${kind}:${ngExtendContext.tier}${defTag}`;
     m.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, shared, extra);
       if (spec.hfShadow && ngExtendContext.shadowUniforms) Object.assign(shader.uniforms, ngExtendContext.shadowUniforms);
@@ -163,18 +165,54 @@ function buildDepthVariants(mat, spec, head, shared, extra) {
   mat.userData.ngDistance = make(new THREE.MeshDistanceMaterial(), 'distance');
 }
 
+/* 影用のマテリアルへ、アルファに効く設定を写す（map を後から差し替えても影の抜けが一致する）。
+   影マップは MSAA ではないので、alpha-to-coverage の段でも影は alphaTest で抜く（ngCutout が閾値を残す） */
+function syncDepth(d, mat) {
+  const test = mat.userData.ngDepthAlphaTest ?? mat.alphaTest;
+  if (d.map !== mat.map || d.alphaMap !== mat.alphaMap || d.alphaTest !== test || d.alphaHash !== mat.alphaHash) {
+    d.map = mat.map; d.alphaMap = mat.alphaMap; d.alphaTest = test; d.alphaHash = mat.alphaHash;
+    d.needsUpdate = true;
+  }
+  d.side = mat.side;
+}
+
 /**
- * ngExtendStandard(depth: true) で作った影用マテリアルを mesh に付ける
+ * ngExtendStandard(depth: true) で作った影用マテリアルを mesh に付ける。
+ * マテリアルの map / alphaMap / alphaTest / alphaHash / side を影用へ写し直す
+ * （ngExtendStandard の後で map を差し替えたら、もう一度呼ぶ）
  * @param {THREE.Mesh} mesh
  * @returns {THREE.Mesh} mesh
  */
 export function ngAttachDepth(mesh) {
   const m = mesh.material;
   if (m?.userData?.ngDepth) {
+    syncDepth(m.userData.ngDepth, m);
+    syncDepth(m.userData.ngDistance, m);
     mesh.customDepthMaterial = m.userData.ngDepth;
     mesh.customDistanceMaterial = m.userData.ngDistance;
   }
   return mesh;
+}
+
+/**
+ * 切り抜き（葉・草のカード）の抜き方を品質に合わせる：MSAA のある段は alpha-to-coverage、
+ * 無い段は alphaTest。どちらも define が変わるので、変わったときだけ needsUpdate（setQuality から呼ぶ）
+ * @param {THREE.Material} mat
+ * @param {{msaa:number}} profile quality.js のプロファイル
+ * @param {number} [cutoff=0.5] alphaTest の閾値
+ * @returns {THREE.Material} mat
+ */
+export function ngCutout(mat, profile, cutoff = 0.5) {
+  const a2c = (profile?.msaa || 0) > 0;
+  const test = a2c ? 0 : cutoff;
+  mat.userData.ngDepthAlphaTest = cutoff;
+  if (mat.alphaToCoverage !== a2c || mat.alphaTest !== test) {
+    mat.alphaToCoverage = a2c;
+    mat.alphaTest = test;
+    mat.needsUpdate = true;
+    if (mat.userData.ngDepth) { syncDepth(mat.userData.ngDepth, mat); syncDepth(mat.userData.ngDistance, mat); }
+  }
+  return mat;
 }
 
 /**

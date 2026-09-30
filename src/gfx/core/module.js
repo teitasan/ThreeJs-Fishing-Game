@@ -5,9 +5,11 @@
    Core-A は各パスにグレーボックスのスタブ（src/gfx/core/stubs/<m>.js）を置き、
    担当者は自分の index.js だけを差し替える。初期化に失敗したモジュールは
    core がスタブへ戻す（スタブは本番でも代替として動く）。
-   モジュール間の受け口は ctx.services。提供者が居なければ既定値（下の DEFAULTS）を返し、
+   モジュール間の受け口は ctx.services。提供者が居なければ既定値（ngServiceDefaults）を返し、
    関数の受け口はすべて例外を握りつぶす（ファサードから 25 か所以上呼ばれる）
    =========================================================== */
+import { NG } from './frame.js';
+import { cloudShadow } from './medium.js';
 
 /** モジュールの一覧（読み込み・update の順） */
 export const NG_MODULE_IDS = Object.freeze(['sky', 'water', 'underwater', 'terrain', 'trees', 'groundcover', 'shoreflora', 'hardscape', 'weatherfx', 'post']);
@@ -55,23 +57,55 @@ export class NgModule {
 }
 
 /**
- * services の既定値（提供者が居ないときに返る）。
- * 関数は «何もしない・中立の値を返す»。テクスチャは core が起動時に 1×1 を入れる
+ * services の既定値（提供者が居ないときに返る。§4.9 の表の全項目）。
+ * 関数は «何もしない・中立の値を返す»。テクスチャは 1×1 の中立値（null を束縛させない）。
+ * null のままの項目（water.detailTile・trees.impostorBake）は «機能が無い» の意味で、使う側が確かめる
+ * @param {typeof import('three')} THREE
+ * @param {{frame: import('./frame.js').NgFrame,
+ *          underwaterContext: (camera: object) => object,
+ *          registerDebugView: (name: string, glsl: string, uniforms?: object) => void}} core
+ *   core が持つ代替（水中の文脈は ngFrame から、デバッグ表示は core の登録表へ）
+ * @returns {Record<string, Record<string, any>>}
  */
-function defaults() {
+export function ngServiceDefaults(THREE, core) {
+  const px = (r, g, b, a, name) => {
+    const t = new THREE.DataTexture(new Uint8Array([r, g, b, a]), 1, 1, THREE.RGBAFormat);
+    t.name = name;
+    t.needsUpdate = true;
+    return t;
+  };
+  const F = core.frame.data;
+  const optics = { sigmaA: new THREE.Vector3(0.20, 0.075, 0.045), sigmaS: 0.03, insc: new THREE.Vector3() };
   return {
     sky: {
-      skyViewTex: null, skyViewMips: 0, transmittanceTex: null, cloudPanoTex: null,
-      sampleSky: () => [0.2, 0.3, 0.5], keyColor: [1, 1, 1], cloudShadowAt: () => 1,
+      /* 空の放射輝度の緯度経度（ngSkyViewUV）。既定は中立の青灰 */
+      skyViewTex: px(51, 77, 128, 255, 'ng-default-skyView'), skyViewMips: 0,
+      /* 大気の透過（1 = 減衰なし） */
+      transmittanceTex: px(255, 255, 255, 255, 'ng-default-transmittance'),
+      /* 雲のパノラマ（rgb = 雲の内散乱、a = 透過。既定は雲なし） */
+      cloudPanoTex: px(0, 0, 0, 255, 'ng-default-cloudPano'),
+      /** @param {{x:number,y:number,z:number}} dir @returns {number[]} rgb（既定は空の平均放射輝度 = SH0/π） */
+      sampleSky: () => [F[NG.AMB * 4], F[NG.AMB * 4 + 1], F[NG.AMB * 4 + 2]],
+      keyColor: new THREE.Color(1, 1, 1),
+      /* 雲の影（1 = 日向）。ngCloudShadow の CPU 双子 */
+      cloudShadowAt: (x, z) => cloudShadow(F, { x, y: 0, z }),
     },
     water: {
-      addRipple: () => {}, addSplash: () => {}, addImpulse: () => {}, addDamper: () => {}, detailTile: null,
+      addRipple: () => {}, addSplash: () => {}, addImpulse: () => {}, addDamper: () => {},
+      detailTile: null,
     },
-    underwater: { getUnderwaterContext: () => null, createEffect: () => null, optics: null },
-    terrain: { coverRules: 'float ngGroundKind(vec3 p) { return 0.0; }\n', farAlbedoTex: null },
+    underwater: {
+      getUnderwaterContext: (camera) => core.underwaterContext(camera),
+      createEffect: () => null,
+      optics,
+    },
+    terrain: {
+      coverRules: 'float ngGroundKind(vec3 p) { return 0.0; }\n',
+      farAlbedoTex: px(31, 33, 24, 255, 'ng-default-farAlbedo'),
+    },
     trees: { impostorBake: null },
     hardscape: { piles: [], setLamp: () => {} },
-    post: { registerDebugView: () => {} },
+    post: { registerDebugView: (name, glsl, uniforms) => core.registerDebugView(name, glsl, uniforms) },
   };
 }
 
@@ -79,10 +113,13 @@ function defaults() {
  * モジュール間の受け口。provide で提供者の値を差し込む（関数は例外を握りつぶす包みになる）
  */
 export class Services {
-  /** @param {import('./safe.js').Safety} safety */
-  constructor(safety) {
+  /**
+   * @param {import('./safe.js').Safety} safety
+   * @param {Record<string, Record<string, any>>} defaults ngServiceDefaults の戻り値
+   */
+  constructor(safety, defaults) {
     this._safety = safety;
-    this._defaults = defaults();
+    this._defaults = defaults;
     for (const [k, v] of Object.entries(this._defaults)) this[k] = { ...v };
   }
 

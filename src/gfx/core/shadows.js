@@ -7,8 +7,9 @@
      render すると three は影マップだけ更新する（ライトは layers.enableAll）
    高さ場影：地形 + 樹冠の高さ（R16F に焼いた合成高さ）を key の方向へ raymarch して
      R8 に焼く。2 段（±256m @1024²、±1024m @1024²。low は ±1024m @512² のみ）。
-     太陽は 1 実秒で 0.25° しか動かないので、段 × 4 象限を 1 フレームに 1 枚ずつ焼き直す。
-     key が 2° 以上跳んだら（時刻の変更）全部を焼き直す
+     太陽は 1 実秒で 0.25° しか動かないので、段 × 4 象限を 16 フレーム（≒ 0.27s）で一巡するように
+     間を空けて 1 枚ずつ焼き直す（2 段なら 2 フレームに 1 枚、1 段なら 4 フレームに 1 枚。一巡で 0.07°）。
+     key が 2° 以上跳んだら（時刻の変更・太陽と月の切り替え）全部を焼き直す
    =========================================================== */
 import { NG, NG_PASS } from './frame.js';
 import { NG_MASK } from './layers.js';
@@ -18,6 +19,8 @@ import { NG_HEIGHTFIELD_GLSL } from './glsl/heightfield.glsl.js';
 export const NG_HF_SHADOW_R = Object.freeze([256, 1024]);
 const BAKE_H_N = 1024;
 const KEY_JUMP_COS = Math.cos((2 * Math.PI) / 180);
+/** 高さ場影を一巡するフレーム数（§4.5 の «4 象限 × 4 フレーム»） */
+export const NG_HF_CYCLE_FRAMES = 16;
 
 /* 合成高さ：地形 + 樹冠（段の範囲を BAKE_H_N² に） */
 const HEIGHT_FRAG = NG_HEIGHTFIELD_GLSL + /* glsl */ `
@@ -88,12 +91,12 @@ export class Shadows {
       ngHfShadow1: { value: white() },
       ngHfShadowXf: { value: new T.Vector4(1 / (2 * NG_HF_SHADOW_R[0]), 1 / (2 * NG_HF_SHADOW_R[1]), 0, 0) },
     };
-    this._tickScene = new T.Scene();
     this._tickCam = new T.PerspectiveCamera();
     this._tickCam.layers.mask = NG_MASK.SHADOW_TICK;
     this._tickRT = new T.WebGLRenderTarget(1, 1, { depthBuffer: false });
     this._hf = null;
     this._slice = 0;
+    this._hfTick = 0;
     this._bakedKey = new T.Vector3(0, -1, 0);
     this._march = { ngHSrc: { value: null }, ngR: { value: 0 }, ngKey: { value: new T.Vector3() }, ngMaxDist: { value: 0 } };
     this._v = [new T.Vector3(), new T.Vector3(), new T.Vector3()];
@@ -200,6 +203,7 @@ export class Shadows {
     this.uniforms.ngHfShadow1.value = targets[1].texture;
     this.uniforms.ngHfShadowXf.value.z = levels === 2 ? 1 : 0;
     this._slice = 0;
+    this._hfTick = 0;
     this._bakedKey.set(0, -1, 0);
   }
 
@@ -226,13 +230,19 @@ export class Shadows {
     const k = this._bakedKey;
     if (!all && k.x * keyDir.x + k.y * keyDir.y + k.z * keyDir.z < KEY_JUMP_COS) all = true;
     const slices = hf.lv.length * 4;
-    const n = all ? slices : 1;
-    for (let s = 0; s < n; s++) {
-      const idx = (all ? s : this._slice) % slices;
-      this._bakeSlice(hf.lv[idx >> 2], idx & 3, keyDir);
+    if (all) {
+      for (let s = 0; s < slices; s++) this._bakeSlice(hf.lv[s >> 2], s & 3, keyDir);
+      this._slice = 0;
+      this._hfTick = 0;
+      k.set(keyDir.x, keyDir.y, keyDir.z);
+      return;
     }
-    this._slice = (this._slice + 1) % slices;
-    if (all || this._slice === 0) k.set(keyDir.x, keyDir.y, keyDir.z);
+    const every = Math.max(1, Math.floor(NG_HF_CYCLE_FRAMES / slices));
+    if ((this._hfTick++ % every) !== 0) return;
+    const idx = this._slice;
+    this._bakeSlice(hf.lv[idx >> 2], idx & 3, keyDir);
+    this._slice = (idx + 1) % slices;
+    if (this._slice === 0) k.set(keyDir.x, keyDir.y, keyDir.z);
   }
 
   _bakeSlice(level, quad, keyDir) {

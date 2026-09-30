@@ -11,6 +11,7 @@
    - 1 回の焼き込みは GPU に投げるだけなので速い。重い CPU 処理（ブルーノイズ）は
      step() で 30ms ごとに await して読み込み画面を止めない
    =========================================================== */
+import { NG, NG_PASS } from './frame.js';
 
 const VERT = /* glsl */ `
 varying vec2 vUv;
@@ -55,10 +56,12 @@ export class Forge {
   /**
    * @param {typeof import('three')} THREE
    * @param {import('three').WebGLRenderer} renderer
+   * @param {import('./frame.js').NgFrame|null} [frame] renderView の間だけ passId を BAKE にする（媒質を掛けない）
    */
-  constructor(THREE, renderer) {
+  constructor(THREE, renderer, frame = null) {
     this.THREE = THREE;
     this.renderer = renderer;
+    this.frame = frame;
     this._scene = null;
     this._cam = null;
     this._tri = null;
@@ -213,18 +216,26 @@ export class Forge {
   }
 
   /**
-   * インポスターなどの撮影：scene を camera で rt（の層）へ描く
+   * インポスターなどの撮影：scene を camera で rt（の層）へ描く。
+   * 描く間は ngFrame の passId を BAKE にする（ngApplyMedium が空気を掛けない＝素の放射輝度を焼く）。
+   * autoClear と camera.layers は呼び手のまま
    * @param {import('three').WebGLRenderTarget} rt
-   * @param {number} layer
+   * @param {number} layer 配列 RT の層（2D は 0）
    * @param {import('three').Scene} scene
    * @param {import('three').Camera} camera
    */
   renderView(rt, layer, scene, camera) {
-    const r = this.renderer;
+    const r = this.renderer, fr = this.frame;
     const prev = r.getRenderTarget();
-    r.setRenderTarget(rt, layer);
-    r.render(scene, camera);
-    r.setRenderTarget(prev);
+    const pass = fr ? fr.get(NG.CAM, 3) : 0;
+    fr?.setComp(NG.CAM, 3, NG_PASS.BAKE);
+    try {
+      r.setRenderTarget(rt, layer);
+      r.render(scene, camera);
+    } finally {
+      r.setRenderTarget(prev);
+      fr?.setComp(NG.CAM, 3, pass);
+    }
   }
 
   /** 使い捨ての RT を作る（呼び手が dispose する。forge は持たない） */

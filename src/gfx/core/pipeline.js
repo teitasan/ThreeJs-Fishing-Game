@@ -129,7 +129,15 @@ export class FramePipeline {
     /** post（gfx が post モジュールの renderPost を入れる）。(targets, dt) → 画面へ描く。準備前は false を返す */
     this.post = null;
     this._onLost = (e) => { e.preventDefault(); this.state.lost = true; };
-    this._onRestored = () => { this.state.lost = false; this.onRestore?.(); };
+    /* three の復帰処理（renderer が先に登録）の後に走る。GL の物は three が遅延で作り直すので、
+       ここでは «中身を焼き直す» ものだけ（onRestore）と、無効になった問い合わせを捨てる */
+    this._onRestored = () => {
+      this.state.lost = false;
+      this.targets._key = '';
+      this.uniforms.ngReflValid.value = 0;
+      this.budget.restoreGPU();
+      try { this.onRestore?.(); } catch (e) { this.safety.warn('文脈の復帰で例外', e); }
+    };
     const el = this.renderer.domElement;
     el?.addEventListener?.('webglcontextlost', this._onLost, false);
     el?.addEventListener?.('webglcontextrestored', this._onRestored, false);
@@ -148,8 +156,11 @@ export class FramePipeline {
    */
   addPreparer(id, fn, budgetMs = 0) { this._preparers.push({ id, fn, budgetMs }); }
 
-  /** 描画バッファの大きさ（物理 px）。RT は次の描画で作り直す */
-  setSize(w, h) { this._size.set(Math.max(1, w | 0), Math.max(1, h | 0)); }
+  /**
+   * 画面の大きさが変わった（PostFX.setSize）。RT は毎フレーム描画バッファの物理 px と
+   * 比べて作り直すので、ここでは次の確保を強制するだけ
+   */
+  setSize() { this.targets._key = ''; }
 
   /** 動的解像度の倍率 */
   setRenderScale(s) { this.renderScale = Math.min(1, Math.max(0.5, s || 1)); }
@@ -210,21 +221,24 @@ export class FramePipeline {
   }
 
   /**
-   * P1 + P2。冪等（同じフレームで 2 回目以降は何もしない）
+   * P1 + P2。冪等（同じフレームで 2 回目以降は何もしない）。
+   * 計測はサブパス prep / hfShadow / shadow（budget が capture にまとめる）
    */
   prepare() {
     const st = this.state;
     if (st.lost || st.prepared === st.frameIndex || !this.camera) return;
     st.prepared = st.frameIndex;
-    const r = this.renderer;
-    this.budget.begin('capture');
+    const r = this.renderer, b = this.budget;
     this.safety.guardPass('targets', () => this._ensureTargets());
     const f = this._frameInfo();
+    b.begin('prep');
     this.safety.guardPass('preparers', () => {
       this._prepareModules(f);
       for (const p of this._preparers) this.safety.guardPass('prep:' + p.id, p.fn);
     });
+    b.begin('hfShadow');
     this.safety.guardPass('hfShadow', () => this.shadows.updateHf(f.keyDir));
+    b.begin('shadow');
     const auto = r.autoClear;
     r.autoClear = false;
     r.shadowMap.autoUpdate = false;
@@ -233,7 +247,7 @@ export class FramePipeline {
       this.shadows.renderNear(r, this.scene);
     });
     r.autoClear = auto;
-    this.budget.end();
+    b.end();
   }
 
   /* 湖面が画面に入っているか（入っていなければ反射を描かない） */
@@ -352,10 +366,17 @@ export class FramePipeline {
       });
       this.budget.begin('late');
       this.safety.guardPass('late', () => {
-        cam.layers.mask = NG_MASK.LATE;
-        this.frame.beginPass(NG_PASS.MAIN, cam);
-        r.setRenderTarget(t.main);
-        r.render(this.scene, cam);
+        /* three は render() の頭で scene.background を塗る。late で塗ると不透明の絵が消えるので外す */
+        const bg = this.scene.background;
+        this.scene.background = null;
+        try {
+          cam.layers.mask = NG_MASK.LATE;
+          this.frame.beginPass(NG_PASS.MAIN, cam);
+          r.setRenderTarget(t.main);
+          r.render(this.scene, cam);
+        } finally {
+          this.scene.background = bg;
+        }
       });
       this.budget.begin('post');
       let posted = false;

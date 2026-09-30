@@ -23,7 +23,8 @@ import { Targets } from './targets.js';
 import { Shadows } from './shadows.js';
 import { HeightField } from './heightfield.js';
 import { FramePipeline } from './pipeline.js';
-import { NG_MODULE_IDS, Services } from './module.js';
+import { measureMsaa, decideMsaa } from './msaa.js';
+import { NG_MODULE_IDS, Services, ngServiceDefaults } from './module.js';
 import { ngExtendContext } from './extend.js';
 import { fogNearFar } from './medium.js';
 import { waveHeight, shoalGain } from '../../waveField.js?v=20260828-lakescale1';
@@ -45,7 +46,8 @@ export function getGfx() { return current; }
 
 /**
  * gfx を作る（同じ scene なら既存を返す）
- * @param {{scene: THREE.Scene, disabled?: string[], gpuTimers?: boolean, only?: string[]|null}} o
+ * @param {{scene: THREE.Scene, disabled?: string[], gpuTimers?: 'off'|'sync'|'query', only?: string[]|null}} o
+ *   gpuTimers：GPU 計測の既定の方式（URL の ?gpuTimer= が優先。budget.js）。
  *   only：lab 用。ここに挙げたモジュールだけ担当者の index.js を読み、残りは core のスタブ
  * @returns {Gfx}
  */
@@ -67,14 +69,21 @@ function parseDisabled() {
  * 描画の芯。ファサードから見える名前は §4.13 のとおり
  */
 export class Gfx {
-  constructor({ scene, disabled = parseDisabled(), gpuTimers = false, only = null }) {
+  constructor({ scene, disabled = parseDisabled(), gpuTimers = 'off', only = null }) {
     this.THREE = THREE;
     this.scene = scene;
     this.chunks = ngChunks;
     this.frame = new NgFrame();
     this.quality = new Quality('mid');
     this.safety = new Safety();
-    this.services = new Services(this.safety);
+    /** デバッグ表示の登録表（services.post.registerDebugView → lab の view(name)） */
+    this.debugViews = new Map();
+    this._uwCtx = null;
+    this.services = new Services(this.safety, ngServiceDefaults(THREE, {
+      frame: this.frame,
+      underwaterContext: (cam) => this._underwaterFallback(cam),
+      registerDebugView: (name, glsl, uniforms) => this.registerDebugView(name, glsl, uniforms),
+    }));
     this.wind = new Wind(this.frame);
     this.layers = NG_LAYER;
     this.disabled = new Set(disabled);
@@ -95,6 +104,9 @@ export class Gfx {
     this.world = null;
     this.caustics = null;
     this.ready = false;
+    /** MSAA の実測と判定（probeMsaa。未実測は null） */
+    this.msaa = null;
+    this._gpuSync = null;
     this._envTime = 0;
     this._hour = 12;
     this._uwView = false;
@@ -176,10 +188,11 @@ export class Gfx {
     const ok = verifyNg(THREE, renderer);
     ngExtendContext.lightsHook = this.chunks.lightsHook;
     if (!ok) this.safety.warn('chunks の自己検査に失敗（組込みは THREE.Fog）');
-    this.forge = new Forge(THREE, renderer);
+    this.forge = new Forge(THREE, renderer, this.frame);
     this.shadows.forge = this.forge;
     this.targets = new Targets(THREE, renderer);
-    this.budget = new Budget(renderer.getContext(), { gpu: this.gpuTimers || /[?&]gpuTimer=1/.test(globalThis.location?.search || '') });
+    this._gpuSync = gpuSync(renderer);
+    this.budget.attach(renderer.getContext(), { mode: budgetMode(this.gpuTimers), sync: this._gpuSync });
     this.pipeline = new FramePipeline({
       THREE, renderer, scene: this.scene, frame: this.frame, shadows: this.shadows, quality: this.quality,
       targets: this.targets, budget: this.budget, safety: this.safety,
@@ -450,11 +463,44 @@ export class Gfx {
   setQuality(q) { this.quality.set(normalizeTier(q)); }
 
   _applyQuality(tier, profile) {
+    if (tier === 'high' && !this.msaa && this.ready) {
+      /* 降格が決まると onQuality がもう一度（降格した profile で）呼ばれるので、こちらは打ち切る */
+      const before = this.quality.msaaFallback;
+      this.probeMsaa();
+      if (this.quality.msaaFallback !== before) return;
+    }
     ngExtendContext.tier = tier;
     this.f.tier = tier;
     this.shadows.configure(profile);
     this.pipeline?.setQuality(tier);
     this._each('setQuality', tier, profile);
+  }
+
+  /**
+   * MSAA 4× の «resolve 後の再描画» の上乗せを実測し、閾値を超えたら high を 2× + SMAA に落とす
+   * （msaa.js、docs/nextgen/spikes.md S-1）。1 セッション 1 回（≈ 60ms）。high に入った最初の機会に呼ばれる
+   * @param {{force?: boolean}} [o]
+   * @returns {{probe: object, decision: {fallback: boolean, reason: string}}|null}
+   */
+  probeMsaa({ force = false } = {}) {
+    if (!this.renderer || (this.msaa && !force)) return this.msaa || null;
+    let override = null;
+    try { override = new URLSearchParams(globalThis.location?.search || '').get('msaa'); } catch (e) { /* Node */ }
+    try {
+      const s = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      const k = this.pipeline?.renderScale || 1;
+      const probe = override ? null : measureMsaa(THREE, this.renderer, {
+        width: Math.max(64, Math.round(s.x * k)), height: Math.max(64, Math.round(s.y * k)), sync: this._gpuSync,
+      });
+      const decision = decideMsaa(probe || { cost2: 0, cost4: 0, maxSamples: 4 }, override);
+      this.msaa = { probe, decision };
+      if (decision.fallback) console.info(`[ng] MSAA を 2× + SMAA に落とす：${decision.reason}`);
+      this.quality.setMsaaFallback(decision.fallback);
+    } catch (e) {
+      this.safety.warn('MSAA の実測に失敗（4× のまま）', e);
+      this.msaa = { probe: null, decision: { fallback: false, reason: '実測に失敗' } };
+    }
+    return this.msaa;
   }
 
   /** 反射に写さない物（Water.setReflectionHidden） */
@@ -471,16 +517,40 @@ export class Gfx {
    */
   getUnderwaterContext(camera) {
     const cam = camera || this.camera;
-    const ctx = this.services.underwater.getUnderwaterContext(cam);
-    if (ctx) return ctx;
+    return this.services.underwater.getUnderwaterContext(cam) || this._underwaterFallback(cam);
+  }
+
+  /* underwater モジュールが居ないときの文脈（ngFrame から。同じオブジェクトを書き換えて返す） */
+  _underwaterFallback(cam) {
     const F = this.frame.data;
-    return {
-      strength: this.frame.cam.uw, time: this._waterTime, sunDir: this._keyDir.clone(), night: F[NG.KEY * 4 + 3],
-      rain: this._weather.rain, cloud: this._weather.cloud,
-      absorb: new THREE.Vector3(F[NG.W_SIGMA * 4], F[NG.W_SIGMA * 4 + 1], F[NG.W_SIGMA * 4 + 2]),
-      camPos: cam ? cam.position.clone() : new THREE.Vector3(), camNear: cam?.near ?? 0.1, camFar: cam?.far ?? 3000,
-      waterY: this.frame.cam.waterY,
-    };
+    const c = this._uwCtx || (this._uwCtx = {
+      strength: 0, time: 0, sunDir: new THREE.Vector3(), night: 0, rain: 0, cloud: 0, absorb: new THREE.Vector3(),
+      camPos: new THREE.Vector3(), camNear: 0.1, camFar: 3000, waterY: 0,
+    });
+    c.strength = this.frame.cam.uw;
+    c.time = this._waterTime;
+    c.sunDir.copy(this._keyDir);
+    c.night = F[NG.KEY * 4 + 3];
+    c.rain = this._weather.rain;
+    c.cloud = this._weather.cloud;
+    c.absorb.set(F[NG.W_SIGMA * 4], F[NG.W_SIGMA * 4 + 1], F[NG.W_SIGMA * 4 + 2]);
+    if (cam) { c.camPos.copy(cam.position); c.camNear = cam.near ?? 0.1; c.camFar = cam.far ?? 3000; }
+    c.waterY = this.frame.cam.waterY;
+    return c;
+  }
+
+  /**
+   * デバッグ表示を登録する（services.post.registerDebugView の本体）。lab の view(name) で全画面に出る。
+   * glsl は «vec4 ngDebug(vec2 uv)» を定義する断片シェーダの部品。使える入力は NG_FRAME の #define、
+   * pipeline の共有 uniforms（ngSceneColor・ngSceneDepth・ngReflection・ngScreen）と、渡した uniforms。
+   * 出力は表示する色（リニア、0..1 に収めて sRGB で出す）
+   * @param {string} name
+   * @param {string} glsl
+   * @param {Record<string, {value:any}>} [uniforms]
+   */
+  registerDebugView(name, glsl, uniforms = {}) {
+    if (typeof name !== 'string' || typeof glsl !== 'string') return;
+    this.debugViews.set(name, { glsl, uniforms });
   }
 
   /** 描画バッファの大きさ（PostFX.setSize） */
@@ -516,6 +586,7 @@ export class Gfx {
     if (post) {
       try { await post.compile?.(); } catch (e) { this.safety.warn('post の compile に失敗', e); }
     }
+    if (this.quality.tier === 'high') this.probeMsaa();
     for (let k = 0; k < 3; k++) {
       this.pipeline.beginFrame();
       this.pipeline.renderMain(0);
@@ -546,6 +617,30 @@ export class Gfx {
     this.forge?.dispose();
     if (current === this) current = null;
   }
+}
+
+/* 計測の方式：?gpuTimer=sync|query|1（1 は query）。lab は gpuTimers で 'sync' を指定できる */
+function budgetMode(opt) {
+  let q = null;
+  try { q = new URLSearchParams(globalThis.location?.search || '').get('gpuTimer'); } catch (e) { /* Node */ }
+  const m = q === '1' ? 'query' : q || (typeof opt === 'string' ? opt : 'off');
+  return m;
+}
+
+/* GPU の完了を待つ。1×1 の RT を «塗ってから» 読む：ANGLE/Metal は読む資源に未完了の書き込みが
+   無ければ待たずに返すので、塗り（キューの最後）を待たせて、それより前の仕事の完了を保証する。
+   three の束縛を壊さないよう setRenderTarget / readRenderTargetPixels 越しに */
+function gpuSync(renderer) {
+  let rt = null;
+  const px = new Uint8Array(4);
+  return () => {
+    rt = rt || new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false });
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(rt);
+    renderer.clear(true, false, false);
+    renderer.setRenderTarget(prev);
+    renderer.readRenderTargetPixels(rt, 0, 0, 1, 1, px);
+  };
 }
 
 /* 湖の平均の汀線半径（朝霧の湖上マスク用） */

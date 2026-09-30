@@ -11,7 +11,9 @@
 import * as THREE from 'three';
 import { createGfx } from '../index.js';
 import { NG_LAYER, ngOwn } from '../layers.js';
-import { NG } from '../frame.js';
+import { NG_MODULE_TAG } from '../safe.js';
+import { NG, NG_FRAME_GLSL, ngFrameData } from '../frame.js';
+import { NG_MASK } from '../layers.js';
 import { NG_CHART_24, ngLuminance } from '../palette.js';
 import { resolveLake } from '../../../lakefield.js';
 import { buildHeightGrids } from '../../../world/heightgrid.js';
@@ -29,7 +31,7 @@ export const LAB_WEATHERS = Object.freeze({
 const DEBUG_FS = /* glsl */ `
 precision highp float;
 uniform sampler2D tMap;
-uniform int uMode;       // 0 色（露出×Reinhard）, 1 深度（log）, 2 生の値, 3 false color（EV の帯）
+uniform int uMode;       // 0 色（露出×Reinhard）, 1 深度（log）, 2 生の値, 3 false color（EV の帯）, 4 重ね描きの回数
 uniform float uExposure;
 in vec2 vUv;
 layout(location = 0) out vec4 oColor;
@@ -45,6 +47,11 @@ void main() {
   vec3 c;
   if (uMode == 1) c = vec3(log2(1.0 + v.r) / log2(3001.0));
   else if (uMode == 2) c = v.rgb;
+  else if (uMode == 4) {
+    /* 1 枚 = 1/32 を加算してある。1 青, 2 緑, 4 黄, 8 赤, 16 以上 白 */
+    float n = v.r * 32.0;
+    c = n < 0.5 ? vec3(0.0) : n < 1.5 ? vec3(0.1, 0.2, 0.9) : n < 3.0 ? vec3(0.1, 0.8, 0.2) : n < 6.0 ? vec3(0.95, 0.9, 0.1) : n < 12.0 ? vec3(0.95, 0.15, 0.05) : vec3(1.0);
+  }
   else if (uMode == 3) {
     float L = dot(max(v.rgb, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722)) * uExposure;
     c = band(log2(max(L, 1e-6) / 0.18));
@@ -92,7 +99,7 @@ export const Lab = {
     say('lake');
     const resolved = resolveLake(seed);
     const lake = resolved.lake;
-    const gfx = createGfx({ scene, gpuTimers: true, only: o.modules || [] });
+    const gfx = createGfx({ scene, gpuTimers: 'off', only: o.modules || [] });
     const key = new THREE.DirectionalLight(0xffffff, 3);
     key.castShadow = true;
     const target = new THREE.Object3D();
@@ -224,6 +231,7 @@ function makeLabApi(env) {
       } catch (e) { /* キャラクターの更新で lab を止めない */ }
     }
     for (const f of chars.fish) f.mesh.material.userData.u.uTime.value = st.time;
+    if (api.onBeforeRender) { try { api.onBeforeRender(); } catch (e) { console.warn('[lab] onBeforeRender', e); } }
     gfx.pipeline.prepare();
     gfx.pipeline.renderReflection();
     gfx.pipeline.renderMain(sdt);
@@ -231,21 +239,176 @@ function makeLabApi(env) {
     st.frames++;
   }
 
+  /* 重ね描き（overdraw）：全物体を 1/32 の加算で描き、回数を色にする */
+  let odRT = null;
+  const odMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(1 / 32, 1 / 32, 1 / 32), blending: THREE.AdditiveBlending, transparent: true, depthTest: false, depthWrite: false, fog: false,
+  });
+  function renderOverdraw() {
+    const m = gfx.targets.main;
+    if (!odRT || odRT.width !== m.width || odRT.height !== m.height) {
+      odRT?.dispose();
+      odRT = new THREE.WebGLRenderTarget(m.width, m.height, { type: THREE.HalfFloatType, depthBuffer: false });
+    }
+    const mask = camera.layers.mask, auto = renderer.autoClear;
+    scene.overrideMaterial = odMat;
+    try {
+      camera.layers.mask = NG_MASK.OPAQUE | NG_MASK.LATE;
+      renderer.autoClear = false;
+      renderer.setRenderTarget(odRT);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, false, false);
+      renderer.render(scene, camera);
+    } finally {
+      scene.overrideMaterial = null;
+      camera.layers.mask = mask;
+      renderer.autoClear = auto;
+    }
+    return odRT.texture;
+  }
+
+  /* registerDebugView で登録された表示（name → ShaderMaterial を 1 回だけ作る） */
+  const customViews = new Map();
+  function customView(name) {
+    const def = gfx.debugViews.get(name);
+    if (!def) return null;
+    let v = customViews.get(name);
+    if (!v || v.def !== def) {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { ngFrame: { value: ngFrameData }, ...gfx.pipeline.uniforms, ...def.uniforms },
+        vertexShader: 'varying vec2 vUv;\nvoid main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: `${NG_MODULE_TAG}lab:debug-${name}\n${NG_FRAME_GLSL}
+uniform sampler2D ngSceneColor;
+uniform highp sampler2D ngSceneDepth;
+uniform sampler2D ngReflection;
+uniform vec4 ngScreen;
+varying vec2 vUv;
+${def.glsl}
+void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0); }`,
+        depthTest: false, depthWrite: false,
+      });
+      v = { def, mat };
+      customViews.set(name, v);
+    }
+    return v.mat;
+  }
+
   function drawView(name) {
     const t = gfx.targets, u = dbg.uniforms;
+    if (!t?.main) return;
+    const custom = customView(name);
+    if (custom) {
+      dbgMesh.material = custom;
+      renderer.setRenderTarget(null);
+      renderer.render(dbgScene, dbgCam);
+      dbgMesh.material = dbg;
+      return;
+    }
     const views = {
-      refl: [t.refl.texture, 0], sceneColor: [t.copy.textures[0], 0], depth: [t.copy.textures[1], 1],
-      nearShadow: [gfx.rig.key?.shadow?.map?.texture, 2], hfShadow: [gfx.shadows.uniforms.ngHfShadow1.value, 2],
-      hfShadow0: [gfx.shadows.uniforms.ngHfShadow0.value, 2], skyView: [gfx.services.sky.skyViewTex, 0],
-      falseColor: [t.main.texture, 3],
+      refl: [() => t.refl.texture, 0], sceneColor: [() => t.copy.textures[0], 0], depth: [() => t.copy.textures[1], 1],
+      nearShadow: [() => gfx.rig.key?.shadow?.map?.texture, 2], hfShadow: [() => gfx.shadows.uniforms.ngHfShadow1.value, 2],
+      hfShadow0: [() => gfx.shadows.uniforms.ngHfShadow0.value, 2], skyView: [() => gfx.services.sky.skyViewTex, 0],
+      falseColor: [() => t.main.texture, 3], overdraw: [renderOverdraw, 4],
     };
     const v = views[name];
-    if (!v || !v[0]) return;
-    u.tMap.value = v[0];
+    const tex = v?.[0]();
+    if (!tex) return;
+    u.tMap.value = tex;
     u.uMode.value = v[1];
     u.uExposure.value = gfx.frame.get(NG.EXPO, 0) || 1;
     renderer.setRenderTarget(null);
     renderer.render(dbgScene, dbgCam);
+  }
+
+  /* ベンチ：同期なしの n フレームの実時間（GPU が律速なら GPU のフレーム時間）と、
+     budget を 'sync' にしたパスごとの GPU 時間。hide に挙げたモジュールの root は隠す */
+  function bench({ frames = 60, warm = 10, hide = [] } = {}) {
+    const b = gfx.budget, prevMode = b.mode, wasRunning = st.running;
+    st.running = false;
+    const hidden = [];
+    for (const id of hide) {
+      const r = gfx.modules.get(id)?.root;
+      if (r && r.visible) { r.visible = false; hidden.push(r); }
+    }
+    const sync = gfx._gpuSync;
+    try {
+      for (let i = 0; i < warm; i++) frame(1 / 60);
+      sync();
+      const t0 = performance.now();
+      let cpu = 0;
+      for (let i = 0; i < frames; i++) {
+        const a = performance.now();
+        frame(1 / 60);
+        cpu += performance.now() - a;
+      }
+      sync();
+      const wall = (performance.now() - t0) / frames;
+      b.setMode('sync');
+      for (let i = 0; i < frames; i++) frame(1 / 60);
+      const m = b.mean();
+      let passSum = 0;
+      for (const [k, v] of Object.entries(m.gpuMs)) if (k !== 'capture' && k !== 'composer') passSum += v;
+      const rt = gfx.targets.main;
+      return {
+        size: [rt.width, rt.height], tier: gfx.quality.tier, msaa: gfx.quality.profile.msaa, hide,
+        frameMs: wall, cpuMs: cpu / frames, gpuPassSum: passSum, passes: m.gpuMs, passCpu: m.cpuMs,
+      };
+    } finally {
+      b.setMode(prevMode);
+      for (const r of hidden) r.visible = true;
+      st.running = wasRunning;
+      st.lastT = performance.now();
+    }
+  }
+
+  /* サンプラーの数え上げ（§4.4：fragment ≤ 12・vertex ≤ 4）とリンクの成否 */
+  const SAMPLER_TYPES = (gl) => new Set([gl.SAMPLER_2D, gl.SAMPLER_3D, gl.SAMPLER_CUBE, gl.SAMPLER_2D_SHADOW, gl.SAMPLER_2D_ARRAY,
+    gl.SAMPLER_2D_ARRAY_SHADOW, gl.SAMPLER_CUBE_SHADOW, gl.INT_SAMPLER_2D, gl.INT_SAMPLER_3D, gl.INT_SAMPLER_CUBE,
+    gl.INT_SAMPLER_2D_ARRAY, gl.UNSIGNED_INT_SAMPLER_2D, gl.UNSIGNED_INT_SAMPLER_3D, gl.UNSIGNED_INT_SAMPLER_CUBE,
+    gl.UNSIGNED_INT_SAMPLER_2D_ARRAY]);
+  /* 宣言の行を除いた本文に名前が出てくるか（その段で使っているか。#ifdef の外れも数えるので多めに出る） */
+  const usesName = (src, name) => {
+    const re = new RegExp(`\\b${name}\\b`);
+    return src.split('\n').some((l) => re.test(l) && !/^\s*uniform\b/.test(l));
+  };
+  function programAudit({ frag = 12, vert = 4 } = {}) {
+    const gl = renderer.getContext(), types = SAMPLER_TYPES(gl);
+    const out = [];
+    for (const p of renderer.info.programs || []) {
+      const prog = p.program;
+      const vs = gl.getShaderSource(p.vertexShader) || '', fs = gl.getShaderSource(p.fragmentShader) || '';
+      const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) || 0;
+      let f = 0, v = 0;
+      const names = [];
+      for (let i = 0; i < n; i++) {
+        const info = gl.getActiveUniform(prog, i);
+        if (!info || !types.has(info.type)) continue;
+        const base = info.name.replace(/\[0\]$/, '').replace(/\[.*$/, '');
+        if (usesName(fs, base)) f += info.size;
+        if (usesName(vs, base)) v += info.size;
+        names.push(base);
+      }
+      const ti = fs.indexOf(NG_MODULE_TAG);
+      const tag = ti >= 0 ? fs.slice(ti + NG_MODULE_TAG.length).split('\n')[0].trim() : p.name;
+      const runnable = p.diagnostics ? p.diagnostics.runnable !== false : gl.getProgramParameter(prog, gl.LINK_STATUS);
+      out.push({ tag, name: p.name, frag: f, vert: v, samplers: names, runnable, over: f > frag || v > vert });
+    }
+    return { count: out.length, over: out.filter((o) => o.over), failed: out.filter((o) => !o.runnable), programs: out };
+  }
+
+  /* 本物の createFishMaterial が caustics 付きでリンクできたか */
+  function fishCheck() {
+    const f = chars.fish[0];
+    if (!f) return { present: false };
+    const props = renderer.properties.get(f.mesh.material);
+    const p = props.currentProgram;
+    const gl = renderer.getContext();
+    const fs = p ? gl.getShaderSource(p.fragmentShader) || '' : '';
+    return {
+      present: true, compiled: !!p, runnable: p ? (p.diagnostics ? p.diagnostics.runnable !== false : true) : false,
+      causticLight: fs.includes('causticLight'), sharesFrame: props.uniforms?.ngFrame?.value === ngFrameData,
+      sameCausticsTex: props.uniforms?.uCaustTex?.value === env.caustics.uCaustTex.value,
+    };
   }
 
   const api = {
@@ -287,15 +450,41 @@ function makeLabApi(env) {
       return st.frames;
     },
     resume() { st.running = true; st.lastT = performance.now(); },
-    /** デバッグ表示（null で通常） */
+    /** デバッグ表示（null で通常）。組込み：refl, sceneColor, depth, nearShadow, hfShadow, hfShadow0, skyView, falseColor, overdraw。
+     *  他は services.post.registerDebugView で登録した名前 */
     view(name) { st.view = name || null; },
+    /** 使えるデバッグ表示の名前 */
+    views: () => ['refl', 'sceneColor', 'depth', 'nearShadow', 'hfShadow', 'hfShadow0', 'skyView', 'falseColor', 'overdraw', ...gfx.debugViews.keys()],
+    /** ベンチ（{ frames, warm, hide }）→ { frameMs, cpuMs, passes: {pass: GPU ms}, ... } */
+    bench,
+    /**
+     * モジュールごとの GPU の重さ：全体のベンチと «そのモジュールの root を隠したベンチ» の差（ms）
+     * @param {{frames?: number}} [o]
+     */
+    moduleCosts({ frames = 40 } = {}) {
+      const base = bench({ frames });
+      const out = { base: base.frameMs, passes: base.passes, modules: {} };
+      for (const id of gfx.modules.keys()) {
+        const r = bench({ frames, warm: 4, hide: [id] });
+        out.modules[id] = Math.max(0, base.frameMs - r.frameMs);
+      }
+      return out;
+    },
+    /** 全プログラムのサンプラー数とリンクの成否（§4.4 の上限の検査） */
+    programAudit,
+    /** 本物の魚のマテリアルの検査 */
+    fishCheck,
+    /** 各フレームの pipeline.prepare の直前に呼ぶ関数（撮影で uniform を上書きする口） */
+    onBeforeRender: null,
+    /** MSAA の実測と判定 */
+    msaa: () => gfx.msaa,
     stats() {
       const s = gfx.stats(), i = renderer.info;
       return {
         fps: st.fps, gpuMs: s.gpuMs, cpuMs: s.cpuMs, gpuTotal: gfx.budget.gpuTotal(), draws: i.render.calls, tris: i.render.triangles,
         programs: i.programs?.length || 0, textures: i.memory.textures, geometries: i.memory.geometries, rtBytes: s.rtBytes,
         modules: s.modules, degraded: gfx.degraded, tier: gfx.quality.tier, msaa: gfx.quality.profile.msaa,
-        exposure: gfx.frame.get(NG.EXPO, 0), uw: gfx.frame.cam.uw,
+        exposure: gfx.frame.get(NG.EXPO, 0), uw: gfx.frame.cam.uw, msaaFallback: gfx.quality.msaaFallback,
       };
     },
     /** main RT の NaN / Inf の画素数（半精度をそのまま読む） */

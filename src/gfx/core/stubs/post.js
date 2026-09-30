@@ -50,7 +50,6 @@ export class PostStub extends NgModule {
     this.exposure = 1;
     this.drs = new DrsController(ctx.profile.drs);
     this._last = 0;
-    this.debugViews = new Map();
   }
 
   async init(progress) {
@@ -71,7 +70,6 @@ export class PostStub extends NgModule {
     for (const p of [this.smaa, this.fxaa]) p.renderToScreen = true;
     this.ldr = new T.WebGLRenderTarget(1, 1, { type: T.UnsignedByteType, depthBuffer: false });
     this.ldr.texture.colorSpace = T.SRGBColorSpace;
-    ctx.services.provide('post', { registerDebugView: (name, glsl) => this.debugViews.set(name, glsl) });
     this._size = new T.Vector2();
     progress?.(1);
   }
