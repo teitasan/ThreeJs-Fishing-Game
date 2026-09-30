@@ -1,0 +1,90 @@
+/* ===========================================================
+   underwater のグレーボックス（本番の代替も兼ねる）
+   -----------------------------------------------------------
+   - 水の光学（ngFrame slot 9–10）：σa = (0.20, 0.075, 0.045)·(1 + 0.5·rain)、σs = 0.03–0.06。
+     水の内散乱 = σs/(σa+σs) × (key の水面透過 0.55 + 空 0.8) の散乱光 / 2π（多重散乱込みの目安）
+   - causticsUniforms の動く 6 つ（時刻・key の向き・夜・雨・雲・強さ）を毎フレーム書く。
+     uCaustTex はプレースホルダ（1×1）のまま。焼き込みは本番の underwater モジュール
+   - getUnderwaterContext は旧 Water と同じ形。createEffect は null（水中の後処理なし）
+   =========================================================== */
+import { NgModule } from '../module.js';
+import { NG } from '../frame.js';
+
+const SIGMA_A = [0.20, 0.075, 0.045];
+
+/**
+ * グレーボックスの underwater
+ */
+export class UnderwaterStub extends NgModule {
+  static id = 'underwater';
+
+  constructor(ctx) {
+    super(ctx);
+    const T = ctx.THREE;
+    this.optics = { sigmaA: new T.Vector3(...SIGMA_A), sigmaS: 0.03, insc: new T.Vector3() };
+    this._ctx = {
+      strength: 0, time: 0, sunDir: new T.Vector3(0, 1, 0), night: 0, rain: 0, cloud: 0,
+      absorb: new T.Vector3(...SIGMA_A), camPos: new T.Vector3(), camNear: 0.1, camFar: 3000, waterY: 0,
+    };
+  }
+
+  async init(progress) {
+    this.ctx.services.provide('underwater', {
+      getUnderwaterContext: (camera) => this.getUnderwaterContext(camera),
+      createEffect: () => null,
+      optics: this.optics,
+    });
+    progress?.(1);
+  }
+
+  /**
+   * Water.update の中から（gfx.waterUpdate）。光学と caustics の動く値
+   * @param {object} f
+   */
+  waterUpdate(f) {
+    const frame = this.ctx.frame, F = frame.data;
+    const rain = f.weather?.rain || 0, cloud = f.weather?.cloud || 0;
+    const sa = SIGMA_A.map((v) => v * (1 + 0.5 * rain));
+    const ss = 0.03 + 0.03 * rain;
+    frame.set(NG.W_SIGMA, sa[0], sa[1], sa[2], ss);
+    const ky = Math.max(F[NG.KEY * 4 + 1], 0);
+    const L = [0, 1, 2].map((k) => {
+      const E = F[NG.KEYRAD * 4 + k] * ky * 0.98 * 0.55 + F[NG.AMB * 4 + k] * Math.PI * 0.8;
+      return (ss / (sa[k] + ss)) * E / (2 * Math.PI);
+    });
+    frame.set(NG.W_INSC, L[0], L[1], L[2], 1 + rain);
+    this.optics.sigmaA.set(sa[0], sa[1], sa[2]);
+    this.optics.sigmaS = ss;
+    this.optics.insc.set(L[0], L[1], L[2]);
+    const cu = this.ctx.caustics;
+    if (cu) {
+      cu.uCaustTime.value = f.waterTime;
+      cu.uCaustSunDir.value.set(F[NG.KEY * 4], F[NG.KEY * 4 + 1], F[NG.KEY * 4 + 2]);
+      cu.uCaustNight.value = F[NG.KEY * 4 + 3];
+      cu.uCaustRain.value = rain;
+      cu.uCaustCloud.value = cloud;
+      cu.uCaustStrength.value = this.ctx.gfx?.quality.profile.causticsStrength ?? 0.7;
+    }
+  }
+
+  /**
+   * 旧 Water.getUnderwaterContext と同じ形（同じオブジェクトを書き換えて返す）
+   * @param {import('three').Camera} camera
+   */
+  getUnderwaterContext(camera) {
+    const F = this.ctx.frame.data, c = this._ctx, f = this.ctx.gfx?.f;
+    c.strength = this.ctx.frame.cam.uw;
+    c.time = f?.waterTime ?? 0;
+    c.sunDir.set(F[NG.KEY * 4], F[NG.KEY * 4 + 1], F[NG.KEY * 4 + 2]);
+    c.night = F[NG.KEY * 4 + 3];
+    c.rain = f?.weather?.rain ?? 0;
+    c.cloud = f?.weather?.cloud ?? 0;
+    c.absorb.copy(this.optics.sigmaA);
+    if (camera) { c.camPos.copy(camera.position); c.camNear = camera.near; c.camFar = camera.far; }
+    c.waterY = this.ctx.frame.cam.waterY;
+    return c;
+  }
+}
+
+/** @param {object} ctx */
+export function createModule(ctx) { return new UnderwaterStub(ctx); }

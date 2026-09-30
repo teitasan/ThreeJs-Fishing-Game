@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab: core（全スタブ）</title>
+<!-- 相対 URL（assets/…・importmap）をリポジトリの根から解決する。Angler・魚は assets/ を相対で読む -->
+<base href="../">
+<link rel="stylesheet" href="lab/_kit/lab.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/",
+    "postprocessing": "./vendor/postprocessing/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="lab-status">lab: loading</div>
+<script type="module">
+/* 全モジュールがグレーボックス（core のスタブ）+ 本物の湖・Angler・魚 6 匹 */
+import { bootLabPage } from './lab/_kit/page.js';
+bootLabPage({ modules: [] });
+</script>
+</body>
+</html>

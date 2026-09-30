@@ -1,0 +1,9 @@
+/* lab ページの共通の見た目（撮影の邪魔をしない最小限） */
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+canvas { display: block; width: 100vw; height: 100vh; }
+#lab-status {
+  position: fixed; left: 8px; top: 8px; font: 12px/1.4 ui-monospace, Menlo, monospace; color: #cfe3ff;
+  background: rgba(0, 0, 0, 0.45); padding: 4px 8px; border-radius: 4px; pointer-events: none; white-space: pre;
+}
+#lab-status:empty { display: none; }
+body.capture #lab-status { display: none; }
