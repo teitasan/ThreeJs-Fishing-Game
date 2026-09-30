@@ -78,6 +78,12 @@ export class Targets {
     return px(m, 8) * (s > 1 ? s + 1 : 1) + px(m, 4) * s + px(this.copy, 8) * 1.34 + px(this.copy, 4) + px(this.refl, 8) * 1.34 + px(this.refl, 4);
   }
 
+  /** 文脈の喪失から戻ったとき：喪失前の RT を dispose せずに手放す（次の ensure で作り直す） */
+  forget() {
+    this.main = this.copy = this.refl = null;
+    this._key = '';
+  }
+
   dispose() {
     this.main?.depthTexture?.dispose();
     this.main?.dispose();

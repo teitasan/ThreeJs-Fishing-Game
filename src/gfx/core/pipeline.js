@@ -133,7 +133,7 @@ export class FramePipeline {
        ここでは «中身を焼き直す» ものだけ（onRestore）と、無効になった問い合わせを捨てる */
     this._onRestored = () => {
       this.state.lost = false;
-      this.targets._key = '';
+      this.targets.forget();
       this.uniforms.ngReflValid.value = 0;
       this.budget.restoreGPU();
       try { this.onRestore?.(); } catch (e) { this.safety.warn('文脈の復帰で例外', e); }

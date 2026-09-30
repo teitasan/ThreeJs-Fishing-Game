@@ -255,9 +255,11 @@ export class HeightField {
     return k > 0 ? hf + (sampleGrid(g.near, x, z) - hf) * k : hf;
   }
 
-  /** 文脈の喪失から戻ったとき：DataTexture は three が上げ直すので、派生だけ焼き直す */
+  /** 文脈の喪失から戻ったとき：DataTexture は three が上げ直すので、派生だけ焼き直す。
+   *  古い派生は dispose しない（喪失前の GL の物を消すと «別の文脈の物» の警告が出るだけ。GL 側はもう無い） */
   restoreGPU() {
     if (!this.grids) return;
+    this._derived.length = 0;
     this._bakeDerived();
   }
 }

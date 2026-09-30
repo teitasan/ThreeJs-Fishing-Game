@@ -262,9 +262,10 @@ export class Shadows {
     rt.scissorTest = false;
   }
 
-  /** 文脈の喪失から戻ったとき：合成高さと影を焼き直す */
+  /** 文脈の喪失から戻ったとき：合成高さと影を焼き直す（喪失前の RT は dispose せずに手放す） */
   restoreGPU(keyDir) {
     if (!this._hfUniforms) return;
+    this._hf = null;
     this._buildHf();
     this.updateHf(keyDir, true);
   }
