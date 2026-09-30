@@ -75,14 +75,12 @@ uniform float uRippleDur[${RIPPLES}];
 in vec3 vWorld;
 in float vViewZ;
 
-/* 細かい波の勾配：風で強さが変わる 2 スケールの勾配ノイズ（猫足の斑と凪） */
+/* 細かい波の勾配：風で強さが変わる 2 スケールの値ノイズの解析的な勾配（猫足の斑と凪）。
+   差分で何度も評価しない（水面は画面の半分を覆うので断片の手数がそのまま効く） */
 vec2 ngDetailSlope(vec2 p, float t, float amp) {
-  vec2 e = vec2(0.07, 0.0);
-  vec2 q1 = p * 0.9 + vec2(t * 0.35, t * 0.21), q2 = p * 2.3 - vec2(t * 0.52, -t * 0.4);
-  float a = ngGNoise2(q1), b = ngGNoise2(q2);
-  vec2 g1 = vec2(ngGNoise2(q1 + e.xy) - a, ngGNoise2(q1 + e.yx) - a) / e.x * 0.9;
-  vec2 g2 = vec2(ngGNoise2(q2 + e.xy) - b, ngGNoise2(q2 + e.yx) - b) / e.x * 2.3;
-  return (g1 * 0.012 + g2 * 0.006) * amp;
+  vec3 a = ngVNoise2D(p * 0.9 + vec2(t * 0.35, t * 0.21));
+  vec3 b = ngVNoise2D(p * 2.3 - vec2(t * 0.52, -t * 0.4));
+  return (a.yz * 0.9 * 0.012 + b.yz * 2.3 * 0.006) * amp;
 }
 /* 波紋の輪（最新 16 件）。r = 経過 × 速さ、減衰する sin の帯 */
 vec2 ngRippleSlope(vec2 p) {

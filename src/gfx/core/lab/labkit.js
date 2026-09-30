@@ -147,6 +147,7 @@ export const Lab = {
           const bed = lake.heightAt(px, pz);
           f.spawn(real[(i * 7) % real.length], 35 + i * 6, new THREE.Vector3(px, Math.max(bed + 0.5, -d * 0.5), pz));
           f.mesh.rotation.y = Math.atan2(dock.dockDir.x, dock.dockDir.z) + i;
+          scene.add(f.mesh);
           chars.fish.push(f);
         }
       } catch (e) {
@@ -320,9 +321,23 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     renderer.render(dbgScene, dbgCam);
   }
 
-  /* ベンチ：同期なしの n フレームの実時間（GPU が律速なら GPU のフレーム時間）と、
-     budget を 'sync' にしたパスごとの GPU 時間。hide に挙げたモジュールの root は隠す */
-  function bench({ frames = 60, warm = 10, hide = [] } = {}) {
+  /* ベンチ：同期なしで回したフレームの実時間（GPU が律速なら GPU のフレーム時間）と、
+     budget を 'sync' にしたパスごとの GPU 時間。hide に挙げたモジュールの root は隠す。
+     Apple の GPU は負荷で周波数が上下し、ほかのプロセスとも取り合うので、先に warm フレーム回し、
+     実時間は windows 回に分けて中央値（frameMs）と最小（frameMsMin：邪魔の無いときの推定）を返す */
+  function frameWindow(n, sync) {
+    sync();
+    const t0 = performance.now();
+    let cpu = 0;
+    for (let i = 0; i < n; i++) {
+      const a = performance.now();
+      frame(1 / 60);
+      cpu += performance.now() - a;
+    }
+    sync();
+    return { wall: (performance.now() - t0) / n, cpu: cpu / n };
+  }
+  function bench({ frames = 60, warm = 30, windows = 5, hide = [], passes = true } = {}) {
     const b = gfx.budget, prevMode = b.mode, wasRunning = st.running;
     st.running = false;
     const hidden = [];
@@ -333,25 +348,23 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     const sync = gfx._gpuSync;
     try {
       for (let i = 0; i < warm; i++) frame(1 / 60);
-      sync();
-      const t0 = performance.now();
-      let cpu = 0;
-      for (let i = 0; i < frames; i++) {
-        const a = performance.now();
-        frame(1 / 60);
-        cpu += performance.now() - a;
+      const w = [];
+      for (let k = 0; k < windows; k++) w.push(frameWindow(Math.max(1, Math.round(frames / windows)), sync));
+      w.sort((a, c) => a.wall - c.wall);
+      const med = w[w.length >> 1];
+      let m = { gpuMs: {}, cpuMs: {}, gpuMin: {} };
+      if (passes) {
+        b.setMode('sync');
+        for (let i = 0; i < frames; i++) frame(1 / 60);
+        m = b.mean();
       }
-      sync();
-      const wall = (performance.now() - t0) / frames;
-      b.setMode('sync');
-      for (let i = 0; i < frames; i++) frame(1 / 60);
-      const m = b.mean();
       let passSum = 0;
       for (const [k, v] of Object.entries(m.gpuMs)) if (k !== 'capture' && k !== 'composer') passSum += v;
       const rt = gfx.targets.main;
       return {
         size: [rt.width, rt.height], tier: gfx.quality.tier, msaa: gfx.quality.profile.msaa, hide,
-        frameMs: wall, cpuMs: cpu / frames, gpuPassSum: passSum, passes: m.gpuMs, passCpu: m.cpuMs,
+        frameMs: med.wall, frameMsMin: w[0].wall, frameMsMax: w[w.length - 1].wall, cpuMs: med.cpu,
+        gpuPassSum: passSum, passes: m.gpuMs, passMin: m.gpuMin, passCpu: m.cpuMs,
       };
     } finally {
       b.setMode(prevMode);
@@ -366,33 +379,58 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     gl.SAMPLER_2D_ARRAY_SHADOW, gl.SAMPLER_CUBE_SHADOW, gl.INT_SAMPLER_2D, gl.INT_SAMPLER_3D, gl.INT_SAMPLER_CUBE,
     gl.INT_SAMPLER_2D_ARRAY, gl.UNSIGNED_INT_SAMPLER_2D, gl.UNSIGNED_INT_SAMPLER_3D, gl.UNSIGNED_INT_SAMPLER_CUBE,
     gl.UNSIGNED_INT_SAMPLER_2D_ARRAY]);
-  /* 宣言の行を除いた本文に名前が出てくるか（その段で使っているか。#ifdef の外れも数えるので多めに出る） */
+  /* 宣言の行を除いた本文に名前が出てくるか（#ifdef の外れも数えるので多めに出る） */
   const usesName = (src, name) => {
     const re = new RegExp(`\\b${name}\\b`);
     return src.split('\n').some((l) => re.test(l) && !/^\s*uniform\b/.test(l));
   };
+  /* 頂点シェーダだけで能動なサンプラー：同じ頂点シェーダを «何も読まない断片» と組んでリンクし直して数える。
+     断片の数は «全体 − 頂点だけのもの»（両方で使う物は本文の出現で判断） */
+  const TRIVIAL_FS = '#version 300 es\nprecision highp float;\nout vec4 ngOut;\nvoid main() { ngOut = vec4(1.0); }';
+  let trivialFS = null;
+  function activeSamplers(gl, prog, types) {
+    const out = new Map();
+    const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) || 0;
+    for (let i = 0; i < n; i++) {
+      const info = gl.getActiveUniform(prog, i);
+      if (info && types.has(info.type)) out.set(info.name.replace(/\[.*$/, ''), info.size);
+    }
+    return out;
+  }
+  function vertexSamplers(gl, vs, types) {
+    if (!trivialFS) {
+      trivialFS = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(trivialFS, TRIVIAL_FS);
+      gl.compileShader(trivialFS);
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, trivialFS);
+    gl.linkProgram(prog);
+    const ok = gl.getProgramParameter(prog, gl.LINK_STATUS);
+    const out = ok ? activeSamplers(gl, prog, types) : null;
+    gl.deleteProgram(prog);
+    return out;
+  }
   function programAudit({ frag = 12, vert = 4 } = {}) {
     const gl = renderer.getContext(), types = SAMPLER_TYPES(gl);
     const out = [];
     for (const p of renderer.info.programs || []) {
-      const prog = p.program;
-      const vs = gl.getShaderSource(p.vertexShader) || '', fs = gl.getShaderSource(p.fragmentShader) || '';
-      const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) || 0;
+      const fs = gl.getShaderSource(p.fragmentShader) || '';
+      const all = activeSamplers(gl, p.program, types);
+      const vsOnly = vertexSamplers(gl, p.vertexShader, types);
       let f = 0, v = 0;
-      const names = [];
-      for (let i = 0; i < n; i++) {
-        const info = gl.getActiveUniform(prog, i);
-        if (!info || !types.has(info.type)) continue;
-        const base = info.name.replace(/\[0\]$/, '').replace(/\[.*$/, '');
-        if (usesName(fs, base)) f += info.size;
-        if (usesName(vs, base)) v += info.size;
-        names.push(base);
+      for (const [name, size] of all) {
+        const inVS = vsOnly ? vsOnly.has(name) : usesName(gl.getShaderSource(p.vertexShader) || '', name);
+        if (inVS) v += size;
+        if (!inVS || usesName(fs, name)) f += size;
       }
       const ti = fs.indexOf(NG_MODULE_TAG);
       const tag = ti >= 0 ? fs.slice(ti + NG_MODULE_TAG.length).split('\n')[0].trim() : p.name;
-      const runnable = p.diagnostics ? p.diagnostics.runnable !== false : gl.getProgramParameter(prog, gl.LINK_STATUS);
-      out.push({ tag, name: p.name, frag: f, vert: v, samplers: names, runnable, over: f > frag || v > vert });
+      const runnable = p.diagnostics ? p.diagnostics.runnable !== false : gl.getProgramParameter(p.program, gl.LINK_STATUS);
+      out.push({ tag, name: p.name, frag: f, vert: v, samplers: [...all.keys()], runnable, over: f > frag || v > vert });
     }
+    renderer.resetState();   // 自前の useProgram / createProgram の後で three の状態の写しを捨てる
     return { count: out.length, over: out.filter((o) => o.over), failed: out.filter((o) => !o.runnable), programs: out };
   }
 
@@ -461,12 +499,19 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
      * モジュールごとの GPU の重さ：全体のベンチと «そのモジュールの root を隠したベンチ» の差（ms）
      * @param {{frames?: number}} [o]
      */
-    moduleCosts({ frames = 40 } = {}) {
-      const base = bench({ frames });
-      const out = { base: base.frameMs, passes: base.passes, modules: {} };
+    moduleCosts({ frames = 40, rounds = 3 } = {}) {
+      /* 全体と «隠した» を交互に測って差の中央値（周波数の揺れを両方に同じだけ乗せる） */
+      const base = bench({ frames, passes: false });
+      const out = { base: base.frameMsMin, modules: {} };
       for (const id of gfx.modules.keys()) {
-        const r = bench({ frames, warm: 4, hide: [id] });
-        out.modules[id] = Math.max(0, base.frameMs - r.frameMs);
+        const d = [];
+        for (let k = 0; k < rounds; k++) {
+          const a = bench({ frames, warm: 4, windows: 3, passes: false });
+          const h = bench({ frames, warm: 4, windows: 3, passes: false, hide: [id] });
+          d.push(a.frameMsMin - h.frameMsMin);
+        }
+        d.sort((x, y) => x - y);
+        out.modules[id] = Math.max(0, d[d.length >> 1]);
       }
       return out;
     },

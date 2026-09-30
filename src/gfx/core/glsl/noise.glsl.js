@@ -46,6 +46,17 @@ float ngVNoise2(vec2 p) {
   float c = ngHash12(i + vec2(0.0, 1.0)), d = ngHash12(i + vec2(1.0, 1.0));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
+/* 値ノイズと解析的な勾配：vec3(値 0..1, ∂/∂x, ∂/∂y)。
+   法線の細かい揺れを «差分で 3 回評価» せずに 1 回で出す（水面・濡れ面の詳細法線用） */
+vec3 ngVNoise2D(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  float a = ngHash12(i), b = ngHash12(i + vec2(1.0, 0.0));
+  float c = ngHash12(i + vec2(0.0, 1.0)), d = ngHash12(i + vec2(1.0, 1.0));
+  float k1 = b - a, k2 = c - a, k3 = a - b - c + d;
+  return vec3(a + k1 * u.x + k2 * u.y + k3 * u.x * u.y, du * vec2(k1 + k3 * u.y, k2 + k3 * u.x));
+}
 /* 周期版：格子座標を period で折り返す */
 float ngVNoise2P(vec2 p, vec2 period) {
   vec2 i = floor(p), f = fract(p);

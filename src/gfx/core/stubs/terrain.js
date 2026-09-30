@@ -1,7 +1,9 @@
 /* ===========================================================
    terrain のグレーボックス（本番の代替も兼ねる）
    -----------------------------------------------------------
-   - 幾何：near ±260m @1m の格子と、far ±512m @4m の外周（中央 ±260m は抜く）。
+   - 幾何：±512m を 32m の区画に割り、区画ごとにカメラからの距離で 4 段の細かさ（1/2/4/8m）を選ぶ
+     （段ごとに 1 枚のパッチを InstancedMesh で並べる。継ぎ目の T 字の隙間は区画の縁の «スカート» で隠す）。
+     細かい三角形を遠くに並べない（画素より小さい三角形は quad の無駄な陰影で GPU を食う）ため。
      頂点の高さは VS で ngTerrainH（R32F の手動バイリニア）＝ lake.heightAt の格子と同じ値
    - 色：傾斜・汀線距離・底質（ngBedMap = lake.bedAt）・樹冠から。palette の範囲の線形アルベド。
      汀の濡れ帯と雨の濡れ（ngWet）。湖底は caustics と下向き光（媒質が付ける）
@@ -14,6 +16,30 @@ import { ngExtendStandard, ngAttachDepth } from '../extend.js';
 import { NG_HEIGHTFIELD_GLSL } from '../glsl/heightfield.glsl.js';
 import { NG_SURFACE_GLSL } from '../glsl/surface.glsl.js';
 import { vnoise } from '../wind.js';
+
+/** 区画の一辺（m）と、±EXTENT を覆う区画の数 */
+const PATCH = 32, EXTENT = 512, CHUNKS = (2 * EXTENT) / PATCH;
+/** 段の格子の間隔（m）と、段を切り替える距離（m。品質と LOD 倍率で縮める） */
+const LOD_STEPS = [1, 2, 4, 8];
+const LOD_RANGES = [64, 160, 320];
+const RANGE_K = { low: 0.6, mid: 0.75, high: 1.0 };
+
+/* 区画のローカル座標 → 世界の xz（インスタンスの平行移動だけ） */
+const TERRAIN_BEGIN = /* glsl */ `
+#ifdef USE_INSTANCING
+  vec2 ngXZ = position.xz + instanceMatrix[3].xz;
+#else
+  vec2 ngXZ = position.xz;
+#endif
+  transformed.y = ngTerrainH( ngXZ ) - aSkirt;
+`;
+const TERRAIN_NORMAL = /* glsl */ `
+#ifdef USE_INSTANCING
+  objectNormal = ngTerrainN( position.xz + instanceMatrix[3].xz );
+#else
+  objectNormal = ngTerrainN( position.xz );
+#endif
+`;
 
 const GROUND_GLSL = NG_HEIGHTFIELD_GLSL + NG_SURFACE_GLSL + /* glsl */ `
 float ngTerrRough = 0.9;
@@ -54,6 +80,10 @@ export class TerrainStub extends NgModule {
   constructor(ctx) {
     super(ctx);
     this.meshes = [];
+    this.lods = null;
+    this._tierK = RANGE_K[ctx.tier] ?? 1;
+    this._lodK = 1;
+    this._range = this._tierK;
   }
 
   async init(progress) {
@@ -62,9 +92,9 @@ export class TerrainStub extends NgModule {
     const mat = ngExtendStandard(new T.MeshStandardMaterial({ roughness: 0.9, metalness: 0 }), {
       key: 'terrain-stub', module: 'terrain', uniforms: hf.uniforms,
       vertex: {
-        pars: NG_HEIGHTFIELD_GLSL,
-        normal: 'objectNormal = ngTerrainN( position.xz );',
-        begin: 'transformed.y = ngTerrainH( position.xz );',
+        pars: NG_HEIGHTFIELD_GLSL + 'attribute float aSkirt;\n',
+        normal: TERRAIN_NORMAL,
+        begin: TERRAIN_BEGIN,
       },
       fragment: {
         pars: GROUND_GLSL,
@@ -75,16 +105,22 @@ export class TerrainStub extends NgModule {
       caustics: true, hfShadow: true, depth: true,
     });
     this.material = mat;
-    const near = gridGeometry(T, -260, 260, 1, null);
-    const far = gridGeometry(T, -512, 512, 4, 260);
-    for (const [g, name] of [[near, 'ng-terrain-near'], [far, 'ng-terrain-far']]) {
-      const m = ngAttachDepth(new T.Mesh(g, mat));
-      m.name = name;
-      m.castShadow = true;
-      m.receiveShadow = true;
-      this.root.add(m);
-      this.meshes.push(m);
-    }
+    /* 段ごとのパッチ（区画のローカル 0..PATCH）。1 段に最大で全区画ぶんのインスタンス */
+    this.lods = LOD_STEPS.map((step, i) => {
+      const im = new T.InstancedMesh(patchGeometry(T, step), mat, CHUNKS * CHUNKS);
+      im.name = `ng-terrain-lod${i}`;
+      im.count = 0;
+      im.frustumCulled = false;             // 区画は毎フレーム選び直す。影・反射のカメラでも同じ集合
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      ngAttachDepth(im);
+      this.root.add(im);
+      this.meshes.push(im);
+      return im;
+    });
+    this._m4 = new T.Matrix4();
+    this._lastKey = '';
     ngOwn(this.root, NG_LAYER.WORLD);
     const ring = this._ridgeRing(hf);
     ngOwn(ring, NG_LAYER.FAR);
@@ -129,38 +165,74 @@ export class TerrainStub extends NgModule {
     return m;
   }
 
+  /* 区画の細かさを選び直す（カメラが区画の 1/4 動くか、LOD 倍率・品質が変わったときだけ） */
+  update(f) {
+    const c = f.camera?.position;
+    if (!this.lods || !c) return;
+    const q = PATCH / 4;
+    const key = `${Math.round(c.x / q)},${Math.round(c.z / q)},${this._range}`;
+    if (key === this._lastKey) return;
+    this._lastKey = key;
+    for (const im of this.lods) im.count = 0;
+    const m = this._m4, r = this._range;
+    for (let j = 0; j < CHUNKS; j++) {
+      for (let i = 0; i < CHUNKS; i++) {
+        const x0 = -EXTENT + i * PATCH, z0 = -EXTENT + j * PATCH;
+        /* 区画の中でカメラに一番近い点までの距離 */
+        const dx = Math.max(x0 - c.x, 0, c.x - x0 - PATCH), dz = Math.max(z0 - c.z, 0, c.z - z0 - PATCH);
+        const d = Math.hypot(dx, dz);
+        const lod = d < LOD_RANGES[0] * r ? 0 : d < LOD_RANGES[1] * r ? 1 : d < LOD_RANGES[2] * r ? 2 : 3;
+        const im = this.lods[lod];
+        m.makeTranslation(x0, 0, z0);
+        im.setMatrixAt(im.count++, m);
+      }
+    }
+    for (const im of this.lods) im.instanceMatrix.needsUpdate = true;
+  }
+
+  setQuality(tier) { this._tierK = RANGE_K[tier] ?? 1; this._range = this._tierK * this._lodK; this._lastKey = ''; }
+
+  setLodScale(k) { this._lodK = Number.isFinite(k) && k > 0 ? k : 1; this._range = this._tierK * this._lodK; this._lastKey = ''; }
+
   stats() {
-    let tris = 0;
-    for (const m of this.meshes) tris += m.geometry.index.count / 3;
-    return { draws: this.meshes.length + 1, tris, instances: 0, texBytes: 0, programs: 2 };
+    let tris = 0, inst = 0;
+    for (const m of this.meshes) { tris += (m.geometry.index.count / 3) * m.count; inst += m.count; }
+    return { draws: this.meshes.length + 1, tris, instances: inst, texBytes: 0, programs: 2 };
   }
 }
 
-/* xz の正方格子（y = 0。VS が高さを入れる）。hole があれば ±hole の内側を抜く */
-function gridGeometry(T, lo, hi, step, hole) {
-  const n = Math.round((hi - lo) / step);
-  const pos = new Float32Array((n + 1) * (n + 1) * 3);
-  let p = 0;
+/* 区画のパッチ：0..PATCH の正方格子 + 縁のスカート（aSkirt = 下げる量 m）。
+   法線は VS が高さ場から入れるので上向きの仮の値 */
+function patchGeometry(T, step) {
+  const n = Math.round(PATCH / step);
+  const pos = [], skirt = [], idx = [];
   for (let j = 0; j <= n; j++) {
-    for (let i = 0; i <= n; i++) { pos[p++] = lo + i * step; pos[p++] = 0; pos[p++] = lo + j * step; }
+    for (let i = 0; i <= n; i++) { pos.push(i * step, 0, j * step); skirt.push(0); }
   }
-  const idx = [];
+  const at = (i, j) => j * (n + 1) + i;
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
-      if (hole) {
-        const cx = lo + (i + 0.5) * step, cz = lo + (j + 0.5) * step;
-        if (Math.abs(cx) < hole && Math.abs(cz) < hole) continue;
-      }
-      const a = j * (n + 1) + i, b = a + 1, c = a + n + 1, d = c + 1;
+      const a = at(i, j), b = a + 1, c = a + n + 1, d = c + 1;
       idx.push(a, c, b, b, c, d);
     }
   }
+  /* 縁を一周して、各辺の外側に垂れ幕を下ろす（隣の区画が粗くても隙間が見えない） */
+  const ring = [];
+  for (let i = 0; i < n; i++) ring.push(at(i, 0));
+  for (let j = 0; j < n; j++) ring.push(at(n, j));
+  for (let i = n; i > 0; i--) ring.push(at(i, n));
+  for (let j = n; j > 0; j--) ring.push(at(0, j));
+  const base = pos.length / 3;
+  for (const v of ring) { pos.push(pos[v * 3], 0, pos[v * 3 + 2]); skirt.push(step * 1.5 + 0.5); }
+  for (let k = 0; k < ring.length; k++) {
+    const a = ring[k], b = ring[(k + 1) % ring.length], a2 = base + k, b2 = base + ((k + 1) % ring.length);
+    idx.push(a, a2, b, b, a2, b2);
+  }
   const g = new T.BufferGeometry();
-  g.setAttribute('position', new T.BufferAttribute(pos, 3));
-  g.setAttribute('normal', new T.BufferAttribute(new Float32Array(pos.length).fill(0).map((v, k) => (k % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new T.Float32BufferAttribute(pos.map((v, k) => (k % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute('aSkirt', new T.Float32BufferAttribute(skirt, 1));
   g.setIndex(idx);
-  g.boundingBox = new T.Box3(new T.Vector3(lo, -40, lo), new T.Vector3(hi, 400, hi));
-  g.boundingSphere = new T.Sphere(new T.Vector3(0, 0, 0), Math.hypot(hi - lo, 400) * 0.75);
   return g;
 }
 

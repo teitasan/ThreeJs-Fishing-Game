@@ -185,24 +185,26 @@ export class Budget {
   }
 
   /**
-   * reset からの単純平均（ベンチ用。移動平均より区間の値として正確）
-   * @returns {{gpuMs: Record<string, number>, cpuMs: Record<string, number>}}
+   * reset からの単純平均と最小（ベンチ用）。ほかのプロセスが GPU を取り合う機械では、
+   * 最小が «邪魔の無いときの値» の良い推定になる
+   * @returns {{gpuMs: Record<string, number>, cpuMs: Record<string, number>, gpuMin: Record<string, number>}}
    */
   mean() {
-    const avg = (acc) => {
+    const pick = (acc, i) => {
       const out = {};
-      for (const [k, [s, n]] of Object.entries(acc)) out[k] = s / n;
+      for (const [k, a] of Object.entries(acc)) out[k] = i === 0 ? a[0] / a[1] : a[2];
       derive(out);
       return out;
     };
-    return { gpuMs: avg(this._gpuSum), cpuMs: avg(this._cpuSum) };
+    return { gpuMs: pick(this._gpuSum, 0), cpuMs: pick(this._cpuSum, 0), gpuMin: pick(this._gpuSum, 2) };
   }
 
   _add(tab, acc, k, v) {
     if (!Number.isFinite(v)) return;
     ema(tab, k, v);
-    const a = acc[k] || (acc[k] = [0, 0]);
+    const a = acc[k] || (acc[k] = [0, 0, Infinity]);
     a[0] += v; a[1]++;
+    if (v < a[2]) a[2] = v;
   }
 
   /** WebGL の文脈が戻ったとき：古い問い合わせは無効なので捨てる */
