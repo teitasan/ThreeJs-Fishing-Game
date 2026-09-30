@@ -437,7 +437,13 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
       out.push({ tag, name: p.name, frag: f, vert: v, samplers: [...all.keys()], runnable, over: f > frag || v > vert });
     }
     renderer.resetState();   // 自前の useProgram / createProgram の後で three の状態の写しを捨てる
-    return { count: out.length, over: out.filter((o) => o.over), failed: out.filter((o) => !o.runnable), programs: out };
+    /* モジュールごとの本数（印 «ngmod:<id>:<key>» の id。印の無いものは 'game'） */
+    const byModule = {};
+    for (const o of out) {
+      const id = o.tag && o.tag.includes(':') ? o.tag.split(':')[0] : 'game';
+      byModule[id] = (byModule[id] || 0) + 1;
+    }
+    return { count: out.length, over: out.filter((o) => o.over), failed: out.filter((o) => !o.runnable), byModule, programs: out };
   }
 
   /* 本物の createFishMaterial が caustics 付きでリンクできたか */

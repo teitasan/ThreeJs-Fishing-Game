@@ -48,6 +48,15 @@ export const NG_TIERS = Object.freeze({
   },
 });
 
+/**
+ * プログラムとサンプラーの上限（統合者の決定、core-requests A-6）。
+ * - total：1 つの段・影あり で同時に生きているプログラムの総数（ゲームの釣り人・魚・UI を含む）。
+ *   段を替えると core が古い段の ng のプログラムを手放す（index.js の _releaseStalePrograms）
+ * - perModule：1 モジュールが 1 つの段で持つプログラム（影用の depth / distance の変種も 1 本と数える）
+ * - samplers：1 プログラムの断片 / 頂点のサンプラーの数（MAX_TEXTURE_IMAGE_UNITS が 16 の環境を守る）
+ */
+export const NG_PROGRAM_BUDGET = Object.freeze({ total: 90, perModule: 6, samplers: Object.freeze({ frag: 12, vert: 4 }) });
+
 /** 旧キー 'medium' などを正規化する */
 export function normalizeTier(q) {
   return q === 'low' || q === 'high' ? q : 'mid';

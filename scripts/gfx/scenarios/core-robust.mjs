@@ -80,7 +80,9 @@ export default async function (h) {
       ['ライトの数と castShadow が変わらない', before === after, `${before} | ${after}`],
       ['影の種類が変わらない', type === L.renderer.shadowMap.type, type],
       ['戻した段で NaN が無い', L.nanCheck() === 0, ''],
-      ['プログラムの総数 ≤ 60', Math.max(...progs) <= 60, progs.join(',')],
+      /* 上限は quality.js の NG_PROGRAM_BUDGET（統合者の決定：total 90・1 モジュール 6） */
+      ['プログラムの総数 ≤ 90（段の往復の後も）', Math.max(...progs) <= 90, progs.join(',')],
+      ['1 モジュールのプログラム ≤ 6', Object.entries(L.programAudit().byModule).every(([id, n]) => id === 'game' || id === 'core' || n <= 6), JSON.stringify(L.programAudit().byModule)],
     ];
   });
 
