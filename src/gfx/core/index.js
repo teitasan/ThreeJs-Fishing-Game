@@ -132,6 +132,10 @@ export class Gfx {
     this.frame.set(NG.EXPO, 1, 1, 0, 0);
     /* スタブは renderer 無しで作れる（sky の producer は init 前でも動く） */
     this._skyStub = STUBS.sky(this._ctx());
+    /* 代わりの producer は別の id で数える（sky モジュールが無効化されても、こちらは生き残る） */
+    this._skyFallback = { id: 'sky-fallback', produce: (input) => this._skyStub.produce(input) };
+    /** 無効化したモジュールをスタブで立て直した回数（スタブ自身の作り直しは 1 セッション 1 回まで） */
+    this._restarts = new Map();
     this.safety.onDisable = (id) => this._onModuleDisabled(id);
     this.quality.onQuality((tier, profile) => this._applyQuality(tier, profile));
     this._modulesLoading = this._importModules();
@@ -294,17 +298,25 @@ export class Gfx {
     for (const m of this.modules.values()) this.safety.guard(m, method, ...args);
   }
 
-  /* 3 回投げたモジュール：root を隠す。sky / post はスタブへ差し戻す */
+  /* 3 回投げたモジュール：root を隠し、スタブで立て直す（水面・地形・空が消えるとゲームが読めない）。
+     担当者の実装が落ちたらスタブへ差し戻す。スタブ自身が落ちたときも 1 回だけ新しいスタブで作り直す
+     （同じ不具合なら次も落ちるので、それ以上は繰り返さず、隠したままにする） */
   _onModuleDisabled(id) {
     const m = this.modules.get(id);
     if (m) m.root.visible = false;
-    if (REQUIRED.has(id) && m && !m._ngStub) {
-      this.modules.delete(id);
-      this.services.reset(id);
-      this.safety.disabled.delete(id);
-      this.safety.strikes.delete(id);
-      this._startModule(id, null, null);
-    }
+    if (!m || !STUBS[id]) return;
+    const n = this._restarts.get(id) || 0;
+    if (m._ngStub && n >= 1) return;
+    this._restarts.set(id, n + 1);
+    this.modules.delete(id);
+    try { m.dispose(); } catch (e) { /* 落ちたモジュールの後片付けで落とさない */ }
+    this.services.reset(id);
+    this.safety.disabled.delete(id);
+    this.safety.strikes.delete(id);
+    /* post の P7 は guardPass でも数えている。止まっていたら新しい post で生き返らせる */
+    if (id === 'post') { this.safety.deadPasses.delete('post'); this.safety.passFails.delete('post'); }
+    console.warn(`[ng] モジュール ${id} をスタブで立て直す（${m._ngStub ? 'スタブの作り直し' : '担当者の実装から差し戻し'}）`);
+    this._startModule(id, null, null);
   }
 
   /* シェーダが落ちたモジュール：次のフレームで Lambert の代替へ */
@@ -366,7 +378,7 @@ export class Gfx {
     this.wind.setState(this._hour, this._weather.cloud, this._weather.rain, this._envTime);
     const sky = this._skyProducer();
     const input = { ...i, dt, envTime: this._envTime, camera: cam, weather: this._weather };
-    const res = this.safety.guard(sky, 'produce', input) || this.safety.guard(this._skyStub, 'produce', input);
+    const res = (sky !== this._skyStub && this.safety.guard(sky, 'produce', input)) || this.safety.guard(this._skyFallback, 'produce', input);
     if (!res) return null;
     const kd = res.keyDir;
     this._keyDir.set(kd[0], kd[1], kd[2]);
@@ -475,6 +487,23 @@ export class Gfx {
     this.shadows.configure(profile);
     this.pipeline?.setQuality(tier);
     this._each('setQuality', tier, profile);
+    this._releaseStalePrograms();
+  }
+
+  /* 段の切り替えで古い段のプログラムを手放す。ngExtendStandard の鍵には段が入るので、three は
+     マテリアルごとに «前の段のプログラム» を持ち続ける（low → mid → high → mid で 2 倍近くに増える）。
+     dispose はマテリアルの GL 側の状態だけを捨てる（テクスチャや uniform はそのまま、次の描画で組み直す） */
+  _releaseStalePrograms() {
+    if (!this.renderer) return;
+    const seen = new Set();
+    this.scene.traverse((o) => {
+      const m = o.material;
+      if (!m || Array.isArray(m) || seen.has(m) || !m.userData?.ngTiered) return;
+      seen.add(m);
+      for (const x of [m, m.userData.ngDepth, m.userData.ngDistance]) {
+        try { x?.dispose(); } catch (e) { /* 片付けで落とさない */ }
+      }
+    });
   }
 
   /**

@@ -5,7 +5,7 @@
    - prepare / renderReflection の冪等（同じフレームで 2 回呼んでも描画の回数が増えない）
    - late 物体（ゲームの半透明）の visible の退避と復元、ライトの layers.enableAll
    - 品質の切り替え（high → mid → low → high）でライトの数・castShadow・影の種類が変わらない
-   - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化
+   - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化してスタブで立て直す
    - WebGL の文脈の喪失と復帰：喪失中のフレームが例外にならず、復帰後に NaN の無い絵に戻る
    - サンプラーの上限（fragment ≤ 12・vertex ≤ 4）と全プログラムのリンク、本物の createFishMaterial の caustics
    すべての判定を console に PASS / FAIL で出し、FAIL があれば終了コード 1
@@ -94,11 +94,11 @@ export default async function (h) {
     try { L.tick(5); } catch (e) { errors++; }
     const out = [
       ['注入した例外でフレームが止まらない', errors === 0, errors],
-      ['3 回投げた water は無効化される', g.safety.disabled.has('water') && w.root.visible === false, [...g.safety.disabled].join(',')],
-      ['trees も無効化される', g.safety.disabled.has('trees'), ''],
+      /* 3 回で無効化 → 隠して外し、新しいスタブで立て直す（index.js の _onModuleDisabled） */
+      ['3 回投げた water は外されてスタブで立て直される', w.root.visible === false && g.modules.get('water') !== w && g._restarts.get('water') === 1, [...g.safety.disabled].join(',')],
+      ['trees も同じ', g.modules.get('trees') !== t && g._restarts.get('trees') === 1, ''],
     ];
     w.update = origU; t.prepare = origP;
-    for (const id of ['water', 'trees']) { g.safety.disabled.delete(id); g.safety.strikes.delete(id); g.modules.get(id).root.visible = true; }
     L.tick(2);
     return out;
   });

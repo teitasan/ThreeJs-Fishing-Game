@@ -88,6 +88,8 @@ export function ngExtendStandard(mat, spec) {
   mat.customProgramCacheKey = () => `ng:${spec.key}:${ngExtendContext.tier}${defTag}`;
   mat.userData.ngModule = module;
   mat.userData.ngKey = spec.key;
+  /* プログラムの鍵に段が入る印。段を替えたら gfx が古い段のプログラムを手放す（_releaseStalePrograms） */
+  mat.userData.ngTiered = true;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, shared, extra);
     if (spec.hfShadow && ngExtendContext.shadowUniforms) Object.assign(shader.uniforms, ngExtendContext.shadowUniforms);
