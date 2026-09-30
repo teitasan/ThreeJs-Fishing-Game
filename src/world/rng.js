@@ -40,3 +40,20 @@ export const hash01 = (s, i, j) => hashCell(s, i, j) / 4294967296;
 
 /** セルごとの乱数列 */
 export const cellRng = (s, i, j) => makeRng(hashCell(s, i, j));
+
+/**
+ * cellRng と同じ列を、閉包を作り直さずに引く（配置の内側のループで 30 万回呼ぶので GC を避ける）。
+ *   const rng = cellSeq();  rng.reset(s, i, j);  rng()
+ */
+export function cellSeq() {
+  let a = 0;
+  const f = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  f.reset = (s, i, j) => { a = hashCell(s, i, j); return f; };
+  return f;
+}

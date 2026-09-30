@@ -85,8 +85,12 @@ export class Terrain {
     /* ---- 高さ場（Worker）と描画の初期化 ---- */
     this.grids = null;
     this._heightTex = null;
-    this._gridsPromise = buildHeightGrids(this.lake, { resolvedSeed: this.lake.seed, workers: 4 })
-      .then((g) => { this.grids = g; return g; })
+    /* opts.grids：作り済みの格子（か、その Promise）を渡せる。false で作らない（Node のテスト用） */
+    const gridsSrc = opts.grids === false ? Promise.resolve(null)
+      : opts.grids ? Promise.resolve(opts.grids)
+        : buildHeightGrids(this.lake, { resolvedSeed: this.lake.seed, workers: 4 });
+    this._gridsPromise = gridsSrc
+      .then((g) => { this.grids = g || null; return this.grids; })
       .catch((e) => { warnOnce('高さ場の格子を作れませんでした', e); return null; });
     const gfx = this.gfx;
     let attach = null;

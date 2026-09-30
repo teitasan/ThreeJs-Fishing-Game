@@ -24,7 +24,7 @@ import { SPECIES, SPECIES_IDS, VARIANTS, trunkCollider } from './species.js';
 import { makeQueries } from './queries.js';
 import { makeDock, dockFixtures, distToDock } from './dock.js';
 import { makeEcology, SP } from './ecology.js';
-import { stream, cellRng, hash01, mulberry32 } from './rng.js';
+import { stream, cellSeq, hash01, mulberry32 } from './rng.js';
 import { fnv1aWords } from './heightgrid.js';
 
 const TAU = Math.PI * 2;
@@ -77,15 +77,15 @@ export function isEdge(x, z, q) {
 function makeShoreTable(lake, N = 1440) {
   const t = new Float64Array(N + 1);
   for (let k = 0; k <= N; k++) t[k] = lake.shoreAtAngle((k / N) * TAU);
-  let max = 0;
-  for (let k = 0; k < N; k++) max = Math.max(max, t[k]);
+  let max = 0, min = Infinity;
+  for (let k = 0; k < N; k++) { max = Math.max(max, t[k]); min = Math.min(min, t[k]); }
   const at = (x, z) => {
     const a = Math.atan2(z, x);
     const f = ((a / TAU) % 1 + 1) % 1 * N;
     const k = Math.floor(f);
     return t[k] + (t[k + 1] - t[k]) * (f - k);
   };
-  return { t, N, at, max };
+  return { t, N, at, max, min };
 }
 
 /**
@@ -119,6 +119,16 @@ function makeBand(shore) {
   };
 }
 
+/**
+ * セルの中心が半径 [rIn, rOut] の輪（±1.5 セルの余裕）から外れていれば true。
+ * 候補点はセルの中にあるので、これで落ちるセルは後段の厳密な判定でも必ず落ちる
+ * （乱数を引く前に捨てて、格子の走査を安くする）
+ */
+const outsideRing = (i, j, C, rIn, rOut) => {
+  const rc = Math.hypot((i + 0.5) * C, (j + 0.5) * C);
+  return rc < rIn - 1.5 * C || rc > rOut + 1.5 * C;
+};
+
 /* SoA を組む小道具 */
 function soa(fields) {
   const cols = Object.fromEntries(fields.map((f) => [f, []]));
@@ -133,6 +143,37 @@ function soa(fields) {
   };
 }
 
+/**
+ * 汀線に沿った空白を埋める。cand は {a: 角度, r: 半径, keep} の列（格子の順）。
+ * 残した株どうしの間（汀線に沿った弧長）が maxGap を超えるところで、間引かれた候補を
+ * step 以上の間隔で拾い直す。候補の無い所（桟橋の回廊・急な岸）は空白のまま
+ */
+function fillReedGaps(cand, maxGap, step) {
+  const N = cand.length;
+  if (!N) return;
+  const order = cand.map((c, i) => i).sort((i, j) => cand[i].a - cand[j].a || i - j);
+  const A = (k) => cand[order[k % N]].a + (k >= N ? TAU : 0);
+  let first = -1;
+  for (let k = 0; k < N; k++) if (cand[order[k]].keep) { first = k; break; }
+  if (first < 0) { cand[order[0]].keep = true; first = 0; }
+  /* 元の «残した株» の次の位置（2 周ぶんの添字） */
+  const nextKept = new Int32Array(2 * N);
+  let nk = 4 * N;
+  for (let k = 2 * N - 1; k >= 0; k--) {
+    if (cand[order[k % N]].keep) nk = k;
+    nextKept[k] = nk;
+  }
+  let last = first;
+  for (let k = first + 1; k < first + N; k++) {
+    const c = cand[order[k % N]];
+    if (c.keep) { last = k; continue; }
+    const nx = nextKept[k];
+    const span = ((nx < 4 * N ? A(nx) : A(first) + TAU) - A(last)) * c.r;
+    const sinceLast = (A(k) - A(last)) * c.r;
+    if (span > maxGap && sinceLast >= step) { c.keep = true; last = k; }
+  }
+}
+
 export const TREE_FIELDS = ['x', 'z', 'y', 'h', 'species', 'variant', 'rot', 'lean', 'rank', 'collide', 'mustDraw', 'zone', 'r', 'top', 'bandD'];
 
 /**
@@ -140,22 +181,28 @@ export const TREE_FIELDS = ['x', 'z', 'y', 'h', 'species', 'variant', 'rot', 'le
  * @param {object} [q] makeQueries(lake)
  */
 export function buildPlacement(lake, q = makeQueries(lake)) {
-  const t0 = (typeof performance !== 'undefined' ? performance : Date).now();
+  const clock = typeof performance !== 'undefined' ? performance : Date;
+  const t0 = clock.now();
+  const sections = {};
+  let tMark = t0;
+  const mark = (name) => { const t = clock.now(); sections[name] = t - tMark; tMark = t; };
   const seed = lake.seed >>> 0;
   const dock = makeDock(lake);
   const fx = dockFixtures(dock);
   const sp = dock.spawnPos;
   const eco = makeEcology(lake, q);
+  const seq = cellSeq();
   const shore = makeShoreTable(lake);
   const bandDist = makeBand(shore);
   const nearDock = (x, z, r) => distToDock(dock, x, z) < r;
   const nearSpawn = (x, z, r) => (x - sp.x) * (x - sp.x) + (z - sp.z) * (z - sp.z) < r * r;
 
+  mark('setup');
   /* ---------------- 木 ---------------- */
   const trees = soa(TREE_FIELDS);
-  const addTree = (x, z, h, species, variant, height, rot, lean, rank, zone) => {
+  const addTree = (x, z, h, species, variant, height, rot, lean, rank, zone, sr) => {
     const y = h - 0.15;
-    const radialOut = Math.hypot(x, z) - q.shoreRadius(x, z) - WALK_INLAND;
+    const radialOut = Math.hypot(x, z) - sr - WALK_INLAND;
     const bd = bandDist(x, z, radialOut, FAR_GATE + 1);
     const collide = bd <= FAR_GATE ? 1 : 0;
     const c = trunkCollider(species, variant, height, y);
@@ -172,23 +219,25 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     const n = Math.ceil(TREE_R_MAX / C);
     for (let j = -n; j < n; j++) {
       for (let i = -n; i < n; i++) {
-        const rng = cellRng(sT, i, j);
+        if (outsideRing(i, j, C, shore.min + 5, TREE_R_MAX)) continue;
+        const rng = seq.reset(sT, i, j);
         const x = (i + 0.15 + 0.7 * rng()) * C;
         const z = (j + 0.15 + 0.7 * rng()) * C;
         const r = Math.hypot(x, z);
         if (r > TREE_R_MAX || r < shore.at(x, z) + 1) continue;
-        if (r < q.shoreRadius(x, z) + 5) continue;
         if (eco.plantationAt(x, z)) continue;   // 植林区画は列植の格子が受け持つ
         if (nearDock(x, z, 3.6) || nearSpawn(x, z, 6)) continue;
-        /* 安い判定（ノイズ）を先に。heightAt と slopeAt が配置の費用の大半 */
+        /* 安い判定（ノイズ）を先に。heightAt と slopeAt・shoreRadius が配置の費用の大半 */
         if (eco.forestGap(x, z) < -0.07) continue;   // 空き地
         const u0 = rng();
         if (eco.forestCluster(x, z) < -0.14 && u0 > 0.38) continue;
+        const sr = q.shoreRadius(x, z);
+        if (r < sr + 5) continue;
         const h = q.heightAt(x, z);
         if (h < 1.6) continue;
         const slope = q.slopeAt(x, z);
         if (slope > 0.78) continue;
-        const shoreD = r - q.shoreRadius(x, z);
+        const shoreD = r - sr;
         const pick = eco.pickNatural(x, z, h, slope, shoreD, rng(), rng());
         const S = SPECIES[SPECIES_IDS[pick.species]];
         const variant = Math.min(VARIANTS - 1, Math.floor(rng() * VARIANTS));
@@ -207,9 +256,10 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
         } else {
           lean = ul * 0.045;
         }
-        addTree(x, z, h, pick.species, variant, height, rot, lean, hash01(sR, i, j), pick.zone);
+        addTree(x, z, h, pick.species, variant, height, rot, lean, hash01(sR, i, j), pick.zone, sr);
       }
     }
+    mark('trees');
     /* 植林：区画ごとの列植（同齢・等間隔）。遠景で «四角い暗い帯» に読ませる */
     for (const p of eco.plantations) {
       const sP = stream(seed, `trees:plant:${p.id}`);
@@ -218,7 +268,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
       const na = Math.floor(p.w / p.treeGap / 2), nb = Math.floor(p.d / p.rowGap / 2);
       for (let b = -nb; b <= nb; b++) {
         for (let a = -na; a <= na; a++) {
-          const rng = cellRng(sP, a, b);
+          const rng = seq.reset(sP, a, b);
           const u = a * p.treeGap + (rng() - 0.5) * 0.6;
           const v = b * p.rowGap + (rng() - 0.5) * 0.4;
           const x = p.cx + u * c - v * s;
@@ -226,7 +276,8 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
           const r = Math.hypot(x, z);
           if (r > TREE_R_MAX) continue;
           if (rng() < 0.07) continue;   // 枯れ・間伐の欠け
-          if (r < q.shoreRadius(x, z) + 5) continue;
+          const sr = q.shoreRadius(x, z);
+          if (r < sr + 5) continue;
           const h = q.heightAt(x, z);
           if (h < 1.6) continue;
           if (q.slopeAt(x, z) > 0.78) continue;
@@ -235,12 +286,13 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
           const S = SPECIES[SPECIES_IDS[species]];
           const variant = Math.min(VARIANTS - 1, Math.floor(rng() * VARIANTS));
           const height = S.heights[1] * p.age * lerp(0.92, 1.06, rng()) * altScale(h, 0.7);
-          addTree(x, z, h, species, variant, height, rng() * TAU, rng() * 0.02, hash01(sPR, a, b), 2);
+          addTree(x, z, h, species, variant, height, rng() * TAU, rng() * 0.02, hash01(sPR, a, b), 2, sr);
         }
       }
     }
   }
 
+  mark('plantations');
   /* ---------------- 大岩 ---------------- */
   const boulders = [];
   {
@@ -250,7 +302,8 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     const n = Math.ceil(TREE_R_MAX / C);
     for (let j = -n; j < n; j++) {
       for (let i = -n; i < n; i++) {
-        const rng = cellRng(sK, i, j);
+        if (outsideRing(i, j, C, shore.min - 30, TREE_R_MAX)) continue;
+        const rng = seq.reset(sK, i, j);
         const x = (i + 0.1 + 0.8 * rng()) * C;
         const z = (j + 0.1 + 0.8 * rng()) * C;
         const r = Math.hypot(x, z);
@@ -297,6 +350,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     }
   }
 
+  mark('boulders');
   /* ---------------- 玉石（当たり無し） ---------------- */
   const cobbles = [];
   {
@@ -307,7 +361,8 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     const n = Math.ceil(lim / C);
     for (let j = -n; j < n; j++) {
       for (let i = -n; i < n; i++) {
-        const rng = cellRng(sK, i, j);
+        if (outsideRing(i, j, C, shore.min - 20, shore.max + 132)) continue;
+        const rng = seq.reset(sK, i, j);
         const x = (i + 0.1 + 0.8 * rng()) * C;
         const z = (j + 0.1 + 0.8 * rng()) * C;
         const r = Math.hypot(x, z);
@@ -331,6 +386,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     }
   }
 
+  mark('cobbles');
   /* ---------------- 藪の輪（歩ける帯の境目） ----------------
      見えない壁で止めるより «茂みで進めない» ほうが納得できる。
      shoreRadius + 72 − 5 〜 +4 の帯を、汀線に沿って 0.6–1.1m 刻みで歩く */
@@ -354,38 +410,51 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     }
   }
 
-  /* ---------------- ヨシ・マコモ（葦際） ---------------- */
+  mark('thicket');
+  /* ---------------- ヨシ・マコモ（葦際） ----------------
+     群落はノイズで塊にするが、縁に 10m を超える空白は作らない（図鑑の «葦際» が
+     どこでも見つかるように）。間引かれた候補を汀線に沿って拾い直して埋める */
   const reeds = [];
   {
     const C = CELLS.reed;
     const sK = stream(seed, 'reeds');
     const sR = stream(seed, 'reeds:rank');
     const n = Math.ceil((shore.max + 16) / C);
+    const cand = [];
     for (let j = -n; j < n; j++) {
       const z0 = (j + 0.5) * C;
       for (let i = -n; i < n; i++) {
+        if (outsideRing(i, j, C, shore.min - 13.5, shore.max + 4.5)) continue;
         const xc = (i + 0.5) * C;
         const rc = Math.hypot(xc, z0);
-        if (Math.abs(rc - shore.at(xc, z0)) > 13.5) continue;
-        const rng = cellRng(sK, i, j);
+        /* 葦際は水の中（depth > 0.05）。実際の水際は shoreRadius から最大 3.3m ずれる */
+        const dr = rc - shore.at(xc, z0);
+        if (dr < -13.5 || dr > 4.5) continue;
+        const rng = seq.reset(sK, i, j);
         const x = (i + 0.1 + 0.8 * rng()) * C;
         const z = (j + 0.1 + 0.8 * rng()) * C;
         if (!isEdge(x, z, q)) continue;
         if (nearDock(x, z, 6) || nearSpawn(x, z, 6)) continue;
         const clump = lake.noise.fbm(x * 0.042 + 11.3, z * 0.042 - 11.3, 2);
-        if (rng() > 0.2 + 0.8 * smooth(-0.3, 0.3, clump)) continue;
+        const keep = rng() <= 0.2 + 0.8 * smooth(-0.3, 0.3, clump);
         const depth = q.depthAt(x, z);
         const mk = lake.noise.fbm(x * 0.05 - 37.7, z * 0.05 + 37.7, 2);
         const kind = depth < 0.7 && mk > 0.1 ? 1 : 0;   // 0 ヨシ / 1 マコモ（浅い所の群落）
-        reeds.push({
-          x, z, y: -depth, depth, kind,
-          height: (kind ? lerp(1.0, 1.8, rng()) : lerp(1.7, 3.1, Math.pow(rng(), 1.35))) + depth * 0.3,
-          density: 0.35 + 0.65 * smooth(-0.3, 0.5, clump), rot: rng() * TAU, rank: hash01(sR, i, j),
+        cand.push({
+          a: Math.atan2(z, x), r: Math.hypot(x, z), keep,
+          item: {
+            x, z, y: -depth, depth, kind,
+            height: (kind ? lerp(1.0, 1.8, rng()) : lerp(1.7, 3.1, Math.pow(rng(), 1.35))) + depth * 0.3,
+            density: 0.35 + 0.65 * smooth(-0.3, 0.5, clump), rot: rng() * TAU, rank: hash01(sR, i, j),
+          },
         });
       }
     }
+    fillReedGaps(cand, 9.5, 4.5);
+    for (const c of cand) if (c.keep) reeds.push(c.item);
   }
 
+  mark('reeds');
   /* ---------------- 睡蓮（入り江の浅場の群落） ---------------- */
   const lilies = [];
   {
@@ -395,10 +464,11 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     const n = Math.ceil((shore.max + 4) / C);
     for (let j = -n; j < n; j++) {
       for (let i = -n; i < n; i++) {
+        if (outsideRing(i, j, C, shore.min - 28, shore.max + 4)) continue;
         const xc = (i + 0.5) * C, zc = (j + 0.5) * C;
         const dA = shore.at(xc, zc) - Math.hypot(xc, zc);
-        if (dA < -4 || dA > 45) continue;
-        const rng = cellRng(sK, i, j);
+        if (dA < -4 || dA > 28) continue;
+        const rng = seq.reset(sK, i, j);
         const x = (i + 0.1 + 0.8 * rng()) * C;
         const z = (j + 0.1 + 0.8 * rng()) * C;
         const depth = q.depthAt(x, z);
@@ -416,6 +486,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     }
   }
 
+  mark('lilies');
   /* ---------------- 沈水植物（藻場 = lake.flats） ---------------- */
   const weeds = [];
   {
@@ -430,7 +501,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
         for (let i = i0; i <= i1; i++) {
           const key = i * 65536 + j;
           if (seen.has(key)) continue;
-          const rng = cellRng(sK, i, j);
+          const rng = seq.reset(sK, i, j);
           const x = (i + 0.1 + 0.8 * rng()) * C;
           const z = (j + 0.1 + 0.8 * rng()) * C;
           const dd = Math.hypot(x - f.x, z - f.z);
@@ -451,6 +522,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     });
   }
 
+  mark('weeds');
   /* ---------------- 流木（汀線に打ち上がったもの） ---------------- */
   const driftwood = [];
   {
@@ -468,6 +540,7 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     }
   }
 
+  mark('driftwood');
   const P = {
     seed,
     trees: trees.build(),
@@ -479,8 +552,9 @@ export function buildPlacement(lake, q = makeQueries(lake)) {
     ecology: eco.params,
   };
   P.hash = placementHash(P);
+  mark('hash');
   P.stats = {
-    ms: (typeof performance !== 'undefined' ? performance : Date).now() - t0,
+    ms: clock.now() - t0, sections,
     trees: P.trees.count, treesCollide: countIf(P.trees.collide), boulders: boulders.length, cobbles: cobbles.length,
     thicket: thicket.length, reeds: reeds.length, lilies: lilies.length, weeds: weeds.length, driftwood: driftwood.length,
   };

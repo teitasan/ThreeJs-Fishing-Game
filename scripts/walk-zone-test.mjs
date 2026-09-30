@@ -1,28 +1,28 @@
 /**
  * 歩ける範囲（湖のまわりの帯）の検査。
  *
- * もとは「原点から 460m」で、汀線から 343m・61.3ha を歩けた。ところが
- * 飾ってあるのは下草が +110m、岩が +12m までで、そこから内陸は木が
- * 立っているだけの裸の地面だった。61.3ha を全部飾るより帯に絞るほうが
- * 釣りゲームとして正しい。
+ * もとは「原点から 460m」で、汀線から 343m・61.3ha を歩けた。飾ってあるのは汀線まわりだけで、
+ * 内陸は裸の地面だった。61.3ha を全部飾るより帯に絞るほうが釣りゲームとして正しい。
  *
- * 絞ると副産物として «絶対に近づけない木» が配置時に確定するので、
- * 静的なバケットへ回せる（毎フレームの距離判定にも行列の作り直しにも
- * 乗らないので、遠景の本数を塗りの費用だけで決められる）。
+ * 描画の作り直しで、配置と当たりは src/world/placement.js（シードだけから決まる）に移った。
+ * ここでは game.js の歩行・カメラの文字列と、帯の境目の藪の輪・blockedAt(y) の振る舞いを見る。
  */
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { loadFacades } from './facade-harness/index.mjs';
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
-const terrain = read('src/terrain.js');
 const game = read('src/game.js');
-const trees = read('src/trees.js');
+
+const F = await loadFacades();
+const { THREE, Terrain, WALK_INLAND } = F;
+const { WALK_INLAND: W_PLACEMENT, FAR_GATE } = await import('../src/world/placement.js');
+const { resolveLake } = await import('../src/lakefield.js');
 
 /* --- 帯そのもの --- */
 {
-  const m = terrain.match(/export const WALK_INLAND = (\d+);/);
-  assert.ok(m, 'WALK_INLAND が無い');
-  const w = Number(m[1]);
+  assert.equal(WALK_INLAND, W_PLACEMENT, 'terrain.js と placement の WALK_INLAND が違う');
+  const w = WALK_INLAND;
   assert.ok(w >= 40 && w <= 120, `帯が極端 (${w}m)`);
 
   // 移動判定は «原点から» ではなく «汀線から» で切ること
@@ -32,52 +32,63 @@ const trees = read('src/trees.js');
   // 中を見に行けなくなると困るので、デバッグ中は素通りする
   assert.match(game, /!this\.debug\?\.enabled\s*\n\s*&& Math\.hypot\(nx, nz\)/,
     'デバッグ中も帯で止まってしまう');
-
-  /* 飾りは «帯 ＋ 見通し» を覆うこと。覆えていないと、歩ける場所なのに
-     地面に何も無い一角ができる（これが元の症状） */
-  const ug = terrain.match(/const dist = rr - 8 \+ rng\(\) \* (\d+);/);
-  assert.ok(ug, '下草を撒く帯が読めない');
-  assert.ok(Number(ug[1]) - 8 > w + 40,
-    `下草の帯 ${ug[1]}m が歩ける ${w}m ＋ 見通しに足りない`);
-  // 岩も内陸へ。汀線まわりだけだと林床に何も落ちていない
-  assert.match(terrain, /inward: -8, outward: 130/, '林床の石が無い');
 }
 
-/* --- 境界の見せ方 --- */
-assert.match(terrain, /this\.undergrowthCounts\.thicket = placed;/,
-  '境界に藪が無い（見えない壁だけで止めている）');
-assert.match(terrain, /this\.addObstacle\(x, z, 0\.55, h \+ height \* 0\.8\);/,
-  '藪に当たり判定が無いと «茂みで止まった» ことにならない');
+const lake = resolveLake(123456789).lake;
+const t = new Terrain(new THREE.Scene(), { quality: 'low', lake, grids: false });
+const P = t.placement;
+const shoreD = (x, z) => Math.hypot(x, z) - t.shoreRadius(x, z);
 
-/* --- 遠景を静的に --- */
+/* --- 飾りは «帯 ＋ 見通し» を覆う（歩ける場所なのに地面に何も無い一角を作らない） --- */
 {
-  assert.match(trees, /addFar\(x, y, z, height, kind, variant, ry\)/, 'TreeSet.addFar が無い');
-  assert.match(trees, /buildFar\(\)/, 'TreeSet.buildFar が無い');
-  assert.match(terrain, /this\.treeSet\.addFar\(/, '遠景の木を静的に回していない');
-  assert.match(terrain, /this\.treeSet\.buildFar\(\);/, 'buildFar を呼んでいない');
+  const far = (list) => list.reduce((m, o) => Math.max(m, shoreD(o.x, o.z)), -Infinity);
+  assert.ok(far(P.cobbles) > WALK_INLAND + 40, `林床の石が帯の外まで無い（${far(P.cobbles).toFixed(0)}m）`);
+  assert.ok(far(P.boulders) > WALK_INLAND + 40, `転石が帯の外まで無い（${far(P.boulders).toFixed(0)}m）`);
+  let treesBeyond = 0;
+  for (let i = 0; i < P.trees.count; i++) if (shoreD(P.trees.x[i], P.trees.z[i]) > WALK_INLAND + 40) treesBeyond++;
+  assert.ok(treesBeyond > 1000, `帯の外の森が薄い（${treesBeyond} 本）`);
+}
 
-  /* 近景と遠景で «本数» を分けること。一律に増やすと近景の密度まで上がって、
-     林の中に立ったときの負荷がそのまま増える（移動制限は近景を軽くしない） */
-  assert.match(terrain, /const treeNear = /, '近景の本数が独立していない');
-  assert.match(terrain, /const treeFar = /, '遠景の本数が独立していない');
-  const near = Number(terrain.match(/const treeNear = q === 'low' \? \d+ : q === 'high' \? (\d+)/)[1]);
-  const far = Number(terrain.match(/const treeFar = q === 'low' \? \d+ : q === 'high' \? (\d+)/)[1]);
-  assert.ok(far > near * 2, `遠景を増やす意味が薄い（近 ${near} / 遠 ${far}）`);
+/* --- 境界の見せ方：藪の輪（見えない壁ではなく «茂みで進めない»） --- */
+{
+  const ring = P.thicket;
+  assert.ok(ring.length > 800, `藪の輪が疎ら（${ring.length} 株）`);
+  let maxGap = 0;
+  const ang = ring.map((b) => Math.atan2(b.z, b.x)).sort((a, b) => a - b);
+  for (let i = 0; i < ang.length; i++) {
+    const a0 = ang[i], a1 = i + 1 < ang.length ? ang[i + 1] : ang[0] + Math.PI * 2;
+    maxGap = Math.max(maxGap, (a1 - a0) * (lake.shoreAtAngle(a0) + WALK_INLAND));
+  }
+  assert.ok(maxGap < 12, `藪の輪に ${maxGap.toFixed(1)}m の切れ目がある`);
+  for (const b of ring) {
+    const d = shoreD(b.x, b.z);
+    assert.ok(d >= WALK_INLAND - 5 - 1e-6 && d <= WALK_INLAND + 4 + 1e-6, `藪が帯の境から外れている（${d.toFixed(2)}m）`);
+    assert.equal(b.r, 0.55, '藪の当たり半径');
+    assert.equal(b.collide, 1, '藪に当たり判定が無いと «茂みで止まった» ことにならない');
+  }
+  // 当たりとして積まれていて、実際に止まる
+  const b = ring[Math.floor(ring.length / 3)];
+  assert.ok(t.blockedAt(b.x, b.z, 0.34), '藪の上で止まらない');
+  assert.ok(t.blockedAt(b.x + 0.7, b.z, 0.34), '藪の縁（0.55 + 0.34 の内側）で止まらない');
+}
 
-  /* 静的に回す判定は «短めの距離» で行うこと。
-     汀線は波打っているので、前後の一番外へ張り出した汀線を使って
-     距離を短く見積もる＝静的にする木を減らす方向にしておく。
-     長めに見積もると «近づけるのに遠景のまま» の木ができてしまう */
-  assert.match(terrain, /if \(v > m\) m = v;/, '汀線は窓内の最大を取ること');
-  assert.match(terrain, /const toBand = dist - shoreMaxNear\(ang\) - WALK_INLAND;/);
-  assert.match(terrain, /const FAR_GATE = TREE_LOD_DIST\[TREE_LOD_DIST\.length - 1\] \+ TREE_FADE_BAND \+ 12;/,
-    'クロスフェードの帯ぶんの余裕が無い');
+/* --- 帯の外の木：FAR_GATE の外は当たりを持たない（糸もカメラも届かない） --- */
+{
+  const T = P.trees;
+  let inBand = 0, inBandCollide = 0, farCollide = 0;
+  for (let i = 0; i < T.count; i++) {
+    const d = shoreD(T.x[i], T.z[i]) - WALK_INLAND;
+    if (d < 0) { inBand++; if (T.collide[i]) inBandCollide++; }
+    if (T.bandD[i] > FAR_GATE + 1e-3 && T.collide[i]) farCollide++;
+  }
+  assert.ok(inBand > 500, `帯の中の木が少ない（${inBand}）`);
+  assert.equal(inBandCollide, inBand, '帯の中の木はすべて当たりを持つ');
+  assert.equal(farCollide, 0, 'FAR_GATE の外の木が当たりを持っている');
 }
 
 /* 追従カメラの当たり判定。
-   pivot から後ろへ引くだけだと、木を背にして立ったときカメラが幹の «中» へ
-   入る。手前の面はカリングされるので向こう側の内壁が見えて、幹が凹んで
-   見える（実際にそう報告された）。木の当たり判定をそのまま使って止める。 */
+   pivot から後ろへ引くだけだと、木を背にして立ったときカメラが幹の «中» へ入る。
+   木の当たり判定をそのまま使って止める。 */
 {
   assert.match(game, /const clear = this\._camClear\(pivot, want\);/,
     '追従カメラが背後の物を見ていない');
@@ -86,13 +97,17 @@ assert.match(terrain, /this\.addObstacle\(x, z, 0\.55, h \+ height \* 0\.8\);/,
   // 足元の藪でカメラが押されないよう、高さを見て弾く
   assert.match(game, /CAM_RADIUS, pivot\.y \+ dy \* t\)/,
     'カメラの当たり判定に高さを渡していない');
-  assert.match(terrain, /blockedAt\(x, z, rad = 0\.32, y\) \{/,
-    'blockedAt が高さを取れない');
-  assert.match(terrain, /if \(y !== undefined && o\[i \+ 3\] < y\) continue;/,
-    '高さより低い障害物を弾いていない');
   // 歩く判定は高さを見ない（これまでどおり）
   assert.match(game, /this\.terrain\.blockedAt\(nx, nz, PLAYER_RADIUS\)/,
     '歩く判定に高さが混ざっている');
+
+  /* blockedAt(y)：その高さより低い障害物は弾く（藪の上端は h + 0.8·height） */
+  const b = P.thicket[7];
+  assert.ok(t.blockedAt(b.x, b.z, 0.3, b.top - 0.05), '上端より下の高さで藪を無視している');
+  assert.ok(!t.blockedAt(b.x, b.z, 0.3, b.top + 0.05) || t.obstacleTopAt(b.x, b.z) > b.top + 0.05,
+    '上端より上の高さなのに藪で止まる');
+  assert.ok(t.blockedAt(b.x, b.z, 0.3), '高さを渡さないときは藪で止まる');
 }
 
+await t.ready;
 console.log('walk-zone-test: ok');
