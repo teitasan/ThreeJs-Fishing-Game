@@ -1,15 +1,25 @@
 /* ===========================================================
-   空・太陽・時間帯・天候
+   Environment ファサード：時間帯・天候・光のリグ
+   -----------------------------------------------------------
+   空・雲・大気の «見た目» は src/gfx の sky モジュールが描く。ここは
+   ゲームと約束した値（契約 §4.1）だけを持つ：
+     - WEATHERS（サーバーの weather.js と同じ値。1 バイトも変えない）
+     - 天候の状態機械（旧 sky.js:317-334 の逐語移植。マルチでは上書きされる）
+     - 太陽の軌道（旧式：a = ((h−6)/24)·2π、sunDir = normalize(cos a, sin a, 0.34)）
+       nightAmount = smoothstep(0.08, −0.16, sunDir.y)、月 = −sunDir
+     - keyDir（昼は太陽・夜は月。切り替えは旧版と同じ «強い方»）
+     - damp（cloud λ0.4・rain λ0.35、実秒）。{instant:true} で即時
+     - 光のリグ（DirectionalLight 1 + LightProbe 1 + PointLight 1）を «起動時に» 作って
+       core に渡す。ライト数と castShadow を実行中に変えると全マテリアルが再コンパイルされる
+     - scene.fog は THREE.Fog のまま（USE_FOG を立てるため。near/far は媒質の双子から毎フレーム）
+   core（Core-A）が居ない・例外を出す場合でも、旧版の色と霧の式で動き続ける。
    =========================================================== */
 import * as THREE from 'three';
-import { COMMON_GLSL } from './shaders.js?v=20260830-zone5';
 import { clamp01, lerp, smoothstep, rand, TAU, damp } from './util.js?v=20260830-zone5';
+import { createGfx } from './gfx/core/index.js';
 
-/* 時刻ごとの色キーフレーム（hour, 天頂色, 地平色, 太陽色, 環境光係数） */
-/* 夜の値は «常に満月» の世界設定に合わせて現実より大きく持ち上げてある。
-   月明かりの照度は実際には満月でも太陽の 1/40 万しかないので、現実どおりに
-   すると «何も見えない画面» にしかならない。ここでは «青く、影が柔らかく、
-   彩度が低い» という月夜の見え方の特徴だけ残して、光量は昼の半分ほどに置く */
+/* 時刻ごとの色キーフレーム（旧 sky.js と同じ値）。core の sky モジュールが色を返さないときの
+   代わりと、keyDir の «太陽か月か» の判定（dir 列）に使う */
 const KEYS = [
   { h: 0.0, zen: 0x0d2244, hor: 0x1a3055, sun: 0x16253c, amb: 0.38, dir: 0.05 },
   { h: 4.2, zen: 0x122a4c, hor: 0x223a60, sun: 0x2c3550, amb: 0.40, dir: 0.09 },
@@ -30,14 +40,23 @@ export const WEATHERS = {
   rain: { key: 'rain', name: '雨', icon: 'weather-rain', cloud: 0.95, rain: 0.85, bite: 1.3, weight: 22 },
 };
 
-/* 満月の色と強さ。実際の月光は太陽光を反射しただけなので «灰色» に近いが、
-   青く寄せておくと «同じ明るさでも夜に見える»。強さは真昼の 3.3 に対して
-   半分ほど。これでも現実の満月より 5 桁明るい */
-const MOON_COLOR = new THREE.Color(0x9fb6e8);
+/* 旧版の月の強さ（keyDir の判定だけに使う。実際の照度は ng 単位で sky モジュールが決める） */
 const MOON_INTENSITY = 1.7;
+const MOON_COLOR = new THREE.Color(0x9fb6e8);
+/** 灯籠の色（2200K の黒体。sRGB で書き、three が線形へ直す） */
+const LAMP_COLOR = 0xffa64d;
 
 const c1 = new THREE.Color();
 const c2 = new THREE.Color();
+const horizonGate = (y) => smoothstep(-0.02, 0.14, y);
+
+/* フレーム中の例外は «ログを 1 回出して続ける»（MP の同期まで止めない） */
+const warned = new Set();
+function warnOnce(tag, e) {
+  if (warned.has(tag)) return;
+  warned.add(tag);
+  console.warn(`[sky] ${tag}`, e);
+}
 
 export class Environment {
   constructor(scene, opts = {}) {
@@ -45,7 +64,10 @@ export class Environment {
     this.exposure = opts.exposure ?? 1.0;
     this.hour = 9;
     this.sunDir = new THREE.Vector3(0.3, 0.6, 0.4).normalize();
+    /** 影と陰影を作っている光の向き（昼＝太陽、夜＝月）。caustics や光の柱もこれを見る */
+    this.keyDir = new THREE.Vector3(0, 1, 0);
     this.nightAmount = 0;
+    this.moonAmount = 0;
     this.horizonColor = new THREE.Color(0x9fc4de);
     this.zenithColor = new THREE.Color(0x2c72cc);
     this.sunColor = new THREE.Color(0xffffff);
@@ -57,263 +79,76 @@ export class Environment {
     this.weatherTimer = rand(3, 6); // 残りゲーム内時間
     this.cloudiness = this.weather.cloud;
     this.rainIntensity = 0;
+    this._underwater = false;
 
-    this._buildSky();
-    this._buildLights();
-    this._buildRain();
-
-    scene.fog = new THREE.Fog(this.fogColor.getHex(), 90, 620);
-  }
-
-  /* ---------------- 空ドーム ---------------- */
-  _buildSky() {
-    const geo = new THREE.SphereGeometry(1500, 48, 24);
+    /* 空ドームの uniform の互換。uLinearOut は後処理の持ち主（post）が 1 に保つ */
     this.skyUniforms = {
-      uZenith: { value: new THREE.Color(0x2c72cc) },
-      uHorizon: { value: new THREE.Color(0xd3e8f8) },
-      uSunColor: { value: new THREE.Color(0xffffff) },
-      uSunDir: { value: this.sunDir.clone() },
-      uNight: { value: 0 },
-      uCloud: { value: 0.2 },
-      // 1 = 点星を描く。水面の映り込みを焼くときだけ 0 にする
       uStars: { value: 1 },
+      uLinearOut: { value: 1 },
       uTime: { value: 0 },
       uExposure: { value: this.exposure },
-      uLinearOut: { value: 0 },
     };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.skyUniforms,
-      side: THREE.BackSide,
-      depthWrite: false,
-      vertexShader: /* glsl */ `
-        varying vec3 vDir;
-        void main() {
-          vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        ${COMMON_GLSL}
-        uniform vec3 uZenith, uHorizon, uSunColor, uSunDir;
-        uniform float uNight, uCloud, uTime, uExposure, uLinearOut, uStars;
-        varying vec3 vDir;
+    /* 空と雨の «入れ物»。描くのは sky / weatherfx モジュール。game.js が除外リストに渡す */
+    this.sky = new THREE.Group();
+    this.sky.name = 'env-sky';
+    this.rain = new THREE.Group();
+    this.rain.name = 'env-rain';
+    this.rain.visible = false;
+    scene.add(this.sky, this.rain);
 
-        void main() {
-          vec3 dir = normalize(vDir);
-          float hy = dir.y;
+    this._buildLights();
+    scene.fog = new THREE.Fog(this.fogColor.getHex(), 90, 620);
 
-          /* --- 星の下ごしらえ ---
-             ランベルト正積方位図法。この平面では 1 セルの面積が立体角に
-             比例するので、天頂でも水平でも星の «密度» が変わらない。
-             もとの dir.xz/(|dir.y|+0.25) は天頂と水平で 4 倍も歪んでいた。
-
-             fwidth は «画面 1 ピクセルが何セルぶんか» を返す。星は点光源で、
-             見かけの大きさは距離ではなく目やレンズで決まるから、画面上では
-             どこを向いても同じピクセル数でなければならない。これで割れば
-             図法の歪みごと吸収できる。分岐の中で fwidth を取ると値が
-             保証されないので、ここで先に求めておく */
-          vec2 sUv = dir.xz * sqrt(2.0 / (1.0 + clamp(dir.y, -0.9, 1.0)));
-          vec2 sGrid = sUv * 220.0;
-          float sPx = max(fwidth(sGrid.x), fwidth(sGrid.y));
-
-          // 基本グラデーション
-          float g = pow(clamp(hy, 0.0, 1.0), 0.62);
-          vec3 col = mix(uHorizon, uZenith, g);
-          // 地平線下（湖の向こう）は暗く
-          col *= 1.0 - smoothstep(0.0, -0.16, hy) * 0.55;
-
-          // 太陽
-          float sd = max(dot(dir, uSunDir), 0.0);
-          float disc = smoothstep(0.9994, 0.99975, sd);
-          col += uSunColor * disc * 14.0 * (1.0 - uNight);
-          col += uSunColor * pow(sd, 220.0) * 1.6;
-          col += uSunColor * pow(sd, 9.0) * 0.30;
-          col += uSunColor * pow(sd, 2.2) * 0.09;
-
-          /* --- 月 ---
-             この世界は常に満月。のっぺりした白丸だと «空に開いた穴» に
-             見えるので、海（暗い斑）と縁の減光を入れて球として立たせる。
-             見かけの半径は 2.6°（実物の 10 倍）。空に対して主役なので誇張する */
-          vec3 mdir = -uSunDir;
-          float md = max(dot(dir, mdir), 0.0);
-          /* 円盤内の座標。mdir.z は常に 0.32 前後なので、真上との外積が
-             縮退することはない */
-          const float MOON_R = 0.0447;                  // sin(2.56°)
-          vec3 mU = normalize(cross(mdir, vec3(0.0, 1.0, 0.0)));
-          vec3 mV = cross(mdir, mU);
-          vec2 mp = vec2(dot(dir, mU), dot(dir, mV)) / MOON_R;
-          float mr = length(mp);
-          float moonDisc = smoothstep(1.03, 0.96, mr);
-          // 縁の減光。満月は «真正面から» 照らされているのでほとんど平ら
-          float limb = pow(max(1.0 - mr * mr, 0.0), 0.13);
-          // 海（マリア）
-          float maria = fbm4(mp * 1.3 + vec2(4.7, 1.9));
-          float face = mix(0.42, 1.0, smoothstep(0.30, 0.70, maria));
-          /* 円盤そのものは «白飽和の一歩手前» に置く。ACES は肩が寝ているので、
-             ここを 7.5 まで上げると海の濃淡が 1% しか残らずただの白丸になる */
-          col += vec3(0.99, 0.98, 0.95) * moonDisc * limb * face * 2.3 * uNight;
-          /* 光冠。円盤より «弱く・広く» でなければならない。pow(md, 300) は
-             半値角 3.4° で円盤（半径 2.6°）とほぼ同じ広さなので、ここを
-             円盤より大きくすると円盤の上に白を塗り重ねることになり、
-             せっかくの海が消えてただの白丸に戻る */
-          col += vec3(0.80, 0.86, 1.0) * pow(md, 300.0) * 0.45 * uNight;
-          col += vec3(0.45, 0.55, 0.85) * pow(md, 30.0) * 0.40 * uNight;
-
-          // 星
-          if (uNight > 0.02 && hy > -0.02) {
-            /* --- 天の川 ---
-               中心線は大円（軸を少し傾けた銀河面）。そこからの距離で
-               明るさを決め、暗黒帯（ダストレーン）を 1 本抜く。
-               帯の «濃さ» は星の密度にも渡して、光ってはいるが
-               «数えられる星の集まり» にも見えるようにする */
-            vec3 gal = normalize(vec3(0.42, 1.0, 0.26));
-            float gd = dot(dir, gal);
-            float band = exp(-gd * gd * 30.0);
-            float dust = fbm4(sUv * 6.5 + vec2(3.1, -7.4));
-            // 暗黒帯。中心線からわずかにずらして、ゆらぎを与える
-            float riftD = gd + 0.030 + (fbm4(sUv * 3.1 + 21.0) - 0.5) * 0.055;
-            float rift = 1.0 - 0.62 * exp(-riftD * riftD * 900.0);
-            float milky = band * (0.35 + 0.65 * smoothstep(0.25, 0.75, fbm4(sUv * 13.0 + 11.0)));
-            milky *= mix(0.45, 1.15, dust) * rift;
-
-            /* --- 星 ---
-               1 セルにつき最大 1 個の点を打つ。セルの端に落ちた星が
-               欠けないよう隣まで見る（3x3）。位置は fwidth でピクセルに
-               直してから測るので、どこを向いても同じ大きさになる */
-            float sharp = 1.0 - smoothstep(0.30, 0.75, sPx);
-            /* 大気による減光。低い星ほど暗く、赤くなる。地平線で
-               ばっさり切ると «空に蓋» の縁が見えるので指数で落とす */
-            float airmass = 1.0 / max(hy + 0.07, 0.07);
-            float ext = exp(-(airmass - 1.0) * 0.22);
-            // 満月のそばは空が明るく、暗い星は負ける
-            float wash = 1.0 - 0.55 * pow(max(dot(dir, -uSunDir), 0.0), 6.0);
-            // 低い星ほど大気が揺れて瞬く
-            float twAmp = mix(0.10, 0.62, clamp((airmass - 1.0) * 0.5, 0.0, 1.0));
-            float thr = 1.0 - (0.0075 + milky * 0.055);
-
-            vec3 stars = vec3(0.0);
-            vec2 sBase = floor(sGrid);
-            for (int j = -1; j <= 1; j++) {
-              for (int i = -1; i <= 1; i++) {
-                vec2 c = sBase + vec2(float(i), float(j));
-                float h = hash21(c);
-                if (h < thr) continue;
-                /* 等級。暗い星が圧倒的に多く、明るい星はごくわずか、
-                   という実際の分布に寄せる（一様にすると «粒が均一に
-                   撒かれた紙» になって安っぽく見える） */
-                float mag = 0.10 + 0.90 * pow(hash21(c + 3.7), 3.2);
-                vec2 jit = vec2(hash21(c + 11.3), hash21(c + 29.1)) * 0.6 + 0.2;
-                vec2 d = (sGrid - (c + jit)) / max(sPx, 1e-5);   // ピクセル単位
-                float r2 = dot(d, d);
-                // 芯と、明るい星だけが持つにじみ
-                float core = exp(-r2 * 1.6) + mag * 0.55 * exp(-r2 * 0.30);
-                // いちばん明るい星には十字のにじみ（これがあると «星» に見える）
-                float spike = smoothstep(0.88, 1.0, mag);
-                if (spike > 0.0) {
-                  core += (exp(-abs(d.x) * 0.62 - d.y * d.y * 2.4)
-                         + exp(-abs(d.y) * 0.62 - d.x * d.x * 2.4)) * spike * 0.22;
-                }
-                // 色温度。青白 → 白 → 橙
-                float t = hash21(c + 5.1);
-                vec3 tint = t < 0.60
-                  ? mix(vec3(0.70, 0.81, 1.00), vec3(1.0), smoothstep(0.0, 0.60, t))
-                  : mix(vec3(1.0), vec3(1.00, 0.76, 0.55), smoothstep(0.60, 1.0, t));
-                float tw = 1.0 + twAmp * sin(uTime * (1.6 + fract(h * 37.0) * 2.6) + h * 240.0);
-                stars += tint * core * mag * tw;
-              }
-            }
-            // 減光は色も変える（低い星は赤い）
-            stars *= mix(vec3(1.0), vec3(1.12, 0.84, 0.62), clamp(1.0 - ext, 0.0, 1.0)) * ext;
-            col += stars * 2.6 * sharp * wash * uNight * uStars;
-
-            col += (vec3(0.62, 0.70, 0.92) * milky * 0.30
-                  + vec3(0.85, 0.80, 0.95) * band * rift * 0.12)
-                 * smoothstep(-0.02, 0.22, hy) * uNight;
-          }
-
-          // 雲
-          float above = smoothstep(0.005, 0.30, hy);
-          if (above > 0.001) {
-            vec2 cuv = dir.xz / max(hy, 0.055) * 0.85;
-            cuv += vec2(uTime * 0.010, uTime * 0.004);
-            float f = fbm4(cuv * 0.55);
-            float f2 = vnoise(cuv * 1.6 + 13.7);
-            float shape = f * 0.78 + f2 * 0.22;
-            float cover = smoothstep(0.62 - uCloud * 0.42, 0.90 - uCloud * 0.30, shape);
-            cover *= above;
-
-            float sunUp = clamp(uSunDir.y, 0.0, 1.0);
-            vec3 lit = mix(vec3(0.95, 0.86, 0.78), vec3(1.02, 1.0, 0.98), sunUp);
-            vec3 dark = mix(vec3(0.16, 0.18, 0.24), vec3(0.42, 0.45, 0.52), sunUp);
-            float rim = pow(max(dot(dir, uSunDir), 0.0), 4.0);
-            vec3 cloudCol = mix(dark, lit, clamp(0.35 + shape * 0.7, 0.0, 1.0));
-            cloudCol += uSunColor * rim * 0.5 * (1.0 - uNight);
-            cloudCol *= mix(0.28, 1.0, 1.0 - uNight * 0.8);
-            col = mix(col, cloudCol, cover * 0.92);
-          }
-
-          gl_FragColor = vec4(encodeOut(col, uExposure, uLinearOut), 1.0);
-
-        }
-      `,
-    });
-    this.sky = new THREE.Mesh(geo, mat);
-    this.sky.frustumCulled = false;
-    this.sky.renderOrder = -1000;
-    this.scene.add(this.sky);
+    /* core は湖より前に立てる（ngFrame・チャンクの差し替え・ライトのリグ） */
+    this.gfx = null;
+    try {
+      this.gfx = createGfx({ scene }) || null;
+      this.gfx?.setLightRig?.({ key: this.sun, probe: this.probe, lamp: this.lamp });
+    } catch (e) {
+      warnOnce('core の初期化に失敗、旧版の色と霧で続行します', e);
+      this.gfx = null;
+    }
   }
 
-  /* ---------------- ライト ---------------- */
+  /* ---------------- ライト（起動時に固定） ---------------- */
   _buildLights() {
+    /* 平行光 1 本を «昼は太陽・夜は月» として使い回す。影を落とす平行光が 2 本になると
+       シャドウマップがもう 1 枚要るうえ、castShadow を切り替えた瞬間に全マテリアルが
+       組み直される。月は太陽のちょうど反対側にあって同時に空へ出ることが無い */
     this.sun = new THREE.DirectionalLight(0xffffff, 3.0);
+    this.sun.name = 'ng-key';
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     const cam = this.sun.shadow.camera;
-    cam.near = 1;
-    cam.far = 340;
-    cam.left = -60; cam.right = 60; cam.top = 60; cam.bottom = -60;
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.06;
-    /** 影と陰影を作っている光の向き（昼＝太陽、夜＝月）。コースティクスや
-        光の柱もこれを見る */
-    this.keyDir = new THREE.Vector3(0, 1, 0);
-    this.moonAmount = 0;
+    cam.near = 0.5;
+    cam.far = 1500;
+    cam.left = -40; cam.right = 40; cam.top = 40; cam.bottom = -40;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.04;
     this.sunTarget = new THREE.Object3D();
     this.sun.target = this.sunTarget;
-    this.scene.add(this.sun, this.sunTarget);
-
-    /* 月は «別のライト» にしない。影を落とす平行光が 2 本になると
-       シャドウマップがもう 1 枚要るうえ、castShadow を切り替えた瞬間に
-       three がマテリアルを組み直して画面が止まる。月は太陽のちょうど
-       反対側にあって同時に空へ出ることが無いので、上の平行光 1 本を
-       «昼は太陽・夜は月» として向きと色ごと使い回す */
-    this.hemi = new THREE.HemisphereLight(0xa9ccea, 0x3b4a3a, 0.9);
-    this.scene.add(this.hemi);
+    this.sun.layers.enableAll();
+    /* 空の照度（SH L2）。sky モジュールが 4Hz で射影して書く */
+    this.probe = new THREE.LightProbe();
+    this.probe.name = 'ng-probe';
+    this.probe.layers.enableAll();
+    /* 灯籠。昼は intensity 0 のまま «存在だけ» させる（夜に増やすと再コンパイルになる） */
+    this.lamp = new THREE.PointLight(LAMP_COLOR, 0, 26, 2);
+    this.lamp.name = 'ng-lamp';
+    this.lamp.position.set(0, -1000, 0);
+    this.lamp.layers.enableAll();
+    this.scene.add(this.sun, this.sunTarget, this.probe, this.lamp);
   }
 
-  /* ---------------- 雨 ---------------- */
-  _buildRain() {
-    this.rainMax = 1800;
-    this.rainCount = 1400;
-    const pos = new Float32Array(this.rainMax * 6);
-    this.rainParticles = new Float32Array(this.rainMax * 3);
-    for (let i = 0; i < this.rainMax; i++) {
-      this.rainParticles[i * 3] = rand(-55, 55);
-      this.rainParticles[i * 3 + 1] = rand(-8, 46);
-      this.rainParticles[i * 3 + 2] = rand(-55, 55);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xd2e6f2, transparent: true, opacity: 0.42, depthWrite: false, fog: true,
-    });
-    this.rain = new THREE.LineSegments(geo, mat);
-    this.rain.frustumCulled = false;
-    this.rain.visible = false;
-    this.scene.add(this.rain);
+  get underwater() { return this._underwater; }
+  /** 水中フォグ・環境光の上乗せ・雨の非表示（game._setUnderwaterFx が切り替える） */
+  set underwater(on) {
+    this._underwater = !!on;
+    try { this.gfx?.setUnderwater?.(this._underwater); } catch (e) { warnOnce('setUnderwater', e); }
+    if (this._underwater) this.rain.visible = false;
   }
 
-  /** 天候の進行（dtHours: 経過ゲーム内時間） */
+  /** 天候の進行（dtHours: 経過ゲーム内時間）。旧 sky.js:317-334 と同じ抽選 */
   tickWeather(dtHours) {
     this.weatherTimer -= dtHours;
     if (this.weatherTimer <= 0) {
@@ -333,31 +168,27 @@ export class Environment {
     return null;
   }
 
-  setWeather(key) {
+  /**
+   * 天候を切り替える（不正なキーは無視）。見た目は damp で追従する。
+   * instant: true で雲量・雨量を即座に合わせる（撮影ハーネス用）
+   */
+  setWeather(key, { instant = false } = {}) {
     if (WEATHERS[key]) {
       this.weather = WEATHERS[key];
       this.weatherTimer = rand(3, 6);
+      if (instant) {
+        this.cloudiness = this.weather.cloud;
+        this.rainIntensity = this.weather.rain;
+      }
     }
   }
 
-  /** 1フレーム更新 */
+  /** 1 フレーム更新。dt = 0 でポーズ（damp も止まる） */
   update(dt, hour, camera, focus) {
     this.hour = hour;
     const t = ((hour % 24) + 24) % 24;
 
-    // --- キーフレーム補間 ---
-    let i = 0;
-    while (i < KEYS.length - 2 && KEYS[i + 1].h <= t) i++;
-    const A = KEYS[i], B = KEYS[i + 1];
-    const f = clamp01((t - A.h) / (B.h - A.h));
-
-    this.zenithColor.copy(c1.setHex(A.zen)).lerp(c2.setHex(B.zen), f);
-    this.horizonColor.copy(c1.setHex(A.hor)).lerp(c2.setHex(B.hor), f);
-    this.sunColor.copy(c1.setHex(A.sun)).lerp(c2.setHex(B.sun), f);
-    const ambI = lerp(A.amb, B.amb, f);
-    const dirI = lerp(A.dir, B.dir, f);
-
-    // --- 太陽方向 ---
+    // --- 太陽方向（旧式のまま。灯籠・音・夜の判定の時刻を変えない） ---
     const ang = ((t - 6) / 24) * TAU;
     this.sunDir.set(Math.cos(ang), Math.sin(ang), 0.34).normalize();
     this.nightAmount = clamp01(smoothstep(0.08, -0.16, this.sunDir.y));
@@ -366,127 +197,96 @@ export class Environment {
     this.cloudiness = damp(this.cloudiness, this.weather.cloud, 0.4, dt);
     this.rainIntensity = damp(this.rainIntensity, this.weather.rain, 0.35, dt);
 
+    // --- キーフレーム（core が色を返さないときの代わり・keyDir の判定） ---
+    let i = 0;
+    while (i < KEYS.length - 2 && KEYS[i + 1].h <= t) i++;
+    const A = KEYS[i], B = KEYS[i + 1];
+    const f = clamp01((t - A.h) / (B.h - A.h));
+    const dirI = lerp(A.dir, B.dir, f);
     const cloudDim = 1 - this.cloudiness * 0.45;
-
-    // --- 空 uniforms ---
-    const u = this.skyUniforms;
-    u.uTime.value += dt;
-    u.uZenith.value.copy(this.zenithColor);
-    u.uHorizon.value.copy(this.horizonColor);
-    u.uSunColor.value.copy(this.sunColor);
-    u.uSunDir.value.copy(this.sunDir);
-    u.uNight.value = this.nightAmount;
-    u.uCloud.value = this.cloudiness;
-
-    // --- フォグ ---
-    this.fogColor.copy(this.horizonColor).lerp(this.zenithColor, 0.28);
-    if (this.cloudiness > 0.4) this.fogColor.lerp(c1.setRGB(0.42, 0.46, 0.5), (this.cloudiness - 0.4) * 0.5);
-    if (this.underwater) {
-      // 水中カメラ用：短距離の青緑フォグ
-      this.fogColor.setRGB(0.055, 0.16, 0.19).multiplyScalar(lerp(1, 0.62, this.nightAmount));
-      this.scene.fog.color.copy(this.fogColor);
-      /* 水中の減衰は PostFX の指数散乱が担当する。ここは標準マテリアル用の
-         遠方バックストップに留める。線形フォグを主役にすると、水が波長選択で
-         濁っていく感じが出ず「平たい水色の板」になってしまう */
-      this.scene.fog.near = lerp(30, 22, this.nightAmount);
-      this.scene.fog.far = lerp(250, 190, this.nightAmount);
-    } else {
-      this.scene.fog.color.copy(this.fogColor);
-      this.scene.fog.near = lerp(150, 30, this.rainIntensity);
-      this.scene.fog.far = lerp(900, 210, this.rainIntensity);
-    }
-
-    /* --- ライト ---
-       平行光 1 本を «昼は太陽・夜は月» として使い回す。どちらにも
-       «地平線で消える» ゲートを掛けてあるので、両者がすれ違う瞬間には
-       どちらもほぼ 0 になり、向きが 180° 裏返っても絵は動かない。
-       （以前は sunDir.y < -0.12 になった時点で強度 0.8 の太陽を即座に
-         visible=false にしていたので、日没に照明がパチンと切れていた） */
-    const horizonGate = (y) => smoothstep(-0.02, 0.14, y);
     const sunI = dirI * cloudDim * horizonGate(this.sunDir.y);
-    // 月は太陽のちょうど反対側。満月なので «沈んでいて出ない» 夜は無い
     const moonI = MOON_INTENSITY * cloudDim * horizonGate(-this.sunDir.y);
     this.moonAmount = moonI > sunI ? 1 : 0;
-    if (this.moonAmount) {
-      this.keyDir.copy(this.sunDir).negate();
-      this.sun.color.copy(MOON_COLOR);
-      this.sun.intensity = moonI;
-    } else {
-      this.keyDir.copy(this.sunDir);
-      this.sun.color.copy(this.sunColor);
-      this.sun.intensity = sunI;
+    if (this.moonAmount) this.keyDir.copy(this.sunDir).negate();
+    else this.keyDir.copy(this.sunDir);
+
+    this.skyUniforms.uTime.value += dt;
+
+    let res = null;
+    if (this.gfx) {
+      try {
+        res = this.gfx.beginFrame?.({
+          dt, hour, camera, focus,
+          weather: { key: this.weather.key, cloud: this.cloudiness, rain: this.rainIntensity },
+          nightAmount: this.nightAmount, sunDir: this.sunDir, keyDir: this.keyDir,
+        }) || null;
+      } catch (e) {
+        warnOnce('beginFrame が失敗、旧版の色で続行します', e);
+        res = null;
+      }
     }
-    /* 日の出・日没の 30 分だけは太陽も月も地平線にいて直射がほとんど無い。
-       «常に満月» の世界でここだけ暗く落ちると事故に見えるので、抜けた直射を
-       半球光で埋める。向きを持たない光なので、キーライトが太陽から月へ
-       裏返るのもちょうどこの谷の底で起き、絵の上では見えない */
-    const twilightFill = clamp01(1 - (sunI + moonI) / 1.6) * 1.15;
-    this.hemi.intensity = (lerp(0.22, 0.78, ambI) + twilightFill) * lerp(1, 1.35, this.cloudiness)
-      + (this.underwater ? 1.15 * lerp(1, 0.55, this.nightAmount) : 0);
-    this.hemi.color.copy(this.horizonColor).lerp(this.zenithColor, 0.5);
-    this.hemi.groundColor.setRGB(0.10 + 0.12 * ambI, 0.13 + 0.13 * ambI, 0.09 + 0.1 * ambI);
-
-    // 影カメラを注視点に追従
-    const fx = focus ? focus.x : 0, fz = focus ? focus.z : 0;
-    this.sunTarget.position.set(fx, 0, fz);
-    this.sun.position.set(fx + this.keyDir.x * 150, this.keyDir.y * 150 + 6, fz + this.keyDir.z * 150);
-    this.sun.visible = this.sun.intensity > 0.015;
-
-    // 空ドームをカメラに追従
-    if (camera) this.sky.position.copy(camera.position);
-
-    // --- 雨 ---
-    this._updateRain(dt, camera);
+    this._applyFrame(res, A, B, f, sunI, moonI, focus);
+    this.rain.visible = !this._underwater && this.rainIntensity > 0.03;
   }
 
-  _updateRain(dt, camera) {
-    const vis = !this.underwater && this.rainIntensity > 0.03;
-    this.rain.visible = vis;
-    if (!vis || !camera) return;
-    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-    const p = this.rainParticles;
-    const arr = this.rain.geometry.attributes.position.array;
-    const speed = 34 + 26 * this.rainIntensity;
-    const windX = 5 * this.rainIntensity;
-    const len = 1.1 + 0.9 * this.rainIntensity;
-    const active = Math.min(this.rainCount, Math.floor(this.rainCount * clamp01(this.rainIntensity / 0.85)));
-    const HX = 55, HY = 27;
-
-    for (let i = 0; i < this.rainMax; i++) {
-      const i3 = i * 3, i6 = i * 6;
-      if (i >= active) {
-        arr[i6] = arr[i6 + 1] = arr[i6 + 2] = 0;
-        arr[i6 + 3] = arr[i6 + 4] = arr[i6 + 5] = 0;
-        continue;
-      }
-      p[i3] += windX * dt;
-      p[i3 + 1] -= speed * dt;
-      // カメラ相対でラップ
-      let x = p[i3], y = p[i3 + 1], z = p[i3 + 2];
-      if (x < cx - HX) x += HX * 2; else if (x > cx + HX) x -= HX * 2;
-      if (z < cz - HX) z += HX * 2; else if (z > cz + HX) z -= HX * 2;
-      if (y < cy - HY * 0.5) y += HY * 1.6;
-      else if (y > cy + HY) y -= HY * 1.6;
-      p[i3] = x; p[i3 + 1] = y; p[i3 + 2] = z;
-
-      arr[i6] = x; arr[i6 + 1] = y; arr[i6 + 2] = z;
-      arr[i6 + 3] = x + windX * 0.04 * len;
-      arr[i6 + 4] = y - len * 1.6;
-      arr[i6 + 5] = z;
+  /** core の結果（色・霧・key）を契約のフィールドへ写す。無ければ旧版の式 */
+  _applyFrame(res, A, B, f, sunI, moonI, focus) {
+    const fog = this.scene.fog;
+    const col = res?.colors;
+    if (col?.zenithColor && col?.horizonColor && col?.sunColor) {
+      this.zenithColor.copy(col.zenithColor);
+      this.horizonColor.copy(col.horizonColor);
+      this.sunColor.copy(col.sunColor);
+      if (col.fogColor) this.fogColor.copy(col.fogColor);
+      else this.fogColor.copy(this.horizonColor).lerp(this.zenithColor, 0.28);
+    } else {
+      this.zenithColor.copy(c1.setHex(A.zen)).lerp(c2.setHex(B.zen), f);
+      this.horizonColor.copy(c1.setHex(A.hor)).lerp(c2.setHex(B.hor), f);
+      this.sunColor.copy(c1.setHex(A.sun)).lerp(c2.setHex(B.sun), f);
+      this.fogColor.copy(this.horizonColor).lerp(this.zenithColor, 0.28);
+      if (this.cloudiness > 0.4) this.fogColor.lerp(c1.setRGB(0.42, 0.46, 0.5), (this.cloudiness - 0.4) * 0.5);
+      if (this._underwater) this.fogColor.setRGB(0.055, 0.16, 0.19).multiplyScalar(lerp(1, 0.62, this.nightAmount));
     }
-    this.rain.geometry.attributes.position.needsUpdate = true;
-    this.rain.material.opacity = 0.2 + 0.34 * this.rainIntensity;
+    if (fog) {
+      const fr = res?.fog;
+      if (fr && Number.isFinite(fr.near) && Number.isFinite(fr.far)) {
+        fog.near = fr.near;
+        fog.far = fr.far;
+        fog.color.copy(fr.color || this.fogColor);
+      } else {
+        fog.color.copy(this.fogColor);
+        if (this._underwater) {
+          fog.near = lerp(30, 22, this.nightAmount);
+          fog.far = lerp(250, 190, this.nightAmount);
+        } else {
+          fog.near = lerp(150, 30, this.rainIntensity);
+          fog.far = lerp(900, 210, this.rainIntensity);
+        }
+      }
+    }
+    /* key：色と強さは sky の producer が ng 単位で決める。影の追従（テクセルスナップ）は core */
+    const key = res?.key;
+    if (key && Number.isFinite(key.intensity)) {
+      if (key.color) this.sun.color.copy(key.color);
+      this.sun.intensity = key.intensity;
+    } else {
+      if (this.moonAmount) { this.sun.color.copy(MOON_COLOR); this.sun.intensity = moonI; }
+      else { this.sun.color.copy(this.sunColor); this.sun.intensity = sunI; }
+      const fx = focus ? focus.x : 0, fz = focus ? focus.z : 0;
+      this.sunTarget.position.set(fx, 0, fz);
+      this.sun.position.set(fx + this.keyDir.x * 150, this.keyDir.y * 150 + 6, fz + this.keyDir.z * 150);
+      if (!res) {
+        /* core が無いときの環境光（SH の L0 だけ）。キャラクターが真っ黒にならない程度 */
+        const amb = lerp(0.25, 0.9, 1 - this.nightAmount) * lerp(1, 0.8, this.cloudiness);
+        this.probe.sh.coefficients[0].set(0.52, 0.62, 0.78).multiplyScalar(amb * 0.886);
+      }
+    }
+    /* 影マップ（sun.shadow.map）を perf が読むので、太陽は常に visible */
+    this.sun.visible = true;
   }
 
   setQuality(q) {
-    const size = q === 'high' ? 2560 : q === 'low' ? 1024 : 2048;
-    if (this.sun.shadow.mapSize.x !== size) {
-      this.sun.shadow.mapSize.set(size, size);
-      if (this.sun.shadow.map) {
-        this.sun.shadow.map.dispose();
-        this.sun.shadow.map = null;
-      }
-    }
-    this.rainCount = q === 'low' ? 600 : q === 'high' ? 1800 : 1400;
+    this.quality = q;
+    try { this.gfx?.setQuality?.(q); } catch (e) { warnOnce('setQuality', e); }
   }
 }
