@@ -11,8 +11,40 @@
    =========================================================== */
 import { NG_HASH_GLSL } from './noise.glsl.js';
 
+/**
+ * 雲の被覆と雲影（ngCloudCoverAt / ngCloudShadow）。NG_FRAME_GLSL の後に置く。
+ * 組込みマテリアルは頂点で 1 回だけ評価して varying（vNgCloud）で渡す（雲の斑は 900m 規模なので
+ * 頂点の間隔で十分。断片で 3 オクターブ × 4 ハッシュを払わない。chunks.js）
+ */
+export const NG_CLOUD_GLSL = NG_HASH_GLSL + /* glsl */ `
+#ifndef NG_LIB_CLOUD
+#define NG_LIB_CLOUD
+/* 雲の被覆（0..1）。sky の雲・雲影・CPU 双子と同じ式（3 オクターブの値ノイズ） */
+float ngCloudNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(ngHash12(i), ngHash12(i + vec2(1.0, 0.0)), u.x),
+             mix(ngHash12(i + vec2(0.0, 1.0)), ngHash12(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float ngCloudCoverAt(vec2 xz) {
+  vec2 q = (xz + ngCloudShOffset) * ngCloudShInvScale;
+  float n = 0.5 * ngCloudNoise(q) + 0.3 * ngCloudNoise(q * 2.03 + 11.7) + 0.2 * ngCloudNoise(q * 4.11 + 3.9);
+  float c = clamp(ngCloudCover, 0.0, 1.0);
+  return smoothstep(1.0 - c - 0.12, 1.0 - c + 0.22, n);
+}
+/* 雲の影（1 = 日向）。key の向きに雲底まで投影する */
+float ngCloudShadow(vec3 P) {
+  vec3 k = ngKeyDir;
+  float up = max(k.y, 0.05);
+  vec2 xz = P.xz + k.xz / up * max(ngCloudBase - P.y, 0.0);
+  return 1.0 - clamp(ngCloudShStrength, 0.0, 1.0) * ngCloudCoverAt(xz);
+}
+
+#endif
+`;
+
 /** 媒質・雲影・高さ場影の解析近似。NG_FRAME_GLSL の後に置く */
-export const NG_MEDIUM_GLSL = NG_HASH_GLSL + /* glsl */ `
+export const NG_MEDIUM_GLSL = NG_CLOUD_GLSL + /* glsl */ `
 #ifndef NG_LIB_MEDIUM
 #define NG_LIB_MEDIUM
 #define NG_PI 3.14159265359
@@ -110,27 +142,6 @@ vec3 ngApplyMedium(vec3 L, vec3 P) {
   vec3 T, Lin;
   ngMediumTerms(P, T, Lin);
   return L * T + Lin;
-}
-
-/* 雲の被覆（0..1）。sky の雲・雲影・CPU 双子と同じ式（3 オクターブの値ノイズ） */
-float ngCloudNoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(ngHash12(i), ngHash12(i + vec2(1.0, 0.0)), u.x),
-             mix(ngHash12(i + vec2(0.0, 1.0)), ngHash12(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-float ngCloudCoverAt(vec2 xz) {
-  vec2 q = (xz + ngCloudShOffset) * ngCloudShInvScale;
-  float n = 0.5 * ngCloudNoise(q) + 0.3 * ngCloudNoise(q * 2.03 + 11.7) + 0.2 * ngCloudNoise(q * 4.11 + 3.9);
-  float c = clamp(ngCloudCover, 0.0, 1.0);
-  return smoothstep(1.0 - c - 0.12, 1.0 - c + 0.22, n);
-}
-/* 雲の影（1 = 日向）。key の向きに雲底まで投影する */
-float ngCloudShadow(vec3 P) {
-  vec3 k = ngKeyDir;
-  float up = max(k.y, 0.05);
-  vec2 xz = P.xz + k.xz / up * max(ngCloudBase - P.y, 0.0);
-  return 1.0 - clamp(ngCloudShStrength, 0.0, 1.0) * ngCloudCoverAt(xz);
 }
 
 #ifdef NG_HF_SHADOW

@@ -7,7 +7,11 @@
    uniforms は shadows.js の HfShadow.uniforms（共有の {value}）
    =========================================================== */
 
-/** ngHfShadow(P) / ngHfShadowFar(P) / ngSunVisibility(P, nearVis)。NG_MEDIUM_GLSL の後に置く */
+/**
+ * ngHfShadow(P) / ngHfShadowFar(P) / ngSunVisibility(P, nearVis) / ngSunVisibilityC(P, nearVis, cloud)。
+ * NG_MEDIUM_GLSL の後に置く。fog チャンクを含むシェーダは頂点の雲影 vNgCloud を渡す C 版を使う
+ * （ngCloudShadow を断片で評価しない。docs/nextgen/spikes.md S-3）
+ */
 export const NG_SHADOW_GLSL = /* glsl */ `
 #ifndef NG_LIB_SHADOW
 #define NG_LIB_SHADOW
@@ -27,8 +31,9 @@ float ngNearToFar(vec3 P) {
   return smoothstep(0.8 * ngNearShadowR, ngNearShadowR, length(P.xz - ngFocus.xz));
 }
 float ngHfShadowFar(vec3 P) { return mix(1.0, ngHfShadow(P), ngNearToFar(P)); }
-float ngSunVisibility(vec3 P, float nearVis) {
-  return mix(nearVis, ngHfShadow(P), ngNearToFar(P)) * ngCloudShadow(P);
+float ngSunVisibilityC(vec3 P, float nearVis, float cloud) {
+  return mix(nearVis, ngHfShadow(P), ngNearToFar(P)) * cloud;
 }
+float ngSunVisibility(vec3 P, float nearVis) { return ngSunVisibilityC(P, nearVis, ngCloudShadow(P)); }
 #endif
 `;

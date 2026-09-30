@@ -136,7 +136,7 @@ void main() {
     /* 岸の 0–3cm では硬い縁を出さない */
     float edge = smoothstep(0.0, 0.03, thick);
     F *= edge;
-    float vis = ngSunVisibility(vWorld, getShadowMask());
+    float vis = ngSunVisibilityC(vWorld, getShadowMask(), vNgCloud);
     vec3 T, Lin;
     ngMediumTerms(vWorld, T, Lin);
     vec3 scatter = (1.0 - F) * ngWaterInsc * 0.15 * vis * edge;

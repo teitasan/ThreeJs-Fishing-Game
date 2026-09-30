@@ -19,7 +19,13 @@ import { resolveLake } from '../../../lakefield.js';
 import { buildHeightGrids } from '../../../world/heightgrid.js';
 import { buildPlacement } from '../../../world/placement.js';
 import { makeDock } from '../../../world/dock.js';
-import { createCausticsUniforms } from '../../../shaders.js';
+import { createCausticsUniforms, CAUSTICS_GLSL } from '../../../shaders.js';
+import { waveGLSL } from '../../../waveField.js?v=20260828-lakescale1';
+import { NG_MEDIUM_GLSL } from '../glsl/medium.glsl.js';
+import { NG_HEIGHTFIELD_GLSL } from '../glsl/heightfield.glsl.js';
+import { NG_SHADOW_GLSL } from '../glsl/shadow.glsl.js';
+import { NG_WIND_GLSL } from '../glsl/wind.glsl.js';
+import { NG_SKYSPEC_GLSL } from '../glsl/surface.glsl.js';
 
 /** 旧 sky.js の WEATHERS と同じ cloud / rain */
 export const LAB_WEATHERS = Object.freeze({
@@ -523,6 +529,10 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     onBeforeRender: null,
     /** MSAA の実測と判定 */
     msaa: () => gfx.msaa,
+    /** core の GLSL ライブラリ（撮影のシナリオが自前の計測シェーダを組むため。scripts/gfx/scenarios/core-glsl-cost.mjs） */
+    glsl: {
+      NG_FRAME_GLSL, NG_MEDIUM_GLSL, NG_HEIGHTFIELD_GLSL, NG_SHADOW_GLSL, NG_WIND_GLSL, NG_SKYSPEC_GLSL, CAUSTICS_GLSL, waveGLSL,
+    },
     stats() {
       const s = gfx.stats(), i = renderer.info;
       return {

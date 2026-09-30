@@ -4,14 +4,16 @@
    組込みマテリアル（釣り人・魚を含む）を ng の «一つの光・一つの空気» に通す芯。
    - fog チャンク：NG_FRAME のときだけ ngApplyMedium。それ以外は元の線形霧
      （ngFrame を持たない他人の ShaderMaterial を壊さない）
-   - lights_fragment_begin：key（平行光 0 番）に雲影と高さ場影を掛け、
+   - lights_fragment_begin：key（平行光 0 番）に雲影と高さ場影を掛け（その積が ngKeyVis）、
      three の近景の影だけの比 ngNearVis を取り出す（caustics・透過が使う）
+   - 雲影は頂点で 1 回だけ評価して vNgCloud で渡す（900m 規模の斑なので頂点の間隔で足りる。
+     断片の 3 オクターブ × 4 ハッシュは全画面で ≈0.45ms。docs/nextgen/spikes.md S-3）
    - NG_FRAME の #define は ShaderLib の文字列の先頭と ng マテリアルにだけ入れる
    - 全体チャンクが宣言するのは ng / NG_ 接頭辞の識別子だけ（魚の uCaust* 等と衝突させない）
    three を import しない（THREE を引数で受ける。Node のテストから直接呼べる）
    =========================================================== */
 import { NG_FRAME_GLSL, ngFrameData } from './frame.js';
-import { NG_MEDIUM_GLSL } from './glsl/medium.glsl.js';
+import { NG_MEDIUM_GLSL, NG_CLOUD_GLSL } from './glsl/medium.glsl.js';
 
 const STATE = Symbol.for('ng.chunks.state');
 
@@ -56,12 +58,15 @@ export function ngChunkPatches(orig) {
     fog_pars_vertex: orig.fog_pars_vertex + `
 #ifdef NG_FRAME
 ${NG_FRAME_GLSL}
+${NG_CLOUD_GLSL}
 varying vec3 vNgWorld;
+varying float vNgCloud;
 #endif
 `,
     fog_vertex: orig.fog_vertex + `
 #ifdef NG_FRAME
 	vNgWorld = cameraPosition + transpose( mat3( viewMatrix ) ) * mvPosition.xyz;
+	vNgCloud = ngCloudShadow( vNgWorld );
 #endif
 `,
     fog_pars_fragment: orig.fog_pars_fragment + `
@@ -69,6 +74,7 @@ varying vec3 vNgWorld;
 ${NG_FRAME_GLSL}
 ${NG_MEDIUM_GLSL}
 varying vec3 vNgWorld;
+varying float vNgCloud;
 #endif
 `,
     fog_fragment: `#ifdef USE_FOG
@@ -94,7 +100,8 @@ function patchLights(src) {
   const patched = block
     .replace(NG_LIGHTS_ANCHOR, `${NG_LIGHTS_ANCHOR}
 		#if defined( NG_FRAME ) && ( UNROLLED_LOOP_INDEX == 0 )
-		directLight.color *= ngCloudShadow( vNgWorld ) * ngHfShadowAnalytic( vNgWorld );
+		ngKeyVis = vNgCloud * ngHfShadowAnalytic( vNgWorld );
+		directLight.color *= ngKeyVis;
 		ngKeyPreShadow = directLight.color;
 		#endif`)
     .replace(NG_LIGHTS_RE_DIRECT, `#if defined( NG_FRAME ) && ( UNROLLED_LOOP_INDEX == 0 )
@@ -103,6 +110,7 @@ function patchLights(src) {
 		${NG_LIGHTS_RE_DIRECT}`);
   return `#ifdef NG_FRAME
 float ngNearVis = 1.0;
+float ngKeyVis = 1.0;
 vec3 ngKeyPreShadow = vec3( 0.0 );
 #endif
 ` + src.slice(0, s) + patched + src.slice(e);

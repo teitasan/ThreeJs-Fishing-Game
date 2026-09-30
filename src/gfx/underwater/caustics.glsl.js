@@ -1,9 +1,12 @@
 /* ===========================================================
    CAUSTICS_GLSL の本体（underwater モジュールが持つ。src/shaders.js が再 export）
    -----------------------------------------------------------
-   グレーボックスの解析版：焼き込み（uCaustTex）が来るまでは、2 層の Worley の
-   境界の明線を波の傾き（csWaveD）で歪めて網目にする。焼き込み後も同じ口のまま
-   uCaustTex（sampler2DArray：時刻のフレームが層）の値を掛ける。
+   グレーボックス：網目は underwater のスタブが起動時に焼く周期タイル（uCaustTex、
+   sampler2DArray の層 = 時刻のフレーム、R = 粗い網 A、G = 細かい網 B。どちらも鋭さ 1 の
+   exp(−9·(F2−F1))）を 2 か所 × 前後のフレームで 4 回読む。深さのぼけは pow(v, 1/blur)。
+   焼き込みの前（1 層のプレースホルダ）は 0（網目の代わりの一様な光を出さない）。
+   網目の計算より先に «弱める係数» を全部掛け、0 なら何も読まずに帰る（遠景・深場・夜・
+   下向きの面で断片の手数を使わない）。
    契約（ARCHITECTURE §5.3、CONTRACT §4.5）：
      - vec3 causticLight(vec3 worldPos, vec3 viewNormal)（加算の放射輝度）
      - worldPos.y > -0.02 は 0（水上の魚・釣り人には出さない）
@@ -15,6 +18,9 @@ import { waveGLSL } from '../../waveField.js?v=20260828-lakescale1';
 
 /** 焼き込みが来るまでの uCaustTex の層数（1×1×1 の白） */
 export const CAUSTICS_PLACEHOLDER_LAYERS = 1;
+
+/** 焼くタイルの形（underwater のスタブと GLSL が共有）：一辺の画素、時刻のフレーム数、網 A / B のタイル当たりのセル数、一巡の秒 */
+export const CAUSTICS_TILE = Object.freeze({ size: 256, frames: 16, cellsA: 6, cellsB: 10, loopSec: 8 });
 
 export const CAUSTICS_GLSL = /* glsl */ `
 uniform float uCaustTime;
@@ -36,30 +42,36 @@ uniform vec3 uCaustMixW;     // 2 層の合成比（A, B, A*B）
 
 ${waveGLSL({ prefix: 'cs', slim: true })}
 
-vec2 csHash2(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.xx + p3.yz) * p3.zy);
-}
-/* Worley の 2 番目 − 1 番目の距離：セルの境界で 0 になる（網目の明線） */
-float csCell(vec2 p, float t) {
-  vec2 i = floor(p), f = fract(p);
-  float d1 = 8.0, d2 = 8.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
-    vec2 g = vec2(float(x), float(y));
-    vec2 h = csHash2(i + g);
-    vec2 o = 0.5 + 0.35 * sin(t * (0.6 + 0.5 * h) + 6.2831 * h);
-    float d = length(g + o - f);
-    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
-  }
-  return d2 - d1;
+/* 焼いたタイルの (A, B) を時刻 ph（一巡 = 1）で前後のフレームから補間 */
+vec2 csTile(vec2 uv, float ph, float layers) {
+  float f = fract(ph) * layers;
+  float l0 = floor(f);
+  float l1 = l0 + 1.0 >= layers ? 0.0 : l0 + 1.0;
+  return mix(texture(uCaustTex, vec3(uv, l0)).rg, texture(uCaustTex, vec3(uv, l1)).rg, f - l0);
 }
 
 vec3 causticLight(vec3 worldPos, vec3 viewNormal) {
   if (uCaustStrength < 0.001 || worldPos.y > -0.02) return vec3(0.0);
+  float layers = float(textureSize(uCaustTex, 0).z);
+  if (layers < 1.5) return vec3(0.0);
   float depth = -worldPos.y;
-  /* 湖底の点を照らす光は太陽と反対側の水面から入る。水中の傾きはスネルで浅い */
   vec3 sd = normalize(uCaustSunDir);
+  /* 弱める係数を先に：視距離・水深・面の向き・夜・雨・雲・太陽の高さ */
+  float viewDist = length(worldPos - cameraPosition);
+  float fade = 1.0 - smoothstep(uCaustDist.x, uCaustDist.y, viewDist);
+  fade *= smoothstep(uCaustDepth.x, uCaustDepth.y, depth) * (1.0 - smoothstep(uCaustFar.x, uCaustFar.y, depth));
+  /* 上を向いた面ほど強い（水際の岩の側面を光らせない） */
+  vec3 upView = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+  vec3 nV = normalize(viewNormal);
+  fade *= smoothstep(0.15, 0.72, dot(nV, upView));
+  fade *= mix(1.0, 0.30, uCaustNight) * (1.0 - uCaustRain * 0.72) * (1.0 - uCaustCloud * 0.62);
+  /* 低い太陽は水面で跳ね返されて届かない */
+  fade *= smoothstep(-0.05, 0.22, sd.y) * mix(0.55, 1.0, smoothstep(0.10, 0.75, sd.y));
+  vec3 sunView = normalize((viewMatrix * vec4(sd, 0.0)).xyz);
+  fade *= smoothstep(0.02, 0.38, max(dot(nV, sunView), 0.0));
+  fade *= uCaustStrength;
+  if (fade < 1e-3) return vec3(0.0);
+  /* 湖底の点を照らす光は太陽と反対側の水面から入る。水中の傾きはスネルで浅い */
   float ca = max(sd.y, 0.08);
   float sa = sqrt(max(0.0, 1.0 - ca * ca));
   float sw = sa / 1.333;
@@ -70,25 +82,13 @@ vec3 causticLight(vec3 worldPos, vec3 viewNormal) {
   vec2 q = surf + csWaveD(surf, uCaustTime) * (min(depth, uCaustWarp.y) * uCaustWarp.x + 0.6);
   /* 深いほど焦点がぼける：明線の幅を広げ、コントラストを落とす */
   float blur = 1.0 + depth * uCaustMag * 4.0;
-  float t = uCaustTime;
-  float a = exp(-csCell(q * uCaustScale.x * 1.6 + vec2(0.011, 0.007) * t, t) * 9.0 / blur);
-  float b = exp(-csCell(q * uCaustScale.y * 1.6 + vec2(-0.008, 0.012) * t + 3.7, t * 1.3) * 9.0 / blur);
-  float tex = texture(uCaustTex, vec3(q * uCaustScale.x, 0.0)).r;
-  float net = (a * uCaustMixW.x + b * uCaustMixW.y + a * b * uCaustMixW.z) * tex;
+  float t = uCaustTime / ${CAUSTICS_TILE.loopSec.toFixed(1)};
+  float a = csTile((q * uCaustScale.x * 1.6 + vec2(0.011, 0.007) * uCaustTime) / ${CAUSTICS_TILE.cellsA.toFixed(1)}, t, layers).r;
+  float b = csTile((q * uCaustScale.y * 1.6 + vec2(-0.008, 0.012) * uCaustTime + 3.7) / ${CAUSTICS_TILE.cellsB.toFixed(1)}, t * 1.3, layers).g;
+  a = pow(max(a, 1e-4), 1.0 / blur);
+  b = pow(max(b, 1e-4), 1.0 / blur);
+  float net = a * uCaustMixW.x + b * uCaustMixW.y + a * b * uCaustMixW.z;
   net = min(pow(max(net * uCaustShape.x, 0.0), uCaustShape.y), uCaustRange.x) / blur;
-  float viewDist = length(worldPos - cameraPosition);
-  float fade = 1.0 - smoothstep(uCaustDist.x, uCaustDist.y, viewDist);
-  fade *= smoothstep(uCaustDepth.x, uCaustDepth.y, depth) * (1.0 - smoothstep(uCaustFar.x, uCaustFar.y, depth));
-  /* 上を向いた面ほど強い（水際の岩の側面を光らせない） */
-  vec3 upView = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-  vec3 nV = normalize(viewNormal);
-  fade *= smoothstep(0.15, 0.72, dot(nV, upView));
-  /* 夜（月）・雨・雲で弱め、低い太陽は水面で跳ね返されて届かない */
-  fade *= mix(1.0, 0.30, uCaustNight) * (1.0 - uCaustRain * 0.72) * (1.0 - uCaustCloud * 0.62);
-  fade *= smoothstep(-0.05, 0.22, sd.y) * mix(0.55, 1.0, smoothstep(0.10, 0.75, sd.y));
-  vec3 sunView = normalize((viewMatrix * vec4(sd, 0.0)).xyz);
-  fade *= smoothstep(0.02, 0.38, max(dot(nV, sunView), 0.0));
-  fade *= uCaustStrength;
   return vec3(0.62, 0.88, 0.95) * net * fade * uCaustRange.y;
 }
 `;

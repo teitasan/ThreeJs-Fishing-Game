@@ -183,6 +183,31 @@ export class Forge {
   }
 
   /**
+   * 配列を焼いて CPU の画素で返す（RGBA8）。«テクスチャのオブジェクトを差し替えられない» 受け口
+   * （uCaustTex のように魚のマテリアルが参照を握っている DataArrayTexture）へ中身を入れるため。
+   * 層ごとに 2D の RT へ描いて readPixels するので、読み込み中に 1 回だけ使う（256²×16 層で数 ms）
+   * @param {{w:number, h:number, layers:number, frag:string, uniforms?:object}} o frag の入力は bakeArray と同じ
+   * @returns {{data: Uint8Array, width: number, height: number, depth: number}}
+   */
+  bakeArrayPixels(o) {
+    const T = this.THREE;
+    const rt = this.target(o.w, o.h, { type: T.UnsignedByteType, filter: 'nearest', wrap: 'clamp' });
+    const data = new Uint8Array(o.w * o.h * 4 * o.layers);
+    try {
+      const m = this._quad(o.frag, o.uniforms || {});
+      m.uniforms.ngTexel.value.set(1 / o.w, 1 / o.h);
+      for (let l = 0; l < o.layers; l++) {
+        m.uniforms.ngLayer.value = l;
+        this._draw(rt);
+        this.renderer.readRenderTargetPixels(rt, 0, 0, o.w, o.h, data.subarray(l * o.w * o.h * 4, (l + 1) * o.w * o.h * 4));
+      }
+    } finally {
+      rt.dispose();
+    }
+    return { data, width: o.w, height: o.h, depth: o.layers };
+  }
+
+  /**
    * 3D テクスチャを焼く（z スライスごとに ngSlice を変えて描く）
    * @param {{w:number, h:number, d:number, frag:string, uniforms?:object, type?:number, format?:number,
    *          filter?:'linear'|'nearest', wrap?:'repeat'|'clamp'}} o

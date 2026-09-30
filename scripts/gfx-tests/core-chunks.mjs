@@ -55,7 +55,9 @@ for (const k of fogLibs) {
 check(SC.fog_fragment.includes('ngApplyMedium') && SC.fog_fragment.includes('#ifdef NG_FRAME'), 'fog_fragment は NG_FRAME のときだけ媒質');
 check(SC.fog_fragment.includes('fogFactor'), 'fog_fragment の NG_FRAME 以外は元の線形霧');
 check(SC.fog_vertex.includes('vNgWorld = cameraPosition + transpose( mat3( viewMatrix ) ) * mvPosition.xyz'), 'fog_vertex が世界座標を渡す');
-check(SC.lights_fragment_begin.includes('ngCloudShadow( vNgWorld ) * ngHfShadowAnalytic( vNgWorld )'), 'lights のフック');
+check(SC.lights_fragment_begin.includes('ngKeyVis = vNgCloud * ngHfShadowAnalytic( vNgWorld )'), 'lights のフック（雲影は頂点の vNgCloud）');
+check(SC.fog_vertex.includes('vNgCloud = ngCloudShadow( vNgWorld )'), 'fog_vertex が雲影を頂点で評価する');
+check(SC.fog_pars_fragment.includes('varying float vNgCloud;') && SC.fog_pars_vertex.includes('varying float vNgCloud;'), 'vNgCloud の varying が両段にある');
 check((SC.lights_fragment_begin.match(/UNROLLED_LOOP_INDEX == 0/g) || []).length === 2, 'フックは平行光 0 番だけ');
 
 /* cloneUniforms は Float32Array を参照のまま（組込みマテリアルの共有の前提） */

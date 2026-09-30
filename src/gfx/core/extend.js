@@ -110,11 +110,10 @@ export function ngExtendStandard(mat, spec) {
     F = insertAfter(F, A.fragment.emissive, f.emissive);
     let lights = f.lights || '';
     if (caustics) {
-      /* caustics は key の見え方（近景の影 × 高さ場影 × 雲影）で切る。桟橋の影で網目が欠ける */
-      const nearVis = ngExtendContext.lightsHook ? 'ngNearVis' : '1.0';
-      lights += spec.hfShadow
-        ? `\ntotalEmissiveRadiance += causticLight( vNgWorld, normal ) * ngSunVisibility( vNgWorld, ${nearVis} );`
-        : `\ntotalEmissiveRadiance += causticLight( vNgWorld, normal ) * ${nearVis} * ngCloudShadow( vNgWorld );`;
+      /* caustics は key の見え方（近景の影 × 高さ場影 × 雲影）で切る。桟橋の影で網目が欠ける。
+         lights のフックが key に掛けた雲影 × 高さ場影（ngKeyVis）を使い回す（同じ値を 2 回計算しない） */
+      const vis = ngExtendContext.lightsHook ? 'ngKeyVis * ngNearVis' : 'vNgCloud';
+      lights += `\ntotalEmissiveRadiance += causticLight( vNgWorld, normal ) * ${vis};`;
     }
     F = insertAfter(F, A.fragment.lights, lights);
     shader.vertexShader = V;
