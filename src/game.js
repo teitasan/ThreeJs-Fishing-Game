@@ -2,10 +2,10 @@
    ゲーム本体：状態機械・キャスト・ファイト・進行
    =========================================================== */
 import * as THREE from 'three';
-import { Environment } from './sky.js?v=20260828-uwgfx18';
-import { Terrain, WATER_REGION, WALK_INLAND } from './terrain.js?v=20260906-wood1';
+import { Environment } from './sky.js?v=20261001-ng1';
+import { Terrain, WATER_REGION, WALK_INLAND } from './terrain.js?v=20261001-ng1';
 import { resolveLake } from './lakefield.js';
-import { Water } from './water.js?v=20260906-props2';
+import { Water } from './water.js?v=20261001-ng1';
 import { FishSchool } from './fish.js?v=20260827-lkwgfx';
 import { preloadFishTextures } from './fishTextures.js';
 import { preloadTerrainIcons } from './terrainIcons.js';
@@ -33,8 +33,8 @@ import { MultiplayerClient, MULTIPLAYER_SEED } from './network/multiplayer.js';
    キャッシュされた remotePlayer.js が古い angler.js を引いてしまい、
    釣り人のモーションが 2 つ読まれる（実測で新 72KB と旧 56KB の両方） */
 import { RemotePlayers } from './multiplayer/remotePlayer.js?v=20260909-castsync';
-import { PostFX } from './postfx.js?v=20260828-bloom1';
-import { createCausticTexture } from './causticTexture.js?v=20260828-caustnet3';
+import { PostFX } from './postfx.js?v=20261001-ng1';
+import { createCausticsUniforms } from './shaders.js?v=20261001-ng1';
 import { FrameProfiler } from './performance.js?v=20260827-lkwgfx';
 
 const GRAVITY = 9.8;
@@ -294,7 +294,7 @@ export class Game {
     const q = this.state.settings.quality;
 
     this.renderer = new THREE.WebGLRenderer({
-      canvas: this.canvas, antialias: q !== 'low', powerPreference: 'high-performance',
+      canvas: this.canvas, antialias: false, powerPreference: 'high-performance',
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q === 'high' ? 2 : q === 'low' ? 1 : 1.5));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -350,28 +350,9 @@ export class Game {
     else console.warn('陸テクスチャの読み込みに失敗、頂点色で描画します', texResults[2].reason);
     if (texResults[3].status === 'fulfilled') leafTextures = texResults[3].value;
     else console.warn('葉テクスチャの読み込みに失敗、手続き生成のカードを使います', texResults[3].reason);
-    const causticsUniforms = {
-      // ボロノイ境界の明線を焼いたタイルテクスチャ（湖底・魚・水中プロップ共用）
-      uCaustTex: { value: createCausticTexture() },
-      /* 網目の見え方の調整点。ランタイムで詰められるよう uniform で持つ。
-         既定値は実機で見比べて決めたもの（1 タイル 9.5m / 6.0m の 2 枚重ね） */
-      uCaustScale: { value: new THREE.Vector2(0.105, 0.166) },
-      uCaustShape: { value: new THREE.Vector2(1.0, 1.4) },
-      uCaustRange: { value: new THREE.Vector2(1.3, 0.22) },
-      uCaustDepth: { value: new THREE.Vector2(0.07, 0.60) },
-      uCaustDist: { value: new THREE.Vector2(28.0, 60.0) },
-      uCaustFar: { value: new THREE.Vector2(6.0, 20.0) },
-      // x = 歪める量, y = 横ずれに効かせる深度の上限（m）
-      uCaustWarp: { value: new THREE.Vector2(1.15, 2.5) },
-      uCaustMag: { value: 0.18 },
-      uCaustMixW: { value: new THREE.Vector3(1.0, 0.5, 0.0) },
-      uCaustTime: { value: 0 },
-      uCaustSunDir: { value: new THREE.Vector3(0, 1, 0) },
-      uCaustNight: { value: 0 },
-      uCaustRain: { value: 0 },
-      uCaustCloud: { value: 0 },
-      uCaustStrength: { value: 0 },
-    };
+    /* 湖底・魚・水中の物が共有する 16 個の uCaust*。FishSchool より前に作り、以後は同じ参照のまま
+       （uCaustTex は焼き終わるまで 1×1 の配列テクスチャで、同じオブジェクトの中身が差し替わる） */
+    const causticsUniforms = createCausticsUniforms();
     this.terrain = new Terrain(this.scene, {
       quality: q, lake: resolved.lake, bedTextures, dockTextures, landTextures, leafTextures,
       causticsUniforms,
@@ -379,6 +360,8 @@ export class Game {
       renderer: this.renderer,
     });
     this._initMap();
+    // 高さ場の Worker・地形の素材・木・下草…の準備（失敗しても resolve する）
+    await this.terrain.ready;
 
     await onProgress(t('ui.loadingWater'));
     this.water = new Water(this.scene, this.terrain, {
@@ -467,6 +450,8 @@ export class Game {
       performance.now() - compileT0,
       this.renderer.info.programs?.length || 0
     );
+    // シェーダの並列コンパイルと各パスの空回し（読み込み画面の裏で）
+    await this.postfx.warmup?.();
     await onProgress(t('ui.loadingReady'));
   }
 
