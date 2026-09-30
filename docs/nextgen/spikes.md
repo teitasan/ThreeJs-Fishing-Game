@@ -94,6 +94,19 @@ three の近景の影（PCFShadowMap）は 1 断片あたり 17 回の RGBA 読�
 3. **PCF**：`shadowmap_pars_fragment` の PCF の分岐に NG_FRAME の枝を足し、3×3 テクセルの二次 B スプライン重み（9 回、重みはテクセルの境で連続）。
    半影は ≈1.5 テクセル（high ≈5cm）。`shadow.radius` は NG_FRAME の無いシェーダ（degraded の時）だけに効く
 
+最終（lab/core.html、`lab-bench.mjs`、フレームの最小とパス別の最小）：
+
+| 段・大きさ | 視点 | フレーム | shadow | reflection | opaque | copy | late | post |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| high 2560×1440（2× + SMAA） | dock-3p | 11.6 | 0.2 | 2.6 | 5.7 | 0.7 | 2.8 | 1.2 |
+| | aerial60 | 11.9 | 0.3 | 2.4 | 5.1 | 0.7 | 3.7 | 1.1 |
+| | noon-fp-down | 11.2 | 0.2 | 2.6 | 4.4 | 0.6 | 3.0 | 0.9 |
+| | uw-dock | 8.5 | 0.3 | — | 5.4 | 0.7 | 1.8 | 1.1 |
+| mid 1920×1080 | dock-3p | 5.3 | 0.0 | 1.8 | 2.9 | 0.1 | 0.9 | 0.5 |
+| | aerial60 | 5.6 | 0.0 | 1.6 | 2.5 | 0.1 | 1.5 | 0.5 |
+| | noon-fp-down | 5.1 | 0.0 | 1.6 | 2.1 | 0.0 | 1.0 | 0.4 |
+| | uw-dock | 3.9 | 0.0 | — | 2.8 | 0.1 | 0.4 | 0.4 |
+
 ### 本編（index.html、全スタブ、`scripts/gfx/scenarios/game-matrix.mjs`）
 
 パス別の GPU ms（最小）。水上 = 桟橋の 3.2m 後ろの三人称、水中 = 水中カメラで桟橋を見上げる。
