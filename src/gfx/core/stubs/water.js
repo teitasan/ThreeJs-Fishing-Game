@@ -4,7 +4,7 @@
    - 幾何：カメラ中心の入れ子の正方リング（中心 N² @ 32/N m、2 倍ずつ 5 段で ±512m）。
      最小の間隔でカメラへスナップ。粗いリングの内縁の «奇数の頂点» は両隣の平均に落として
      T 字の継ぎ目に隙間を作らない
-   - 変位は縦だけ：y = ngWaveH·wind·ngShoalGain(ngDepth)（waveField の waveGLSL をそのまま埋める）。
+   - 変位は縦だけ：y = ngWaveH·wind·ngShoalGain(ngDepth)（waveField の waveGLSL を位相だけ ngFrame にした NG_WAVE_GLSL）。
      CPU の surfaceY と同じ関数。細かい波は法線だけ
    - 陰影：F·反射（reflRT、外れは skyView）+ (1−F)·屈折（sceneColor、深度で有効性を判定）
      + 浅場の散乱 + GGX の太陽（近景の影 × 高さ場影 × 雲影）。吸収は足さない（§3.4）。
@@ -20,13 +20,13 @@ import { NG_SKYSPEC_GLSL } from '../glsl/surface.glsl.js';
 import { NG_SHADOW_GLSL } from '../glsl/shadow.glsl.js';
 import { NG_WIND_GLSL } from '../glsl/wind.glsl.js';
 import { NG_WATER_F0 } from '../palette.js';
-import { waveGLSL } from '../../../waveField.js?v=20260828-lakescale1';
+import { NG_WAVE_GLSL } from '../glsl/wave.glsl.js';
 
 const RINGS = 5;
 const RIPPLES = 16;
 const GRID_N = { low: 64, mid: 96, high: 128 };
 
-const VS = NG_HEIGHTFIELD_GLSL + NG_WIND_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
+const VS = NG_HEIGHTFIELD_GLSL + NG_WIND_GLSL + NG_WAVE_GLSL + /* glsl */ `
 #include <common>
 #include <shadowmap_pars_vertex>
 #include <fog_pars_vertex>
@@ -59,7 +59,7 @@ void main() {
 }
 `;
 
-const FS = NG_HEIGHTFIELD_GLSL + NG_SKYSPEC_GLSL + waveGLSL({ prefix: 'ng' }) + /* glsl */ `
+const FS = NG_HEIGHTFIELD_GLSL + NG_SKYSPEC_GLSL + NG_WAVE_GLSL + /* glsl */ `
 #include <common>
 #include <packing>
 #include <lights_pars_begin>

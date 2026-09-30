@@ -18,11 +18,11 @@ check(NG_FRAME_GLSL.includes('uniform vec4 ngFrame[ 24 ];'), 'uniform の宣言'
 check(NG_FRAME_GLSL.includes('#ifndef NG_LIB_FRAME'), 'インクルードガード');
 check(NG_SLOTS.length === 24 && NG_SLOTS.every((s, i) => s.slot === i), 'slot 0..23 が 1 回ずつ順に');
 
-const OWNERS = { sky: [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 17], core: [8, 11, 14, 15, 18], underwater: [9, 10], post: [16] };
+const OWNERS = { sky: [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 17], core: [8, 11, 14, 15, 18, 19, 20], underwater: [9, 10], post: [16] };
 for (const [owner, slots] of Object.entries(OWNERS)) {
   for (const s of slots) check(NG_SLOTS[s].owner === owner, `slot ${s} の書く人は ${owner}（表は ${NG_SLOTS[s].owner}）`);
 }
-for (let s = 19; s < 24; s++) check(NG_SLOTS[s].owner === 'reserved' && Object.keys(NG_SLOTS[s].fields).length === 0, `slot ${s} は予備`);
+for (let s = 21; s < 24; s++) check(NG_SLOTS[s].owner === 'reserved' && Object.keys(NG_SLOTS[s].fields).length === 0, `slot ${s} は予備`);
 
 const names = new Set();
 const defs = [...NG_FRAME_GLSL.matchAll(/#define (ng\w+) ngFrame\[ (\d+) \]\.(\w+)/g)];
@@ -43,7 +43,7 @@ check(defs.length === fields, `#define の数 ${defs.length} = 表の成分 ${fi
 check(NG.KEY === 0 && NG.CAM === 8 && NG.EXPO === 16 && NG.CLOUDS === 17, 'NG の slot 番号');
 
 /* マクロと関数名の衝突 */
-const libs = ['noise', 'medium', 'surface', 'wind', 'shadow', 'heightfield', 'hextile', 'oct', 'bluenoise'];
+const libs = ['noise', 'medium', 'surface', 'wind', 'shadow', 'heightfield', 'hextile', 'oct', 'bluenoise', 'wave'];
 const fnNames = new Set();
 for (const l of libs) {
   const m = await imp(`src/gfx/core/glsl/${l}.glsl.js`);

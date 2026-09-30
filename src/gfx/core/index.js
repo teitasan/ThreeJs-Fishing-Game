@@ -28,6 +28,7 @@ import { NG_MODULE_IDS, Services, ngServiceDefaults } from './module.js';
 import { ngExtendContext } from './extend.js';
 import { fogNearFar } from './medium.js';
 import { waveHeight, shoalGain } from '../../waveField.js?v=20260828-lakescale1';
+import { wavePhases } from './glsl/wave.glsl.js';
 import { createCausticsUniforms } from '../../shaders.js';
 import * as STUBS from './stubs/index.js';
 
@@ -425,10 +426,19 @@ export class Gfx {
     const f = this.f;
     f.sdt = sdt; f.waterTime = this._waterTime; f.waterWind = this._waterWind;
     this.frame.setComp(NG.TIME, 1, this._waterTime);
+    this._writeWavePhases();
     const cam = camera || this.camera;
     if (cam) this._updateUnderwaterState(cam);
     const uw = this.modules.get('underwater');
     if (uw) this.safety.guard(uw, 'waterUpdate', f);
+  }
+
+  /* 波の位相（倍精度の mod(t·ω, 2π)）を slot 19 / 20 へ。GPU の ngWaveH が CPU の surfaceY と
+     何時間遊んでもずれない（glsl/wave.glsl.js、core-requests B-2） */
+  _writeWavePhases() {
+    const ph = wavePhases(this._waterTime, this._wavePh || (this._wavePh = new Float64Array(5)));
+    this.frame.set(NG.WAVEPH_A, ph[0], ph[1], ph[2], ph[3]);
+    this.frame.setComp(NG.WAVEPH_B, 0, ph[4]);
   }
 
   /* カメラ位置の水面の高さ（waveField と同じ式）と、水中の度合い */

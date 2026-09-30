@@ -206,6 +206,12 @@ export default async function (h) {
     console.log('  surface', JSON.stringify(rb));
     expect(rb.samples > 100 && rb.medianMm < 5 && rb.p95Mm < 15, `${tier}: 描いた水面と surfaceY がずれる（${JSON.stringify(rb)}）`);
     expect(Math.abs(rb.bobberY - rb.surfaceAtBobber) < 0.03, `${tier}: ウキが水面に乗っていない（${rb.bobberY} / ${rb.surfaceAtBobber}）`);
+    /* 10 時間遊んだ後でも GPU と CPU の波がずれない（波の位相を ngFrame で渡す：core-requests B-2） */
+    await h.eval(() => { window.__game.water.time += 36000; });
+    const rb10 = await surfaceReadback(h);
+    T.surface10h = rb10;
+    console.log('  surface +10h', JSON.stringify(rb10));
+    expect(rb10.samples > 100 && rb10.medianMm < 5 && rb10.p95Mm < 15, `${tier}: 10 時間後に描いた水面と surfaceY がずれる（${JSON.stringify(rb10)}）`);
     /* 近接の絵：ウキの斜め上 1.6m から */
     await h.eval(() => {
       const g = window.__game, cam = g.camera, b = g.bobber.clone(), dir = g.terrain.dockDir;
