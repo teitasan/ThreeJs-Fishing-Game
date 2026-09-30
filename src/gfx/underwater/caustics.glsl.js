@@ -19,7 +19,8 @@ import { waveGLSL } from '../../waveField.js?v=20260828-lakescale1';
 /** 焼き込みが来るまでの uCaustTex の層数（1×1×1 の白） */
 export const CAUSTICS_PLACEHOLDER_LAYERS = 1;
 
-/** 焼くタイルの形（underwater のスタブと GLSL が共有）：一辺の画素、時刻のフレーム数、網 A / B のタイル当たりのセル数、一巡の秒 */
+/** 焼くタイルの形（underwater のスタブと GLSL が共有）：一辺の画素、時刻のフレーム数、網 A / B のタイル当たりのセル数、一巡の秒。
+ *  タイル 1 枚の大きさは A = 1/uCaustScale.x m、B = 1/uCaustScale.y m */
 export const CAUSTICS_TILE = Object.freeze({ size: 256, frames: 16, cellsA: 6, cellsB: 10, loopSec: 8 });
 
 /** vec3 causticLight(vec3 worldPos, vec3 viewNormal) と 16 個の uCaust*（魚・湖底・水中の小物が共有） */
@@ -84,8 +85,9 @@ vec3 causticLight(vec3 worldPos, vec3 viewNormal) {
   /* 深いほど焦点がぼける：明線の幅を広げ、コントラストを落とす */
   float blur = 1.0 + depth * uCaustMag * 4.0;
   float t = uCaustTime / ${CAUSTICS_TILE.loopSec.toFixed(1)};
-  float a = csTile((q * uCaustScale.x * 1.6 + vec2(0.011, 0.007) * uCaustTime) / ${CAUSTICS_TILE.cellsA.toFixed(1)}, t, layers).r;
-  float b = csTile((q * uCaustScale.y * 1.6 + vec2(-0.008, 0.012) * uCaustTime + 3.7) / ${CAUSTICS_TILE.cellsB.toFixed(1)}, t * 1.3, layers).g;
+  /* タイル 1 枚 = 1/uCaustScale m（A 9.5m に 6 セル ≈1.6m、B 6m に 10 セル ≈0.6m） */
+  float a = csTile(q * uCaustScale.x + vec2(0.0018, 0.0012) * uCaustTime, t, layers).r;
+  float b = csTile(q * uCaustScale.y + vec2(-0.0013, 0.0020) * uCaustTime + 0.37, t * 1.3, layers).g;
   a = pow(max(a, 1e-4), 1.0 / blur);
   b = pow(max(b, 1e-4), 1.0 / blur);
   float net = a * uCaustMixW.x + b * uCaustMixW.y + a * b * uCaustMixW.z;
