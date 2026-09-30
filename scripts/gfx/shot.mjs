@@ -55,6 +55,9 @@ function serve() {
       const u = new URL(req.url, 'http://x');
       let p = decodeURIComponent(u.pathname);
       if (p.endsWith('/')) p += 'index.html';
+      /* ブラウザが勝手に取りに来る favicon は 204 で返す（index.html に icon が無く、
+         404 が console のエラーに数えられて smoke の «エラー 0» を割るため） */
+      if (p === '/favicon.ico') { res.writeHead(204); res.end(); return; }
       const f = path.join(ROOT, p);
       if (!f.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
       fs.stat(f, (err, st) => {
