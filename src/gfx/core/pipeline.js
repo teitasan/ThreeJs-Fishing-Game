@@ -100,7 +100,7 @@ export class FramePipeline {
     this._preparers = [];
     this._reflHidden = [];
     this._late = [];
-    this._lateVis = [];
+    this._scannedFrame = -1;
     this._hidden = [];
     this._mirror = new T.PerspectiveCamera();
     this._mirror.layers.mask = NG_MASK.REFLECTION;
@@ -192,8 +192,11 @@ export class FramePipeline {
     return changed;
   }
 
-  /* ゲームの late 物体を集め、ライトを全層にする（1 回の traverse） */
+  /* ゲームの late 物体を集め、ライトを全層にする（1 回の traverse）。反射と本描画で同じフレームに
+     2 回呼ばれるが、その間に game は物体を動かさない（updateUnderwater だけ）ので 1 フレーム 1 回 */
   _scan() {
+    if (this._scannedFrame === this.state.frameIndex) return;
+    this._scannedFrame = this.state.frameIndex;
     const late = this._late;
     late.length = 0;
     this.scene.traverse((o) => {

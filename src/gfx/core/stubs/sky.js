@@ -168,6 +168,7 @@ export class SkyStub extends NgModule {
     this.fog = { near: 100, far: 1000, color: this.colors.fogColor };
     this.sh = new T.SphericalHarmonics3();
     this._shT = -1;
+    this._shHour = -1; this._shCloud = -1; this._shRain = -1;
     this._shDirs = fibonacciSphere(SH_DIRS);
     this._basis = Array.from({ length: 9 }, () => new T.Vector3());
     this._v = new T.Vector3();
@@ -297,10 +298,13 @@ export class SkyStub extends NgModule {
     this.wet += (wetTarget - this.wet) * (1 - Math.exp(-dt / tau));
     frame.set(NG.MIST, 0.012 * dawn * (1 + this.wet) * (1 - 0.7 * rain), 0, 5, MIE_G);
     frame.set(NG.WEATHER, this.wet, rain, this.wet * 0.6, 0.42);
-    /* SH（4Hz）と空の照度 */
+    /* SH（4Hz）と空の照度。時刻の跳び（setHour・時計の変更）と天候の即時切り替えでもすぐ射影し直す
+       （実時間が止まっている撮影・ポーズでも、光と空が食い違ったまま残らない） */
     const t = input.envTime ?? 0;
-    if (this._shT < 0 || t - this._shT >= 0.25 || t < this._shT) {
+    const jumped = Math.abs(h - this._shHour) > 0.05 || Math.abs(cloud - this._shCloud) > 0.02 || Math.abs(rain - this._shRain) > 0.02;
+    if (this._shT < 0 || t - this._shT >= 0.25 || t < this._shT || jumped) {
       this._shT = t;
+      this._shHour = h; this._shCloud = cloud; this._shRain = rain;
       this._projectSH(F, E);
     }
     const up = this._shUp;
