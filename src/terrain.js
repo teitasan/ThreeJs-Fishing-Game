@@ -92,13 +92,15 @@ export class Terrain {
     this._gridsPromise = gridsSrc
       .then((g) => { this.grids = g || null; return this.grids; })
       .catch((e) => { warnOnce('高さ場の格子を作れませんでした', e); return null; });
+    /** game.js が作った caustics の uniform（湖底・魚・水中の物で共有。core に同じ参照を渡す） */
+    this.causticsUniforms = opts.causticsUniforms || null;
     const gfx = this.gfx;
     let attach = null;
     try {
       if (opts.renderer) gfx?.attachRenderer?.(opts.renderer);
       attach = gfx?.attachWorld?.({
         lake: this.lake, terrain: this, placement: this.placement, grids: this._gridsPromise,
-        progress: opts.progress || null,
+        progress: opts.progress || null, caustics: this.causticsUniforms,
       }) || null;
     } catch (e) {
       warnOnce('attachWorld が失敗、当たりと問い合わせだけで続行します', e);

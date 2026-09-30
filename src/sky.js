@@ -225,6 +225,14 @@ export class Environment {
         res = null;
       }
     }
+    /* 光のリグの向きは producer（sky モジュール）が決める（太陽高度 −1° で月へ、交差点で強度 0）。
+       env.keyDir は «実際に影を落としている光» と同じでなければならないので、返ってきたらそれに合わせる。
+       core が居ないときは旧版の «強い方» の判定のまま（fixture と一致） */
+    const kd = res?.keyDir;
+    if (kd && Number.isFinite(kd[0]) && Number.isFinite(kd[1]) && Number.isFinite(kd[2])) {
+      this.keyDir.set(kd[0], kd[1], kd[2]);
+      this.moonAmount = this.keyDir.dot(this.sunDir) < 0 ? 1 : 0;
+    }
     this._applyFrame(res, A, B, f, sunI, moonI, focus);
     this.rain.visible = !this._underwater && this.rainIntensity > 0.03;
   }

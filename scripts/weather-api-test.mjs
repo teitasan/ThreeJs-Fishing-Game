@@ -172,6 +172,12 @@ stub.resetStub();
   };
   env.update(1 / 60, 12, cam, null);
   assert.equal(scene.fog.near, 12); assert.equal(scene.fog.far, 3400);
+  /* 光の向きは producer が決めたもの（実際に影を落としている光）に合わせる */
+  stub.control.frameResult.keyDir = [-0.2, -0.9, -0.1];
+  env.update(1 / 60, 12, cam, null);
+  assert.deepEqual(v3(env.keyDir), [-0.2, -0.9, -0.1], 'producer の keyDir を使っていない');
+  assert.equal(env.moonAmount, 1, 'keyDir が太陽の反対なら月');
+  delete stub.control.frameResult.keyDir;
   assert.equal(env.sun.intensity, 2.5);
   assert.equal(env.sunColor.r, 1); assert.equal(env.zenithColor.b, 1);
   stub.control.frameResult = null;
