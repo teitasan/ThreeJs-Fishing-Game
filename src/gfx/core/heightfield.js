@@ -4,10 +4,11 @@
    world 層（Core-B）の buildHeightGrids の出力をそのまま R32F にして、
    派生（法線・汀線距離・底質・樹冠・被覆）を GPU で作る。
    - 高さ：R32F・Nearest。補間は GLSL の手動バイリニア（glsl/heightfield.glsl.js）
-   - 法線：oct RGBA8（格子と同じ解像度、中心差分）
-   - 汀線距離：R16F 1024²、ジャンプフラッド（JFA）の符号付き距離（陸 +、水 −、m）
+   - 法線：oct（格子と同じ解像度、中心差分）。空いた成分に派生を同居させてサンプラーを 2 枚減らす：
+       ngNormalNear = RGBA16F（xy 法線、z 汀線距離 m）、ngNormalFar = RGBA8（xy 法線、zw 樹冠の密度・高さ/40m）
+   - 汀線距離：1024² のジャンプフラッド（JFA）の符号付き距離（陸 +、水 −、m）を near の法線へ写す
    - 底質：grids.bed（RGBA8：mud, sand, rock, v）をそのまま（lake.bedAt と一致）
-   - 樹冠：placement.trees を CPU で ±512m @2m に散らす（RG8：密度・高さ/40m）
+   - 樹冠：placement.trees を CPU で ±512m @2m に散らし（RG8：密度・高さ/40m）、far の法線へ写す
    - 被覆：草・笹・シダ・花の密度（高さ・傾斜・汀線・樹冠からの仮の規則。
      groundcover / terrain が coverRules で差し替える前提の既定値）
    uniforms は共有の {value}。restoreGPU で派生だけ焼き直す
@@ -23,6 +24,8 @@ const CANOPY_H_MAX = 40;
 
 const NORMAL_FRAG = NG_HEIGHTFIELD_GLSL + /* glsl */ `
 uniform float ngUseFar;
+uniform sampler2D ngShoreSrc;     // JFA の結果（R16F、near の地図 ±260m）
+uniform sampler2D ngCanopySrc;    // CPU の樹冠（RG8、far の地図 ±512m）
 void main() {
   vec4 g = ngUseFar > 0.5 ? ngHfFar : ngHfNear;
   vec2 xz = g.xy + floor(vUv * g.w) / g.z;
@@ -36,7 +39,8 @@ void main() {
     hz0 = ngGridH(ngHeightNear, g, xz - vec2(0.0, e)); hz1 = ngGridH(ngHeightNear, g, xz + vec2(0.0, e));
   }
   vec3 n = normalize(vec3(hx0 - hx1, 2.0 * e, hz0 - hz1));
-  gl_FragColor = vec4(ngOctEncode(n), 0.0, 1.0);
+  vec2 extra = ngUseFar > 0.5 ? texture(ngCanopySrc, ngFarMapUV(xz)).rg : vec2(texture(ngShoreSrc, ngNearMapUV(xz)).r, 0.0);
+  gl_FragColor = vec4(ngOctEncode(n), extra);
 }
 `;
 
@@ -130,14 +134,16 @@ export class HeightField {
     /** GLSL の heightfield ライブラリが読む共有 uniforms（build 前は 1×1 の中立値） */
     this.uniforms = {
       ngHeightNear: { value: f1() }, ngHeightFar: { value: f1() },
-      ngNormalNear: { value: px([128, 128, 0, 255]) }, ngNormalFar: { value: px([128, 128, 0, 255]) },
-      ngShoreDist: { value: f1() }, ngBedMap: { value: px([255, 0, 0, 0]) },
-      ngCanopy: { value: px([0, 0, 0, 0]) }, ngCoverMap: { value: px([0, 0, 0, 0]) },
+      /* 法線（真上）+ 同居の派生。build 前は汀線距離 0・樹冠 0 */
+      ngNormalNear: { value: px([128, 128, 0, 0]) }, ngNormalFar: { value: px([128, 128, 0, 0]) },
+      ngBedMap: { value: px([255, 0, 0, 0]) }, ngCoverMap: { value: px([0, 0, 0, 0]) },
       ngHfNear: { value: new T.Vector4(0, 0, 1, 1) }, ngHfFar: { value: new T.Vector4(0, 0, 1, 1) },
       ngHfMapXf: { value: new T.Vector4(NG_HF_MAP.nearOrigin, 1 / NG_HF_MAP.nearSize, NG_HF_MAP.farOrigin, 1 / NG_HF_MAP.farSize) },
     };
     this._derived = [];
     this._placement = null;
+    /** 同居させる前の派生（lab の表示・デバッグ用。GLSL は ngNormalNear.z / ngNormalFar.zw を読む） */
+    this.maps = { shore: null, canopy: null };
   }
 
   /**
@@ -169,7 +175,7 @@ export class HeightField {
     u.ngBedMap.value = bed;
     progress?.(0.4);
     await this.forge.step();
-    u.ngCanopy.value = this._canopyTexture(placement);
+    this.maps.canopy = this._canopyTexture(placement);
     this._bakeDerived();
     progress?.(1);
     this.ready = true;
@@ -211,18 +217,13 @@ export class HeightField {
     return t;
   }
 
-  /* 法線・汀線距離・被覆（GPU）。restoreGPU でも呼ぶ */
+  /* 汀線距離（JFA）→ 法線（near に汀線距離、far に樹冠を同居）→ 被覆（GPU）。restoreGPU でも呼ぶ。
+     JFA の種は高さだけを読み、被覆は同居させた後の ngShoreD / ngCanopyAt を読む */
   _bakeDerived() {
     const T = this.THREE, f = this.forge, u = this.uniforms, g = this.grids;
     for (const t of this._derived) t.dispose();
     this._derived.length = 0;
     const own = (t) => { this._derived.push(t); return t; };
-    const normal = (useFar, n) => f.bake2D({
-      w: n, h: n, frag: NORMAL_FRAG, type: T.UnsignedByteType, wrap: 'clamp',
-      uniforms: { ...u, ngUseFar: { value: useFar } },
-    });
-    u.ngNormalNear.value = own(normal(0, g.near.n));
-    u.ngNormalFar.value = own(normal(1, g.far.n));
     /* 汀線距離（JFA）。一時 RT は使い捨て */
     const mk = () => f.target(SHORE_N, SHORE_N, { type: T.HalfFloatType, filter: 'nearest', wrap: 'clamp' });
     let a = mk(), b = mk();
@@ -236,7 +237,13 @@ export class HeightField {
       uniforms: { ngSrc: { value: a.texture }, ngTexelM: { value: NG_HF_MAP.nearSize / SHORE_N } },
     });
     a.dispose(); b.dispose();
-    u.ngShoreDist.value = own(shore);
+    this.maps.shore = own(shore);
+    const normal = (useFar, n, type) => f.bake2D({
+      w: n, h: n, frag: NORMAL_FRAG, type, wrap: 'clamp',
+      uniforms: { ...u, ngUseFar: { value: useFar }, ngShoreSrc: { value: shore }, ngCanopySrc: { value: this.maps.canopy } },
+    });
+    u.ngNormalNear.value = own(normal(0, g.near.n, T.HalfFloatType));
+    u.ngNormalFar.value = own(normal(1, g.far.n, T.UnsignedByteType));
     u.ngCoverMap.value = own(f.bake2D({ w: COVER_N, h: COVER_N, frag: COVER_FRAG, type: T.UnsignedByteType, wrap: 'clamp', uniforms: { ...u } }));
   }
 
