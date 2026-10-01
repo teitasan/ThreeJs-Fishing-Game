@@ -364,8 +364,19 @@ result = {
 | 項目 | シグネチャ | 既定 | 使う人 |
 | --- | --- | --- | --- |
 | `getUnderwaterContext(camera)` | `→ { strength, time, sunDir, night, rain, cloud, absorb /*Vector3 = σa*/, camPos, camNear, camFar, waterY }`（同じオブジェクトを書き換えて返してよい） | ngFrame から組む core の代替 | ファサード（旧 `Water.getUnderwaterContext` と同じ形）・post |
-| `createEffect()` | `→ pmndrs の Effect \| null`（水中の後処理。post が差し込む） | null | post |
+| `createEffect()` | `→ pmndrs の Effect \| null`（水中の後処理。post が差し込む。下の «水中の Effect の約束»） | null | post |
 | `optics` | `{ sigmaA: Vector3, sigmaS: number, insc: Vector3 }`（毎フレーム更新） | 既定の水 | water・post |
+
+**水中の Effect の約束**（G0 後に決めた。post のスタブ `src/gfx/core/stubs/post.js` が実装の手本、core-robust の post-underwater が検査）：
+
+- post は `ctx.services.underwater` の **オブジェクトが変わるたびに 1 回** `createEffect()` を呼ぶ（underwater の init で provide した後・
+  underwater が無効化されて既定へ戻った後・スタブで立て直されて provide し直した後）。同じオブジェクトの間は呼び直さない。null なら差し込まない
+- 差し込む位置は **HDR の鎖の先頭**：入力は露出前のリニアの放射輝度（ngFrame と同じ単位。`targets.main` の resolve 済みの色）。
+  その後に露出 → AO・光芒・Bloom → グレード → AgX → ディザ（pmndrs は深度を使う Effect を前へ並べ替えるので、先頭なら深度の有無に依らない）
+- post が渡す物：`mainCamera = ctx.gfx.camera`（その時点の描くカメラ）、`setDepthTexture(targets.main.depthTexture)`（RT を作り直したら渡し直す。
+  BasicDepthPacking の非線形の深度。線形の m が要るなら `ctx.pipeline.uniforms.ngSceneDepth` を自分の uniform に）。毎フレーム `uw` などは自分で ngFrame / services から読む
+- Effect は underwater の物：post は dispose しない（underwater の `dispose()` で捨てる）。水上（uw ≤ 0.5）でも鎖に居るので、
+  水上では `mainImage` の早い return か `blendMode.opacity = 0` で 0 に近い重さにする（予算 §12：水上 0）
 
 **underwater の waterUpdate（core が直接呼ぶ）**：`waterUpdate(f)`（`gfx.waterUpdate` の中、§2.1 の 5）。slot 9・10 と causticsUniforms の動く 6 つ
 （`uCaustTime = f.waterTime`・`uCaustSunDir = keyDir`・`uCaustNight`・`uCaustRain`・`uCaustCloud`・`uCaustStrength = profile.causticsStrength`）を書く。
@@ -399,8 +410,9 @@ result = {
 
 ### 6.7 post の口（core が直接呼ぶ）
 
-- `renderPost(targets, dt)`：P7。`targets.main`（resolve 済みの HDR）から **画面（render target null）** へ。露出（slot 16 を書く）→ 水中エフェクト
-  （`services.underwater.createEffect()`）→ AO・光芒・Bloom・グレード・AgX・ディザ → `profile.postAA`（'none' | 'smaa' | 'fxaa'）→ DRS のアップスケール。
+- `renderPost(targets, dt)`：P7。`targets.main`（resolve 済みの HDR）から **画面（render target null）** へ。水中エフェクト
+  （`services.underwater.createEffect()`。§6.3 の約束：鎖の先頭・露出前）→ 露出（slot 16 を書く）→ AO・光芒・Bloom・グレード・AgX・ディザ → `profile.postAA`（'none' | 'smaa' | 'fxaa'）→ DRS のアップスケール。
+  （**G0 後の変更**：以前の表は «露出 → 水中» の順だったが、pmndrs が深度を使う Effect を前へ並べ替えるので先頭に固定した）
   DRS は `ctx.pipeline.setRenderScale(s)`（`DrsController` が quality.js にある。`window.__gfxCapture` のときは 1.0 固定）
 - `async compile()`（任意）：warmup の中で 1 回。自分のパスのプログラムを先に作る
 - `setSize(w, h)`：描画バッファの大きさが変わった

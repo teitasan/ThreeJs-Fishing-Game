@@ -8,6 +8,9 @@
    - 露出は純関数。水中の係数だけ λ = 1.5/s で damp（撮影 __gfxCapture では即時）。
      画面の輝度による順応（±1EV）は本番の post モジュールの仕事（ここでは 1）
    - 動的解像度：DrsController（__gfxCapture のときは 1.0 固定）
+   - 水中の後処理：services.underwater.createEffect() の Effect を鎖の «先頭» に差し込む（露出前の HDR のリニア放射輝度、
+     depthTexture = targets.main.depthTexture、mainCamera = gfx.camera）。services.underwater のオブジェクトが
+     差し替わったら（provide・無効化・立て直し）引き直す。Effect は underwater の物（post は dispose しない）
    =========================================================== */
 import { EffectPass, Effect, ToneMappingEffect, ToneMappingMode, SMAAEffect, FXAAEffect } from 'postprocessing';
 import { NgModule } from '../module.js';
@@ -61,8 +64,13 @@ export class PostStub extends NgModule {
     this.dither = new Effect('NgDither', DITHER_FS, {
       uniforms: new Map([['blueNoise', new T.Uniform(blue)], ['frameIndex', new T.Uniform(0)]]),
     });
-    this.main = new EffectPass(cam, this.expo, this.tone, this.dither);
-    this.main.initialize(ctx.renderer, false, T.HalfFloatType);
+    this._cam = cam;
+    this._uwSvc = undefined;
+    this._uwFx = null;
+    this._depthTex = null;
+    this.main = null;
+    this._buildMain();
+    this._syncUnderwater(null);
     this.smaa = new EffectPass(cam, new SMAAEffect());
     this.smaa.initialize(ctx.renderer, false, T.UnsignedByteType);
     this.fxaa = new EffectPass(cam, new FXAAEffect());
@@ -75,6 +83,40 @@ export class PostStub extends NgModule {
   }
 
   setQuality(tier, profile) { this.drs.setRange(profile.drs); }
+
+  /* HDR の鎖（水中 → 露出 → AgX → ディザ）を作り直す。pmndrs は Effect を attributes の大きい順に並べ替える
+     （深度を使う Effect が前へ）ので、水中を先頭に置けば深度の有無に依らず先頭で走る */
+  _buildMain() {
+    const ctx = this.ctx, T = ctx.THREE, old = this.main;
+    const list = this._uwFx ? [this._uwFx, this.expo, this.tone, this.dither] : [this.expo, this.tone, this.dither];
+    this.main = new EffectPass(this._cam, ...list);
+    this.main.initialize(ctx.renderer, false, T.HalfFloatType);
+    if (this._size && this._size.x > 0) this.main.setSize(this._size.x, this._size.y);
+    this._depthTex = null;
+    if (old) {
+      old.setEffects([]);   // 露出・トーンマップ・ディザと水中の Effect は使い回すので、外してから捨てる
+      old.dispose();
+    }
+  }
+
+  /* services.underwater が差し替わったら createEffect を引き直す（同じオブジェクトの間は 1 回だけ） */
+  _syncUnderwater(targets) {
+    const svc = this.ctx.services.underwater;
+    if (svc !== this._uwSvc) {
+      this._uwSvc = svc;
+      let fx = null;
+      try { fx = svc?.createEffect?.() || null; } catch (e) { fx = null; }
+      if (fx && !(fx instanceof Effect)) {
+        this.ctx.log('post-uw', 'services.underwater.createEffect が pmndrs の Effect でない物を返した（無視する）');
+        fx = null;
+      }
+      if (fx !== this._uwFx) { this._uwFx = fx; this._buildMain(); }
+    }
+    const cam = this.ctx.gfx?.camera;
+    if (cam && cam !== this._cam) { this._cam = cam; this.main.mainCamera = cam; }
+    const depth = targets?.main?.depthTexture || null;
+    if (this._uwFx && depth && depth !== this._depthTex) { this.main.setDepthTexture(depth); this._depthTex = depth; }
+  }
 
   /* 画面の大きさ（描画バッファ）に合わせる */
   _fit() {
@@ -93,6 +135,7 @@ export class PostStub extends NgModule {
    */
   renderPost(targets, dt) {
     const ctx = this.ctx, r = ctx.renderer, F = ctx.frame.data;
+    this._syncUnderwater(targets);
     this._fit();
     const capture = !!globalThis.__gfxCapture;
     /* 露出（§2）：太陽高度・雲・雨の純関数 × 水中（damp） */
@@ -120,10 +163,11 @@ export class PostStub extends NgModule {
 
   setSize() { this._size?.set(0, 0); }
 
-  stats() { return { draws: 2, tris: 2, instances: 0, texBytes: 0, programs: 3 }; }
+  stats() { return { draws: 2, tris: 2, instances: 0, texBytes: 0, programs: 3, underwaterEffect: !!this._uwFx }; }
 
   dispose() {
     super.dispose();
+    if (this.main && this._uwFx) this.main.setEffects([this.expo, this.tone, this.dither]);   // 水中の Effect は underwater の物
     for (const p of [this.main, this.smaa, this.fxaa]) p?.dispose();
     this.ldr?.dispose();
   }

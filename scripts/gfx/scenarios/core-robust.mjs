@@ -303,6 +303,35 @@ export default async function (h) {
     return [['lab の ctx.terrain が dockY・dockDir・heightAt・onDock・heightTexture を持つ', ok, t ? `dockY ${t.dockY}・onDock ${t.onDock(mid.x, mid.z)}` : 'null']];
   });
 
+  /* post のスタブが services.underwater.createEffect() の Effect を鎖の先頭に差し込み、service が差し替わったら引き直す */
+  await run('post-underwater', async () => {
+    const { Effect, EffectAttribute } = await import('postprocessing');
+    const L = window.__lab, g = L.gfx, R = L.renderer, gl = R.getContext();
+    const prev = g.services.underwater;
+    let calls = 0;
+    const fx = new Effect('NgRobustUw', `void mainImage(const in vec4 c, const in vec2 uv, const in float depth, out vec4 o) { o = vec4(depth < 1.0 ? 4.0 : 0.0, 0.0, 0.0, 1.0); }`,
+      { attributes: EffectAttribute.DEPTH });
+    g.services.provide('underwater', { ...prev, createEffect: () => { calls++; return fx; } });
+    L.cam('dock-3p'); L.freeze(10);
+    L.tick(4);
+    const px = new Uint8Array(4);
+    R.setRenderTarget(null);
+    gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);   // 下：桟橋（深度 < 1）
+    const sky = new Uint8Array(4);
+    gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight - 4, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, sky);   // 上：空（深度 = 1）
+    const post = g.modules.get('post');
+    const inChain = post?.main?.effects?.[0] === fx;
+    g.services.underwater = prev;   // 元の service へ（差し替わったので外れる）
+    L.tick(2);
+    const removed = !post?.main?.effects?.includes(fx);
+    return [
+      ['createEffect の Effect が鎖の先頭に入り、深度付きで描かれる', inChain && px[0] > px[1] + 50 && px[0] > px[2] + 50 && Math.max(sky[0], sky[1], sky[2]) < 30,
+        `先頭 ${inChain}・桟橋 ${Array.from(px)}・空 ${Array.from(sky)}（露出と AgX の後）`],
+      ['createEffect は service のオブジェクトにつき 1 回', calls === 1, calls],
+      ['service が差し替わると外れる', removed, ''],
+    ];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');
