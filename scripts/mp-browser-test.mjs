@@ -96,27 +96,61 @@ async function screenshot(tab, path) {
 }
 
 /** ゲームの origin を開いてから join フラグを入れてリロード（タイトルのボタンと同じ流れ） */
-async function joinAs(tab, name) {
+async function joinAs(tab, name, quality = null) {
+  /* quality：その品質で «起動» させる。ページのスクリプトより先にセーブの設定へ書く
+     （読み込み直しの直前にゲームが unload でセーブを書き戻すので、evaluate で書くと消える）。
+     当たりが品質に依らないことを確かめる（ARCHITECTURE §9） */
+  if (quality) {
+    await tab.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { const K = 'lakeside-fishing-save-v1';
+      const s = JSON.parse(localStorage.getItem(K) || '{}');
+      s.settings = { ...(s.settings || {}), quality: ${JSON.stringify(quality)}, debug: false };
+      localStorage.setItem(K, JSON.stringify(s)); } catch (e) {}` });
+  }
   await tab.send('Page.navigate', { url: GAME_URL });
   await sleep(2000);
+  /* 初回は wrangler の配信が遅いことがある。ゲームの origin に入るまで待つ */
+  const origin = new URL(GAME_URL).origin;
+  for (let i = 0; i < 60; i++) {
+    const o = await tab.evalJs('location.origin').catch(() => null);
+    if (o === origin) break;
+    await sleep(500);
+  }
   await tab.evalJs(
     `sessionStorage.setItem('lakeside-fishing-mp-join', ${JSON.stringify(name)}); location.reload(); 'ok'`
   );
 }
 
+/** 当たり（障害物の配列・桟橋の寸法）と湖のハッシュ。品質の違う 2 クライアントで一致すること（ARCHITECTURE §9） */
+const COLLISION_HASH = `(() => {
+  const g = window.__game, t = g.terrain;
+  let h = 2166136261 >>> 0;
+  const mix = (v) => { const s = Number.isFinite(v) ? v.toFixed(5) : String(v); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+  for (const v of t.obstacles) mix(v);
+  for (const v of [t.dockY, t._dockLen, t.dockStart.x, t.dockStart.z, t.dockEnd.x, t.dockEnd.z]) mix(v);
+  for (const s of t.structures || []) mix(s.x), mix(s.z), mix(s.r);
+  return { hash: h.toString(16), n: t.obstacles.length / 4, quality: g.state.settings.quality, seed: g.state.seed };
+})()`;
+
 /* ---- タブ A（あさひ） ---- */
 const a = await openTab('about:blank');
 tabs.push(a);
-await joinAs(a, 'あさひ');
+await joinAs(a, 'あさひ', 'low');
 await waitReady(a, 'A(あさひ)');
 
 /* ---- タブ B（ゆうひ） ---- */
 const b = await openTab('about:blank');
 tabs.push(b);
-await joinAs(b, 'ゆうひ');
+await joinAs(b, 'ゆうひ', 'high');
 await waitReady(b, 'B(ゆうひ)');
 
 await sleep(1500);   // 参加通知と初回状態の往復を待つ
+
+/* ---- 品質の違う 2 クライアントで当たりが同じか ---- */
+const colA = await a.evalJs(COLLISION_HASH);
+const colB = await b.evalJs(COLLISION_HASH);
+if (colA.quality === colB.quality) fail(`2 つのタブの品質が同じ（${colA.quality}）。品質を変えて起動できていない`);
+if (colA.hash !== colB.hash || colA.n !== colB.n) fail(`当たりが品質で違う：A(${colA.quality}) ${colA.hash}/${colA.n} ・ B(${colB.quality}) ${colB.hash}/${colB.n}`);
+ok(`品質 ${colA.quality} と ${colB.quality} で当たりが一致（障害物 ${colA.n}、ハッシュ ${colA.hash}、湖 ${colA.seed}/${colB.seed}）`);
 
 /* ---- 相互に見えているか ----
    同じ Chrome 内の他タブ（以前の実行の残骸など）がいる可能性を除き、
