@@ -72,7 +72,7 @@ export class TreeBuild {
       if (k) v += dist(points[k], points[k - 1]) * this.H;
       nodes.push({ p: points[k], r: radii[k], v, ao: 1, flex: o.flex ? o.flex[k] : 0 });
     }
-    const t = { nodes, radial: o.radial, bark: o.bark, phase: o.phase ?? 0, level: o.level ?? 0, flags: o.flags ?? 0, uRepeat: o.uRepeat ?? Math.max(1, Math.round(radii[0] * this.H * 6.283 / 0.5)) };
+    const t = { nodes, radial: o.radial, bark: o.bark, phase: o.phase ?? 0, level: o.level ?? 0, flags: o.flags ?? 0, uRepeat: Math.min(8, o.uRepeat || Math.max(1, Math.round(radii[Math.min(radii.length - 1, 4)] * this.H * 6.283 / 0.5))) };
     this.tubes.push(t);
     return t;
   }

@@ -12,7 +12,7 @@
                   u8 AO, u8 しなり, u8 枝の位相, u8 乱数
    GPU の頂点（20B、属性ごとの配列）：
      position Int16×3（正規化、× POS_RANGE）、normal Int8×2（oct、正規化）、uv Uint16×2（正規化）、
-     ngWind Uint8×4（しなり, 枝の位相, 葉の震えの重み, 乱数）、ngExtra Uint8×4（AO, 旗, 樹冠の深さ, 厚み）
+     ngWind Uint8×4（しなり, 枝の位相, 葉の震えの重み, 乱数）、ngExtra Uint8×4（AO, 旗, 樹冠の深さ, LOD 255 = LOD1）
    旗（ngExtra.y × 255）：bit7 = 葉、下位 7bit = 樹皮 / 葉の配列の層
    =========================================================== */
 
@@ -21,7 +21,9 @@ export const POS_RANGE = 1.25;          // 正規化した位置の範囲（±1.
 export const R_MAX = 0.08;              // 管の半径の上限（r/H）
 export const CARD_MAX = 0.16;           // カードの長さ・幅の上限（/H）
 export const V_SCALE = 256;             // 樹皮の v（m）の量子化（1/256 m）
-export const UV_V_RANGE = 64;           // GPU の uv.y（樹皮）の範囲（0..64 m）→ unorm16
+export const UV_V_RANGE = 2;            // GPU の uv.y（樹皮の長さ ÷ 樹高、0..2）→ unorm16。シェーダで × 樹高 = m
+/** カードの節の数（LOD0 / LOD1） */
+export const CARD_SEGS = [3, 2];
 export const UV_U_RANGE = 8;            // GPU の uv.x（樹皮の周の繰り返し）の範囲
 export const TUBE_HEAD = 8, TUBE_NODE = 12, CARD_SIZE = 18;
 export const FLAG_LEAF = 128;
@@ -163,7 +165,7 @@ export function expandLod(rec, o) {
   const position = new Int16Array(verts * 3), normal = new Int8Array(verts * 2), uv = new Uint16Array(verts * 2);
   const wind = new Uint8Array(verts * 4), extra = new Uint8Array(verts * 4);
   const index = verts > 65535 ? new Uint32Array(tris * 3) : new Uint16Array(tris * 3);
-  const crown = o.crown, bend = o.bend ?? 0.6, crownR = o.crownR || 0.3;
+  const crown = o.crown, bend = o.bend ?? 0.6, crownR = o.crownR || 0.3, href = o.href || 20, lodW = o.lod ? 1 : 0;
   let vi = 0, ii = 0;
   const put = (x, y, z, nx, ny, nz, u, v, w0, w1, w2, w3, e0, e1, e2, e3) => {
     position[vi * 3] = q16(x); position[vi * 3 + 1] = q16(y); position[vi * 3 + 2] = q16(z);
@@ -207,8 +209,8 @@ export function expandLod(rec, o) {
         const ca = Math.cos(ang), sa = Math.sin(ang);
         const rx = nx * ca + bx * sa, ry = ny * ca + by * sa, rz = nz * ca + bz * sa;
         put(a.p[0] + rx * a.r, a.p[1] + ry * a.r, a.p[2] + rz * a.r, rx, ry, rz,
-          (j / t.radial) * t.uRepeat / UV_U_RANGE, a.v / UV_V_RANGE,
-          a.flex, t.phase, 0, 0, a.ao, t.bark & 127, dep, 0);
+          (j / t.radial) * t.uRepeat / UV_U_RANGE, a.v / href / UV_V_RANGE,
+          a.flex, t.phase, 0, (t.level & 3) / 3, a.ao, t.bark & 127, dep, lodW);
       }
     }
     for (let k = 0; k < N.length - 1; k++) {
@@ -248,7 +250,7 @@ export function expandLod(rec, o) {
         let mx = fx * flip * (1 - bend) + ox * bend, my = fy * flip * (1 - bend) + oy * bend, mz = fz * flip * (1 - bend) + oz * bend;
         const ml = Math.hypot(mx, my, mz) || 1;
         mx /= ml; my /= ml; mz /= ml;
-        put(x, y, z, mx, my, mz, j, t, c.flex, c.phase, t, c.rand, c.ao, FLAG_LEAF | (c.layer & 127), depthAt(x, y, z), 0.5);
+        put(x, y, z, mx, my, mz, j, t, c.flex, c.phase, t, c.rand, c.ao, FLAG_LEAF | (c.layer & 127), depthAt(x, y, z), lodW);
       }
       if (k < S) {
         /* 次の節：垂れの分だけ下へ回す */
