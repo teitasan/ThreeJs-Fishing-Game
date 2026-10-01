@@ -213,6 +213,26 @@ export class Gfx {
     if (this.camera) this.pipeline.setCamera(this.camera);
     this.pipeline.post = (t, dt) => this._post(t, dt);
     this.pipeline.onRestore = () => this._restoreGPU();
+    this._wrapCompile(renderer);
+  }
+
+  /* renderer.compile を «mainRT を束縛して» コンパイルする形に包む。three はプログラムの鍵に描く先の色空間を入れる
+     （画面 = sRGB、RT = リニア）が、シーンはいつも mainRT（と反射・影の RT）へ描く。game.js は読み込みと applyQuality で
+     画面に対して renderer.compile を呼ぶので、包まないと全マテリアルで «使われない画面向け» のプログラムが 1 本ずつ増える
+     （G0：sky・water・地形… が 2 本ずつ）。compileAsync も中で this.compile を呼ぶので同じく効く */
+  _wrapCompile(renderer) {
+    if (renderer.userData?.ngCompileWrapped) return;
+    const compile = renderer.compile.bind(renderer);
+    renderer.compile = (scene, camera, targetScene = null) => {
+      let bound = false;
+      if (renderer.getRenderTarget() === null) {
+        this.safety.guardPass('targets', () => this.pipeline?._ensureTargets());
+        const main = this.targets?.main;
+        if (main) { renderer.setRenderTarget(main); bound = true; }
+      }
+      try { return compile(scene, camera, targetScene); } finally { if (bound) renderer.setRenderTarget(null); }
+    };
+    renderer.userData = { ...(renderer.userData || {}), ngCompileWrapped: true };
   }
 
   /** 描くカメラ（PostFX が渡す） */
