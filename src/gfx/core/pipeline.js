@@ -380,6 +380,10 @@ export class FramePipeline {
         /* three は render() の頭で scene.background を塗る。late で塗ると不透明の絵が消えるので外す */
         const bg = this.scene.background;
         this.scene.background = null;
+        /* MSAA の段では late の深度を resolve しない：main.depthTexture は不透明の後の resolve のまま（= 不透明の深度。
+           post が水中の Effect に渡すのもこれ）。high 2560×1440 の空のシーンで late 0.8 → 0.6ms（2×）・1.4 → 1.1ms（4×）。
+           G0 後の修正。MSAA の無い段は深度へ直接描くので late の深度（水面）が入る。CORE_API §9 */
+        t.main.resolveDepthBuffer = false;
         try {
           cam.layers.mask = NG_MASK.LATE;
           this.frame.beginPass(NG_PASS.MAIN, cam);
@@ -387,6 +391,7 @@ export class FramePipeline {
           r.render(this.scene, cam);
         } finally {
           this.scene.background = bg;
+          t.main.resolveDepthBuffer = true;
         }
       });
       this.budget.begin('post');

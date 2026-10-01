@@ -210,12 +210,34 @@ post のスタブ）。隠すのは描画だけで、CPU の update・prepare �
 | 反射の残り（釣り人・桟橋・空のドーム） | 0.2–0.4 | core + キャラクター |
 | 影のスタブ分（地形・木・桟橋が影マップへ） | 0.2–0.3（昼）〜 1.1（朝夕） | 各スタブ → 本物は «近景の影の予算»（terrain 0.3・trees 0.6）に入れる。地形は高さ場影があるので近景の影に描かない選択肢がある |
 
-- **core そのものの取り分は ≈1.5ms**（コピー 0.6 + late の MSAA 0.8 + 影の追従・高さ場影のスライス 0.1。2560×1440 の RGBA16F）。§7 の 0.70 は届かない（A-5 の見直し：core 1.5・キャラクター 1.5 で見込む）
+- **core そのものの取り分は ≈1.5ms**（コピー 0.6 + late の MSAA 0.8 + 影の追従・高さ場影のスライス 0.1。2560×1440 の RGBA16F）。§7 の 0.70 は届かない（A-5 の見直し：core 1.5・キャラクター 1.5 で見込む）。
+  **G0 後のレビューで訂正**：この 1.5ms は «モジュールでは避けられない» 固定費の一部だけで、空のシーンの下限は下の «core の下限» の表（2× で ≈3.7ms + post のスタブ 1.1ms）
 - **G0 の «グレーボックスの GPU < 5ms»**：全モジュールを隠した残り（core + キャラクター + post スタブ）は high 4.3–4.6ms・mid 0.7–0.8ms で合格。
   スタブ込みの全体は high 13.0ms / 9.8ms（水中）・mid 6.2 / 4.1ms で、その 2/3 は置き換えられるスタブ
 - §9 perf-matrix の «high の p95 ≤ 16.0ms» はスタブ込みの今は 16.0–17.9ms で届かない（Phase 2 のゲート。スタブの木と地形が本物の LOD に置き換わって初めて意味のある数字になる）
 - 再現：`QUALITY=high node scripts/gfx/shot.mjs scripts/gfx/scenarios/game-costs.mjs --size 2560x1440 --out DIR`、
   `QUALITY=high SHOTS=0 … game-matrix.mjs --size 2560x1440`（mid は 1920x1080）
+
+### core の下限（G0 後のレビュー、lab/core.html の high 2560×1440・`--size 2560x1440`、全モジュールの root を隠した空のシーン）
+
+釣り人・魚・チャートも無い（`?chart=0`、lab の characters は居るが root の外なので残る）。`bench` の passMin の 5 回の中央値、分解能 0.1ms。
+再現：scratchpad の `fx/floor.mjs`（`L.bench({ hide: [...gfx.modules.keys()] })` を MSAA 2× / 4× で）。
+
+| | shadow | reflection | opaque | copy | late | post | 計 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 2× + SMAA（修正前） | 0.5 | 0.4 | 1.4 | 0.7 | 0.8 | 1.1 | 4.9 |
+| 2× + SMAA（late の深度を resolve しない） | 0.5 | 0.4 | 1.5 | 0.7 | **0.6** | 1.2 | 4.9 |
+| 4×（修正前） | 0.5 | 0.4 | 2.3 | 0.7 | 1.4 | 0.5 | 5.8 |
+| 4×（late の深度を resolve しない） | 0.5 | 0.4 | 2.3 | 0.7 | **1.1** | 0.4 | 5.4 |
+
+- 固定費の中身：shadow 0.5 = 3072² の影マップのクリア（と釣り人）、reflection 0.4 = 反射 RT のクリアと mip、opaque 1.4（2×）/ 2.3（4×）=
+  MSAA のクリアと resolve（と釣り人）、copy 0.7、late 0.6 / 1.1 = 空の late の MSAA の読み戻しと色の resolve、post = スタブ（2× は SMAA 込み）
+- **採った**：late の深度を resolve しない（`pipeline.js`。late の後に main.depthTexture を読む物は無く、post が水中の Effect に渡す深度は不透明の深度のまま）。
+  空のシーンで 2× 0.8 → 0.6、4× 1.4 → 1.1ms、全スタブ込みの late も 2.9 → 2.7 / 3.9 → 3.6ms
+- **採らなかった**：sceneColor の mip を 4 段に限る。`TEXTURE_MAX_LEVEL = 4` を入れても copy は 0.7ms のまま（mip を止めると 0.4ms）。
+  mip の費用は 1 段目（画素の 1/4）がほとんどで、5 段目以降は 0.4% しか無い。0.3ms は mip を使う限り残る（ngCopyMips は凍結の API なので止めない）
+- 予算表（CORE_API §12.1）の core の行は «1.5ms» のままにし、«空のシーンの下限は 2× で ≈3.7ms（post のスタブ別）» を注に書いた。
+  釣り人・魚の分（≈0.5–0.8ms）はキャラクターの予約、MSAA のクリアと resolve は MSAA の費用（4× − 2× の差が S-1 の降格の判定）として数える
 
 ### 読み込み（load-time、1920×1080、コールド 3 回の中央値、`#loading` の文言の時刻から）
 

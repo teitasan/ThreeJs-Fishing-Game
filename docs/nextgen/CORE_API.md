@@ -630,6 +630,8 @@ uniforms：`ngHfShadow0`・`ngHfShadow1`（R8 相当、1 = 日向）・`ngHfShad
 | `ngCopyMips` | float | sceneColor の mip 段数 |
 
 - `ctx.pipeline.targets`：`main`（WebGLRenderTarget、samples = profile.msaa、`depthTexture`）・`copy`（`textures[0]` sceneColor、`textures[1]` 線形深度）・`refl`
+- `main.depthTexture` の中身：MSAA の段（high）は **不透明の深度**（late の深度は resolve しない。G0 後の修正で late 0.2–0.3ms）。MSAA の無い段（low・mid）は
+  深度へ直接描くので late の深度（水面など depthWrite の物）も入る。段に依らず不透明の深度が要るなら線形の `ngSceneDepth`（m）を使う
 - 大きさ = 描画バッファの物理 px × DRS の倍率（`pipeline.renderScale`）。倍率は **`NG_DRS_LEVELS = [1, 0.85, 0.75, 0.7, 0.6, 0.5]` の段だけ**
   （`setRenderScale` が `ngSnapRenderScale` で丸める。quality.js）。倍率が変わると main・copy・refl を全部作り直す（high 2560×1440 で その 1 フレーム +≈7ms）ので、
   **G0 後の修正**：以前は 0.05 刻みで 1 段ごとに作り直していた。`DrsController` は上の段の重さを «p90 × (上の段 / 今)²» で見積もって 16ms 未満のときだけ上げ、
@@ -771,7 +773,7 @@ NG_PROGRAM_BUDGET = { total: 90, perModule: 6, samplers: { frag: 12, vert: 4 } }
 | hardscape | 0.90 | 0.55 | 0.30 | |
 | weatherfx | 0.40（雨天 +0.25） | 0.30 | 0.15 | |
 | post | 1.00 | 0.75 | 0.50 | SMAA・DRS 込み |
-| core | **1.50**（G0 の実測で見直し：コピー 0.6・late の MSAA 0.8・影と高さ場影 0.1） | ≈0.3 | | core-requests A-5 |
+| core | **1.50**（G0 の実測で見直し：コピー 0.6・late の MSAA 0.6（G0 後に late の深度の resolve をやめて 0.8 → 0.6）・影と高さ場影 0.1）。空のシーンの下限は 2× で ≈3.7ms（影マップと反射のクリア・MSAA のクリアと resolve・釣り人を含む。post のスタブ別。spikes S-4 «core の下限»） | ≈0.3 | | core-requests A-5 |
 | キャラクター（予約） | **1.50**（影を含む） | | | |
 
 - 合計は high で ≈14.9ms（目標 14ms を ≈1ms 超える）。**Phase 1 は各自の行を合格条件にする**。超過分は Phase 2 で §7 の削る順
