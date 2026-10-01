@@ -725,7 +725,9 @@ Placement = {
 
 - **各モジュールは自分の表を `src/gfx/<m>/quality.js` に持つ**（ARCHITECTURE §7 の自分の行：本数・距離・RT の大きさ・ループの上限）
 - setQuality は «部分集合の作り直しと RT の再確保» だけ。ライト数・castShadow は変えない。同じ段で何度呼ばれてもよい（起動時に 1 回、段の切り替え、MSAA の降格で high のまま 2 回目が来る）
-- 段を替えると core が ngExtendStandard の古い段のプログラムを手放す（`userData.ngTiered`）。自前のマテリアルで同じことをしたいなら setQuality で `dispose()`
+- 段を替えると core が ngExtendStandard の古い段のプログラムを手放す（`userData.ngTiered`）。自前のマテリアルで同じことをしたいなら setQuality で `dispose()`。
+  **MSAA の降格だけ（high のまま 2 回目の setQuality）では手放さない**（鍵に MSAA は入らない。G0 後の修正：以前は warmup でコンパイルした
+  ng のプログラム 7 本を捨てて同期で作り直していた。本編 high 2560×1440 の ?msaa=2 で作られたプログラムの最大 id 48 → 42 = ?msaa=4 の 39 + SMAA 3）
 - MSAA の降格（spikes.md S-1）：high に入った最初の機会に 1 回だけ実測し、4× − 2× の上乗せ > 0.9ms なら 2× + SMAA。`ctx.gfx.msaa` で判定が見える。`?msaa=4` / `?msaa=2` で上書き
 - LOD 倍率 `setLodScale(k)`（slot 15.w にも入る）。距離の閾値に掛ける
 

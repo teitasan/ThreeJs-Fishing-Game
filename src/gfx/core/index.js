@@ -141,6 +141,8 @@ export class Gfx {
     /** 無効化したモジュールをスタブで立て直した回数（スタブ自身の作り直しは 1 セッション 1 回まで） */
     this._restarts = new Map();
     this.safety.onDisable = (id) => this._onModuleDisabled(id);
+    /** 最後に «プログラムの鍵» に入れた段（_releaseStalePrograms は段が変わったときだけ） */
+    this._programTier = this.quality.tier;
     this.quality.onQuality((tier, profile) => this._applyQuality(tier, profile));
     this._modulesLoading = this._importModules();
   }
@@ -549,7 +551,12 @@ export class Gfx {
     this.shadows.configure(profile);
     this.pipeline?.setQuality(tier);
     this._each('setQuality', tier, profile);
-    this._releaseStalePrograms();
+    /* プログラムの鍵に入るのは段だけ（MSAA の降格は鍵を変えない）。high のまま MSAA だけが変わった通知で手放すと、
+       warmup でコンパイルしたばかりのプログラムを捨てて同期で作り直していた（high の読み込み +≈90ms。G0 後の修正） */
+    if (tier !== this._programTier) {
+      this._programTier = tier;
+      this._releaseStalePrograms();
+    }
   }
 
   /* 段の切り替えで古い段のプログラムを手放す。ngExtendStandard の鍵には段が入るので、three は
