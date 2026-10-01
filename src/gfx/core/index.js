@@ -508,10 +508,19 @@ export class Gfx {
     this._each('update', this.f);
   }
 
-  /** 水中の流れ（Terrain.updateUnderwaterProps） */
+  /**
+   * 水中の流れ（Terrain.updateUnderwaterProps）。f.flowDir は xz の単位ベクトル（Vector2 の x = 世界 x、y = 世界 z）。
+   * game.js は terrain.dockDir（Vector3、y = 0）を渡すので、z を持つ物は z を採る（Vector2 なら y）。
+   * G0 後の修正：以前は `flowDir.y ?? flowDir.z` で、Vector3 の y = 0 が z を隠し、長さ 0.3 の x 軸の流れになっていた
+   * @param {{x:number, y?:number, z?:number}} flowDir
+   * @param {number} flowStrength
+   */
   setFlow(flowDir, flowStrength) {
-    if (flowDir) this._flow.dir.set(flowDir.x ?? 1, flowDir.y ?? flowDir.z ?? 0);
-    this.f.flowStrength = Number.isFinite(flowStrength) ? flowStrength : 0;
+    if (flowDir) {
+      const x = Number(flowDir.x), z = Number(flowDir.isVector2 || flowDir.z === undefined ? flowDir.y : flowDir.z);
+      if (Number.isFinite(x) && Number.isFinite(z) && x * x + z * z > 1e-8) this._flow.dir.set(x, z).normalize();
+    }
+    this.f.flowStrength = Number.isFinite(flowStrength) ? Math.max(0, flowStrength) : 0;
   }
 
   /** LOD 倍率 */

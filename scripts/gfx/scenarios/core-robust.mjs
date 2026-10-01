@@ -276,6 +276,24 @@ export default async function (h) {
     ];
   });
 
+  /* 水中の流れ：game.js が渡す Vector3（y = 0）の z を落とさない。lab も game.js と同じ流れを入れる */
+  await run('flow', () => {
+    const L = window.__lab, g = L.gfx, T = g.THREE;
+    L.tick(1);
+    const lab = [g.f.flowDir.x, g.f.flowDir.y, g.f.flowStrength];
+    g.setFlow(new T.Vector3(-0.315, 0, 0.949), 0.5);
+    const v3 = [g.f.flowDir.x, g.f.flowDir.y];
+    g.setFlow(new T.Vector2(0.6, 0.8), 0.2);
+    const v2 = [g.f.flowDir.x, g.f.flowDir.y];
+    L.tick(1);
+    const d = L.dock.dockDir;
+    return [
+      ['Vector3 の流れの z が f.flowDir.y に入り、単位ベクトルになる', Math.abs(v3[0] + 0.315) < 0.01 && Math.abs(v3[1] - 0.949) < 0.01 && Math.abs(Math.hypot(...v3) - 1) < 1e-6, v3.map((x) => x.toFixed(3)).join(',')],
+      ['Vector2 の流れはそのまま', Math.abs(v2[0] - 0.6) < 1e-6 && Math.abs(v2[1] - 0.8) < 1e-6, v2.join(',')],
+      ['lab は桟橋の向きの流れを入れる', lab[2] > 0.03 && Math.abs(lab[0] * d.x + lab[1] * d.z - 1) < 1e-3, lab.map((x) => x.toFixed(3)).join(',')],
+    ];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');

@@ -205,7 +205,7 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 | `frameIndex` | int | フレーム番号（slot 14.w は % 1024） |
 | `paused` | bool | dt === 0 |
 | `uw` | 0..1 | 水中の度合い（> 0.5 で水中扱い） |
-| `flowDir` / `flowStrength` | Vector2 / 0..1 | 水中の流れ |
+| `flowDir` / `flowStrength` | Vector2 / 0..1 | 水中の流れ。flowDir は **世界の xz の単位ベクトル**（`.x` = 世界 x、`.y` = 世界 z）。game.js は桟橋の向き（岸 → 湖心）、強さ 0.035 + water.wind·0.018（lab も同じ。`__lab.setFlow` で上書き）。**G0 後の修正**：以前は Vector3 の z が落ちて長さ 0.3 の x 軸になっていた |
 | `keyDir` / `sunDir` | Vector3 | key（光の来る向き、昼 = 太陽・夜 = 月）/ 常に太陽 |
 | `weather` | `{ key, cloud, rain }` | damp 済みの天候（clear 0.14/0、cloudy 0.72/0、rain 0.95/0.85 へ向かう） |
 | `tier` | string | 今の段 |
@@ -907,6 +907,7 @@ bootLabPage({ modules: ['water'] });   // ここに挙げた id だけ担当者�
 | --- | --- |
 | `gfx` `renderer` `scene` `camera` `lake` `dock` `placement` `worldMs` | 中身 |
 | `setHour(h)` / `setWeather(k, { instant })` / `setTier(t)` | 時刻・天候（instant で damp を飛ばす）・段 |
+| `setFlow({x, z} \| null, strength = 0.06)` | 水中の流れを上書き（null で game.js と同じ既定：桟橋の向き） |
 | `cam(preset \| { pos: [x,y,z], target: [x,y,z], hour?, weather? })` / `presets()` | カメラ |
 | `freeze(t?)` / `unfreeze()` | 時間を止める（`__gfxCapture = true`：露出の順応・DRS も止まる。撮影の再現性） |
 | `tick(n = 1, dt = 1/60)` / `resume()` | 同期で n フレーム進める（rAF を止める）/ rAF に戻す |

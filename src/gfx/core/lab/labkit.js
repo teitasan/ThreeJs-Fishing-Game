@@ -202,7 +202,7 @@ function makeLabApi(env) {
   const { renderer, scene, camera, gfx, lake, dock, chars } = env;
   const st = {
     hour: 12, weather: { ...LAB_WEATHERS.clear }, target: LAB_WEATHERS.clear, time: 0, waterTime: 0,
-    frozen: false, running: true, view: null, frames: 0, fps: 0, lastT: performance.now(), fpsT: 0, fpsN: 0,
+    frozen: false, running: true, view: null, flow: null, frames: 0, fps: 0, lastT: performance.now(), fpsT: 0, fpsN: 0,
   };
   const sunDir = new THREE.Vector3(), keyDir = new THREE.Vector3(), focus = new THREE.Vector3();
   const dbg = new THREE.RawShaderMaterial({
@@ -238,6 +238,10 @@ function makeLabApi(env) {
     gfx.services.hardscape.setLamp(night, sdt);
     gfx.waterUpdate({ sdt, time: st.waterTime, wind: 1 + w.rain * 0.92 + w.cloud * 0.14, camera });
     gfx.setUnderwater(camera.position.y < gfx.frame.cam.waterY);
+    /* 水中の流れ：game.js と同じ（桟橋の向き、強さ 0.035 + water.wind·0.018）。__lab.setFlow で上書きできる */
+    const wwind = 1 + w.rain * 0.92 + w.cloud * 0.14;
+    if (st.flow) gfx.setFlow(st.flow.dir, st.flow.strength);
+    else gfx.setFlow(dock.dockDir, 0.035 + wwind * 0.018);
     if (chars.angler) {
       try {
         chars.angler.update(sdt, { state: 'idle', charge: 0, tension: 0, moving: 0, speed: 0, reeling: 0, rarity: 0, time: st.time, lineEnd: null });
@@ -480,6 +484,12 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     },
     /** 品質 */
     setTier(t) { gfx.setQuality(t); },
+    /**
+     * 水中の流れを上書きする（既定は game.js と同じ桟橋の向き・0.035 + wind·0.018）。null で既定へ
+     * @param {{x:number, z:number}|null} dir 世界の xz（正規化される）
+     * @param {number} [strength]
+     */
+    setFlow(dir, strength = 0.06) { st.flow = dir ? { dir: { x: dir.x, z: dir.z ?? dir.y }, strength } : null; },
     /**
      * 10 の id 以外のモジュールを足す（lab 専用）。gfx の ctx で作り、init → setQuality → setLodScale の後で
      * gfx.modules に入れる（以後は update / prepare / beforePass / setQuality / stats が他のモジュールと同じに回る）。
