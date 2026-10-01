@@ -154,7 +154,7 @@
 | A-3 | **採用** | 雲影は頂点（`vNgCloud`）。fog チャンクのある自前シェーダは `ngSunVisibilityC(P, nearVis, vNgCloud)` |
 | A-4 | **採用**（担当：underwater） | uCaustTex は同じ DataArrayTexture。本物は面積比の焼き込みへ置き換えてよい（16 名・署名・y > −0.02 で 0・sampler2DArray のみ、は caustics-contract が固定） |
 | A-5 | **決定 + 持ち越し**（担当：Phase 2 の統合者） | core の行を 0.70 → **1.5ms**（コピー 0.6・late の MSAA 0.8・影と高さ場影 0.1）、キャラクターの予約を 1.2 → **1.5ms**（影を払うようになった）と見込み直す（S-4）。§6 の各モジュールの予算は Phase 1 ではそのまま（担当はそれを合格条件にする）。合計は 14ms の目標を ≈1.1ms 超えるので、Phase 2 の perf-matrix で §7 の削る順（フロクセル → GTAO → 光芒 → 反射の解像度 …）で詰める。G0 の «グレーボックス < 5ms» は «core + キャラクター + post スタブ» の 4.3–4.6ms（high 2560×1440）で合格とした |
-| A-6 | **解決**（5c609a8・ee1d1f6・b3c210c） | `NG_PROGRAM_BUDGET = { total: 90, perModule: 6, samplers: { frag: 12, vert: 4 } }`。高さ場ライブラリのサンプラーは 6 枚（汀線は ngNormalNear.z、樹冠は ngNormalFar.zw）。warmup の修正で余分な «画面向け» プログラムが消え、lab の起動時 23 本・ゲーム側（釣り人・魚・影の変種）≈ 28 本。断片サンプラーの最大は water スタブの 9 |
+| A-6 | **解決**（5c609a8・ee1d1f6・b3c210c） | `NG_PROGRAM_BUDGET = { total: 90, perModule: 6, samplers: { frag: 12, vert: 4 } }`。高さ場ライブラリのサンプラーは 6 枚（汀線は ngNormalNear.z、樹冠は ngNormalFar.zw）。renderer.compile の包み（G-3）で余分な «画面向け» プログラムが消え、本編の起動時の総数は 31–34 本（スタブ込み）・smoke-all の最後で 50 本。lab のゲーム側（釣り人・魚 6 匹・チャート・影の変種）28 本。断片サンプラーの最大は water スタブの 9 |
 | A-7 | **採用** | CORE_API に全部書いた |
 | A-8 | **持ち越し**（担当：sky・water・post の各モジュール。Phase 1 の合格条件） | 17:45 の黒つぶれ（sky の key と post の順応）、noon-fp-down の水の色相（water）、真夜中／真昼の比（sky・post）。スタブでは直さない |
 
@@ -164,7 +164,7 @@
 | --- | --- | --- |
 | G-1 | **修正**（b3c210c） | 近景の影マップに何も入っていなかった。three r180 の WebGLShadowMap は影の物体を «render() に渡したカメラ» の layers で判定するので、layer 31 だけの tick カメラでは空。`renderNear` の間だけ shadowMap.render へ shadow.camera（SHADOW のマスク）を渡す。S-3 の shadow 0.2ms は空の影マップの値。core-robust に検査を足した |
 | G-2 | **訂正**（spikes S-3 → S-4） | S-3 の本編の表は DRS が解像度を落とした状態の値（同じ条件で 2176×1224）。G0 の数字は全解像度 |
-| G-3 | **修正**（b3c210c） | warmup の compileAsync が画面向けの色空間でプログラムを作っていた（全マテリアルで 1 本ずつ余分） |
+| G-3 | **修正**（b3c210c・ed9c421） | warmup の compileAsync と game.js の `renderer.compile`（読み込み・applyQuality）が画面向けの色空間でプログラムを作っていた（全マテリアルで 1 本ずつ余分）。core が renderer.compile を mainRT に束縛して包む（起動時 54 → 34 本、読み込み −0.2s） |
 | G-4 | **修正**（ac223f8） | 水のスタブが水の時刻を update で受けて 1 フレーム遅れていた。«水の値は prepare で受ける» を CORE_API の規則にした |
 | G-5 | **持ち越し**（担当：Multiplayer / worker の担当。worker/** は描画の範囲外で保護） | `wrangler dev --local` は `POST /api/voice/join`（RealtimeKit の資格情報なし → 503）の後に «Can't read from request stream after response has been sent» で落ちることがある。mp-browser-test は再起動後に合格 |
 | G-6 | **持ち越し**（担当：post モジュール + 統合者、Phase 2） | MSAA の降格の判定（S-1）は実測なので、負荷と大きさで回ごとに変わる（G0 の high 1280×720 で 4× の回と 2× の回）。見た目が起動ごとに変わらないよう、ヒステリシスか «大きさで決める表» を Phase 2 で決める |

@@ -709,7 +709,8 @@ import { NG_PROGRAM_BUDGET } from '../core/quality.js';
 NG_PROGRAM_BUDGET = { total: 90, perModule: 6, samplers: { frag: 12, vert: 4 } }
 ```
 
-- `total`：1 つの段・影ありで同時に生きているプログラムの総数（ゲームの釣り人・魚・UI・影の変種を含む。G0 でゲーム側 ≈28 本）
+- `total`：1 つの段・影ありで同時に生きているプログラムの総数（ゲームの釣り人・魚・UI・影の変種を含む。G0 の本編の起動時は全スタブ込みで 31–34 本、smoke-all の最後で 50 本）
+- core は `renderer.compile` を mainRT に束縛して包んでいる（画面向けの余分なプログラムを作らない）。自分で `compile` を呼ぶ必要は無い（warmup が全部を先にコンパイルする）
 - `perModule`：**1 モジュールが 1 つの段で持つプログラム ≤ 6**（影の depth / distance の変種も 1 本と数える。同じ key のマテリアルは 1 本を共有する）
 - 数え方：`__lab.programAudit().byModule`（シェーダの印の id ごと）。example-smoke が雛形（§16.3）
 
@@ -747,7 +748,7 @@ NG_PROGRAM_BUDGET = { total: 90, perModule: 6, samplers: { frag: 12, vert: 4 } }
 
 ### 12.2 読み込み・CPU・VRAM
 
-- 追加の読み込み ≤ 3.5s（上限 6s）。G0 の全スタブは旧版より 0.8–1.3s **速い**（high 1.21s / 旧 2.51s）。各自の init の時間は `gfx.loadStats.modules[id]`（ms）で見える
+- 追加の読み込み ≤ 3.5s（上限 6s）。G0 の全スタブは旧版より 1.0–1.5s **速い**（high 1.05s / 旧 2.51s）。各自の init の時間は `gfx.loadStats.modules[id]`（ms）で見える
 - init の中の重い処理は 1 回 ≤ 30ms に刻んで `await ctx.forge.step()`（読み込み画面を止めない）
 - CPU：update + prepare の合計を各自の CPU 予算に（`f` の生成や毎フレームの new を避ける。three の物は使い回す）
 - VRAM：high ≈ 800MB、mid ≈ 330MB、low ≈ 140MB（全体）。`stats().texBytes` に自分の分を出す
@@ -805,7 +806,7 @@ forge.releaseScratch()                                   // core が読み込み
 ## 15. 最小のモジュールの例
 
 `src/gfx/core/examples/exampleModule.js`（id `'example'`）が、ここまでの口を全部使った «動く» 雛形。`lab/example.html` で起動し、
-`scripts/gfx/scenarios/example-smoke.mjs` が 3 段で撮って検査する（G0 で合格：プログラム 2 本・断片サンプラー 4・頂点 2・GPU ≈0.04ms・NaN 0・エラー 0）。
+`scripts/gfx/scenarios/example-smoke.mjs` が 3 段で撮って検査する（G0 で合格：プログラム 3 本（杭・杭の影・浮き輪）・断片サンプラー最大 4・頂点 2・GPU ≈0.04ms・NaN 0・エラー 0）。
 
 中身（抜粋。全文はファイルを読むこと）：
 

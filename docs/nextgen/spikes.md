@@ -221,18 +221,20 @@ post のスタブ）。隠すのは描画だけで、CPU の update・prepare �
 
 | 段 | 旧 c8490ed low / mid / high | 新（全スタブ）low / mid / high |
 | --- | --- | --- |
-| 湖（lake） | 16 / 17 / 23ms | 20 / 24 / 21ms |
-| 湖底（bed：旧は地形・木・水草の構築、新は placement・高さ場・全モジュールの init） | 1467 / 1885 / 2232 | 562 / 534 / 563 |
-| 水（water） | 101 / 105 / 111 | 11 / 6 / 8 |
-| 魚 → 準備完了（fishAngler：新は postfx.warmup を含む） | 122 / 126 / 125 | 343 / 330 / 571 |
-| **合計（最初の文言 → 終わり）** | **1755 / 2171 / 2509** | **998 / 953 / 1214** |
-| **追加の読み込み（新 − 旧）** | | **−757 / −1218 / −1295ms** |
+| 湖（lake） | 16 / 17 / 23ms | 18 / 24 / 21ms |
+| 湖底（bed：旧は地形・木・水草の構築、新は placement・高さ場・全モジュールの init） | 1467 / 1885 / 2232 | 489 / 540 / 514 |
+| 水（water） | 101 / 105 / 111 | 9 / 16 / 13 |
+| 魚 → 準備完了（fishAngler：新は postfx.warmup を含む） | 122 / 126 / 125 | 203 / 234 / 456 |
+| **合計（最初の文言 → 終わり）** | **1755 / 2171 / 2509** | **762 / 869 / 1051** |
+| **追加の読み込み（新 − 旧）** | | **−993 / −1302 / −1458ms** |
 
-- core の内訳（gfx.loadStats）：高さ場（Worker 4 本の格子 + GPU の派生）310–370ms、モジュールの init 計 70–90ms（underwater の caustics の焼き込み 21ms・
-  post 25ms・trees 12–28ms）、warmup 215–470ms（compile 130–165ms・high は MSAA の実測 150ms・空回し 3 フレーム 75–175ms）
-- G0 の修正：warmup の compileAsync を画面（sRGB 出力）に対して行っていたので、three が «描く先の色空間» 違いのプログラムを全マテリアルで
-  1 本ずつ余分に作っていた（lab で 33 → 23 本）。mainRT を束縛してからコンパイルする（index.js の warmup）
-- 予算の目安（§8・§6）：追加 ≤ 3.5s（上限 6s）。本物のモジュールの読み込み予算は sky 0.2・terrain 0.6・trees 0.9s など（§6）。今の余裕は旧版より 0.8–1.3s 速い分も含めて ≈ 4.3–4.8s
+- core の内訳（gfx.loadStats）：高さ場（Worker 4 本の格子 + GPU の派生）275–320ms、モジュールの init 計 70–90ms（underwater の caustics の焼き込み 21ms・
+  post 25ms・trees 12–28ms）、warmup 105–275ms（compile 45–55ms・high は MSAA の実測 ≈140ms・空回し 3 フレーム 60–85ms）
+- G0 の修正（b3c210c・ed9c421）：game.js の読み込みと applyQuality の `renderer.compile` と warmup の compileAsync が «画面（sRGB 出力）» に対して
+  コンパイルしていたので、three が «描く先の色空間» 違いのプログラムを全マテリアルで 1 本ずつ余分に作っていた。core が renderer.compile を
+  «mainRT を束縛して» 包む（本編の起動時のプログラム 54 → 34 本、smoke-all の最後 82 → 50 本、warmup の compile 130–165 → 45–55ms）
+- 予算の目安（§8・§6）：追加 ≤ 3.5s（上限 6s）。本物のモジュールの読み込み予算は sky 0.2・terrain 0.6・trees 0.9s など（§6）。旧版より 1.0–1.5s 速いので、
+  その分も含めて 3.5s までの余裕は ≈ 4.5–5s
 - 再現：`TIERS=low,mid,high RUNS=3 node scripts/gfx/shot.mjs scripts/gfx/scenarios/load-time.mjs --size 1920x1080 --out DIR`。
   旧版は c8490ed を取り出したツリーに新しい shot.mjs と load-time.mjs を写して同じコマンド
 
@@ -240,9 +242,9 @@ post のスタブ）。隠すのは描画だけで、CPU の update・prepare �
 
 | 段 | 中央値 | p95 | 10 時間後の中央値 / p95 |
 | --- | --- | --- | --- |
-| low（64² の水面メッシュ） | 0.96mm | 2.77mm | 1.36 / 3.95mm |
-| mid | 0.57mm | 1.31mm | 0.63 / 1.59mm |
-| high | 0.26mm | 0.71mm | 0.37 / 1.07mm |
+| low（64² の水面メッシュ） | 0.96mm | 2.76mm | 1.36 / 3.95mm |
+| mid | 0.42–0.57mm | 1.26–1.31mm | 0.63 / 1.59mm |
+| high | 0.26–0.29mm | 0.67–0.71mm | 0.37 / 1.07mm |
 
 G0 の修正：水のスタブが水の時刻を update で受けていた（gfx.waterUpdate は updateModules の後なので 1 フレーム前の波。high の中央値 1.3mm）。
 prepare で受け直す（ac223f8）。low の残りは 64² のリングの頂点間の線形補間。
