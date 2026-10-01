@@ -37,3 +37,41 @@ float ngSunVisibilityC(vec3 P, float nearVis, float cloud) {
 float ngSunVisibility(vec3 P, float nearVis) { return ngSunVisibilityC(P, nearVis, ngCloudShadow(P)); }
 #endif
 `;
+
+/**
+ * 全画面の効果（post の光芒・underwater の光の筋など）が «近景の影マップ» を読むための部品。
+ * uniforms は ctx.shadows.nearUniforms（{value} は段を替えても同じ。中身は毎フレームの近景の影の後に core が入れ直す）。
+ * float ngNearShadowAt(vec3 P)：世界の点 P が key の近景の影の中なら 0、日向なら 1（3×3 の二次 B スプラインの PCF =
+ * ngShadowPCF と同じ重み、three の RGBA 詰めの深度、bias 込み、shadow.intensity（雲量で 1 → 0.35）を掛けた後）。
+ * 影マップの外（注視点 ±extent の外・光の手前と奥）は 1。normalBias は掛けない（空中の点を読む前提）。
+ * 範囲の外の遮蔽は ngHfShadowFar（NG_SHADOW_GLSL）と ngNearToFar で繋ぐ。サンプラー 1
+ */
+export const NG_NEAR_SHADOW_GLSL = /* glsl */ `
+#ifndef NG_LIB_NEAR_SHADOW
+#define NG_LIB_NEAR_SHADOW
+uniform sampler2D ngNearShadowMap;     // three の key.shadow.map.texture（RGBA に詰めた深度）。無ければ 1×1 の白（= 日向）
+uniform mat4 ngNearShadowMatrix;       // 世界 → 影マップの uv と深さ [0,1]（key.shadow.matrix）
+uniform vec4 ngNearShadowParams;       // x = 大きさ px, y = 1/大きさ, z = bias（深さの単位）, w = 影の強さ（shadow.intensity）
+float ngNearUnpack(vec4 v) { return dot(v, vec4(255.0 / 256.0, 255.0 / 65536.0, 255.0 / 16777216.0, 1.0 / 16777216.0)); }
+float ngNearTap(vec2 uv, float z) { return step(z, ngNearUnpack(texture(ngNearShadowMap, uv))); }
+float ngNearShadowAt(vec3 P) {
+  vec4 c = ngNearShadowMatrix * vec4(P, 1.0);
+  vec3 s = c.xyz / max(c.w, 1e-6);
+  s.z += ngNearShadowParams.z;
+  if (s.x < 0.0 || s.y < 0.0 || s.x > 1.0 || s.y > 1.0 || s.z < 0.0 || s.z > 1.0) return 1.0;
+  float size = max(ngNearShadowParams.x, 1.0), inv = ngNearShadowParams.y;
+  vec2 t = s.xy * size, cc = floor(t), d = t - cc - 0.5;
+  vec2 w0 = 0.5 * (0.5 - d) * (0.5 - d), w1 = 0.75 - d * d, w2 = 0.5 * (0.5 + d) * (0.5 + d);
+  vec2 p = (cc + 0.5) * inv;
+  float sum = 0.0;
+  for (int j = -1; j <= 1; j++) {
+    float wy = j < 0 ? w0.y : (j == 0 ? w1.y : w2.y);
+    for (int i = -1; i <= 1; i++) {
+      float wx = i < 0 ? w0.x : (i == 0 ? w1.x : w2.x);
+      sum += wx * wy * ngNearTap(p + vec2(float(i), float(j)) * inv, s.z);
+    }
+  }
+  return mix(1.0, sum, ngNearShadowParams.w);
+}
+#endif
+`;

@@ -151,7 +151,8 @@ class MyModule extends NgModule {
   async init(progress)                 // progress(0..1)。重い処理は分割して await（1 回 ≤ 30ms。ctx.forge.step() で譲る）。最後に ctx.scene.add(this.root)
   update(f) {}                         // CPU の毎フレーム（§2.1 の 3）
   prepare(f) {}                        // GPU の準備（P1）。水の値はここで受ける
-  beforePass(passId, camera) {}        // 各パスの直前（passId = NG_PASS.SHADOW / REFLECTION / MAIN）
+  beforePass(passId, camera) {}        // 各パスの直前（passId = NG_PASS.SHADOW / REFLECTION / MAIN）。camera は SHADOW でも «描くカメラ»
+                                       // （影のカメラではない。影の視錐台で LOD を選ぶなら ctx.shadows.key.shadow.camera を読む）
   setQuality(tier, profile) {}         // 段が変わったとき（と起動時に 1 回）。冪等に
   setLodScale(k) {}                    // LOD の倍率（既定 1）
   restoreGPU() {}                      // 文脈の復帰
@@ -180,7 +181,7 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 | `frame` | NgFrame | ngFrame の書き込み口（§5）。`frame.data` が共有の Float32Array、`frame.cam.uw` / `frame.cam.waterY` |
 | `wind` | Wind | 見た目の風の CPU 双子（§14.2） |
 | `pipeline` | FramePipeline | `pipeline.uniforms`（§9）・`addPreparer`・`setRenderScale`・`targets`・`state` |
-| `shadows` | Shadows | `shadows.uniforms`（高さ場影）・`shadows.key` |
+| `shadows` | Shadows | `shadows.uniforms`（高さ場影）・`shadows.nearUniforms`（全画面の効果が近景の影を読む口。§8.4）・`shadows.key`（key の DirectionalLight。影のカメラは `shadows.key.shadow.camera`） |
 | `forge` | Forge | 起動時の焼き込み（§13） |
 | `workers` | null | 予約（Phase 1 では null。Worker が要るモジュールは自分で `new Worker(new URL('./x.js', import.meta.url), { type: 'module' })`） |
 | `caustics` | object | causticsUniforms（16 個の `uCaust*` の `{value}`。魚と同じ参照。§6.4） |
@@ -555,6 +556,19 @@ JS 双子：`src/gfx/core/medium.js`（`applyMedium(F, C, L, P)`・`mediumTerms`
 uniforms：`ngHfShadow0`・`ngHfShadow1`（R8 相当、1 = 日向）・`ngHfShadowXf`（x = 1/(2·256)、y = 1/(2·1024)、z = 段 0 が有効なら 1）。
 近景の影：three の DirectionalLight の影マップを PCF（core の `ngShadowPCF`：3×3 の二次 B スプライン、9 回の読み、半影 ≈1.5 テクセル）。
 
+**全画面の効果から近景の影を読む**（G0 後に足した。post の光芒・underwater の光の筋など、three の光のチャンクを持たないシェーダ）：
+`NG_NEAR_SHADOW_GLSL`（shadow.glsl.js。サンプラー 1）+ uniforms は `...ctx.shadows.nearUniforms`
+（`ngNearShadowMap`・`ngNearShadowMatrix`・`ngNearShadowParams` = (大きさ, 1/大きさ, bias, 影の強さ)）。
+
+| 関数 | 説明 |
+| --- | --- |
+| `float ngNearShadowAt(vec3 P)` | 世界の点 P が近景の影の中なら 0、日向なら 1（ngShadowPCF と同じ 3×3 の重み・three の RGBA 詰めの深度・bias・雲量の shadow.intensity 込み）。影マップの外は 1。normalBias は掛けない |
+
+- `{value}` は段を替えても同じオブジェクト（影マップの RT は段の mapSize で作り直されるが、core が毎フレームの近景の影（P2）の後に中身を入れ直す）。
+  three の内部（`key.shadow.map` の RGBA の詰め方・`shadow.matrix`）に自分で手を伸ばさない
+- 範囲（注視点 ±extent）の外は `ngHfShadowFar`（NG_SHADOW_GLSL）と `ngNearToFar` で繋ぐ
+- 検査：core-robust の near-shadow-api（遮蔽物の下と横、high → mid → high）
+
 ### 8.5 `heightfield.glsl.js` — `NG_HEIGHTFIELD_GLSL`（uniforms は `ctx.heightfield.uniforms`。サンプラー最大 6）
 
 | 関数 | 説明 | ms |
@@ -825,7 +839,10 @@ forge.releaseScratch()                                   // core が読み込み
   太陽の回転で格子が «原点からの距離 × 角» だけ毎フレーム滑り、原点から 88m の桟橋で影の縁がざわついた。core-robust の shadow-shimmer が検査）。
   雲量で `shadow.intensity` 1 → 0.35。更新は P2 で 1 フレーム 1 回（`renderer.shadowMap.autoUpdate = false`）。
   **G0 の修正（b3c210c）**：影に入れる物の判定は shadow.camera のマスク（three r180 の仕様の回避）。影を落とす物は castShadow と層（§4）
-- 高さ場影：core が焼く（地形の高さ場 + `ngCanopyAt` の樹冠）。2 段 × 4 象限を 16 フレームで一巡、key が 2° 跳んだら全部。`NG_HF_SHADOW_R = [256, 1024]`
+- 高さ場影：core が焼く（地形の高さ場 + `ngCanopyAt` の樹冠）。2 段 × 4 象限を 16 フレームで一巡、key が 2° 跳んだら全部。`NG_HF_SHADOW_R = [256, 1024]`。
+  **terrain は焼かない**（高さは heightfield から core が読む。terrain が変えられるのは heightfield に入る高さだけ）
+- 全画面の効果が近景の影を読む口：`ctx.shadows.nearUniforms` と `NG_NEAR_SHADOW_GLSL`（§8.4）。`beforePass(NG_PASS.SHADOW, camera)` の camera は描くカメラで、
+  影のカメラは `ctx.shadows.key.shadow.camera`（layers = NG_MASK.SHADOW、正射影 ±extent、near 0.5 / far 600 + 2·extent）
 
 ### 14.2 風（`ctx.wind`、wind.js）
 

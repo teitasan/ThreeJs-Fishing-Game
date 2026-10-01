@@ -332,6 +332,54 @@ export default async function (h) {
     ];
   });
 
+  /* 全画面の効果から近景の影を読む口（ctx.shadows.nearUniforms + NG_NEAR_SHADOW_GLSL）。遮蔽物の真下は影、横は日向。
+     段を替えても（影マップの RT が作り直されても）同じ {value} のまま正しい中身を指す */
+  await run('near-shadow-api', async () => {
+    const { NG_NEAR_SHADOW_GLSL } = await import('/src/gfx/core/glsl/shadow.glsl.js');
+    const L = window.__lab, g = L.gfx, T = g.THREE, R = L.renderer, D = L.dock;
+    L.setHour(12.5); L.setWeather('clear', { instant: true }); L.freeze(10);
+    const dir = new T.Vector3(D.dockDir.x, 0, D.dockDir.z).normalize();
+    const c = new T.Vector3(D.dockEnd.x, 2, D.dockEnd.z).addScaledVector(dir, 6);
+    const occ = new T.Mesh(new T.PlaneGeometry(1.2, 1.2).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ side: T.DoubleSide }));
+    occ.position.copy(c).add(new T.Vector3(0, 1, 0));
+    occ.castShadow = true; occ.layers.set(8);
+    L.scene.add(occ);
+    const nu = g.shadows.nearUniforms, objs = [nu.ngNearShadowMap, nu.ngNearShadowMatrix, nu.ngNearShadowParams];
+    const mat = new T.ShaderMaterial({
+      uniforms: { ...nu, uA: { value: new T.Vector3() }, uB: { value: new T.Vector3() } },
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `${NG_NEAR_SHADOW_GLSL}\nuniform vec3 uA; uniform vec3 uB;\nvoid main() { gl_FragColor = vec4(vec3(ngNearShadowAt(gl_FragCoord.x < 1.0 ? uA : uB)), 1.0); }`,
+      depthTest: false, depthWrite: false,
+    });
+    const tri = new T.BufferGeometry();
+    tri.setAttribute('position', new T.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+    const fs = new T.Mesh(tri, mat); fs.frustumCulled = false;
+    const sc = new T.Scene(); sc.add(fs);
+    const cam = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const rt = new T.WebGLRenderTarget(2, 1);
+    const read = () => {
+      L.cam({ pos: [c.x - dir.x * 4, c.y + 5, c.z - dir.z * 4], target: [c.x, c.y, c.z] });
+      L.tick(3);
+      const kd = g.f.keyDir;
+      mat.uniforms.uA.value.copy(occ.position).addScaledVector(kd, -1 / Math.max(kd.y, 0.05));   // 遮蔽物の 1m 下の影の位置
+      mat.uniforms.uB.value.copy(c).addScaledVector(dir, -2.5);                                     // 横の日向
+      R.setRenderTarget(rt); R.render(sc, cam); R.setRenderTarget(null);
+      const px = new Uint8Array(8); R.readRenderTargetPixels(rt, 0, 0, 2, 1, px);
+      return [px[0], px[4]];
+    };
+    const high = read();
+    L.setTier('mid'); const mid = read();
+    L.setTier('high'); const back = read();
+    const same = objs.every((o, i) => o === [nu.ngNearShadowMap, nu.ngNearShadowMatrix, nu.ngNearShadowParams][i]);
+    const mapOk = nu.ngNearShadowMap.value === g.rig.key.shadow.map?.texture;
+    L.scene.remove(occ); occ.geometry.dispose(); occ.material.dispose(); mat.dispose(); tri.dispose(); rt.dispose();
+    const ok = (v) => v[0] < 60 && v[1] > 200;
+    return [
+      ['NG_NEAR_SHADOW_GLSL：遮蔽物の下は影、横は日向（high）', ok(high), `影 ${high[0]}・日向 ${high[1]}（/255）`],
+      ['段を替えても同じ uniforms で正しい（mid → high）', ok(mid) && ok(back) && same && mapOk, `mid ${mid}・high ${back}・同じ {value} ${same}・今の影マップ ${mapOk}`],
+    ];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');

@@ -106,6 +106,14 @@ export class Shadows {
       ngHfShadow1: { value: white() },
       ngHfShadowXf: { value: new T.Vector4(1 / (2 * NG_HF_SHADOW_R[0]), 1 / (2 * NG_HF_SHADOW_R[1]), 0, 0) },
     };
+    /** 近景の影マップを全画面の効果から読むための uniforms（NG_NEAR_SHADOW_GLSL）。{value} は段を替えても同じオブジェクト。
+     *  中身は renderNear の後に入れ直す（three は段の mapSize が変わると影マップの RT を作り直す） */
+    this._nearWhite = white();
+    this.nearUniforms = {
+      ngNearShadowMap: { value: this._nearWhite },
+      ngNearShadowMatrix: { value: new T.Matrix4() },
+      ngNearShadowParams: { value: new T.Vector4(1, 1, 0, 0) },
+    };
     this._tickCam = new T.PerspectiveCamera();
     this._tickCam.layers.mask = NG_MASK.SHADOW_TICK;
     this._tickRT = new T.WebGLRenderTarget(1, 1, { depthBuffer: false });
@@ -144,6 +152,8 @@ export class Shadows {
       s.mapSize.set(ns.size, ns.size);
       s.map?.dispose();
       s.map = null;
+      this.nearUniforms.ngNearShadowMap.value = this._nearWhite;   // 次の renderNear で新しい影マップを入れる
+      this.nearUniforms.ngNearShadowParams.value.w = 0;
     }
     const c = s.camera;
     c.left = -ns.extent; c.right = ns.extent; c.top = ns.extent; c.bottom = -ns.extent;
@@ -216,6 +226,16 @@ export class Shadows {
       sm.render = render;
       renderer.setRenderTarget(prev);
     }
+    this._syncNear();
+  }
+
+  /* 近景の影マップの今の中身を nearUniforms へ（同じ {value} のまま） */
+  _syncNear() {
+    const s = this.key?.shadow, u = this.nearUniforms;
+    const tex = s?.map?.texture || null;
+    u.ngNearShadowMap.value = tex || this._nearWhite;
+    if (s) u.ngNearShadowMatrix.value.copy(s.matrix);
+    u.ngNearShadowParams.value.set(s?.mapSize.x || 1, 1 / (s?.mapSize.x || 1), s?.bias || 0, tex ? (s.intensity ?? 1) : 0);
   }
 
   /* 段ごとの合成高さと影の RT を作る（heightfield の後） */
