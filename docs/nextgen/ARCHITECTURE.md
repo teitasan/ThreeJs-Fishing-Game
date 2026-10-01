@@ -177,6 +177,8 @@ opaque = 0,1,2,3,7   reflection = 0,1,7   late = 4,5,6   shadow = 0,1,7,8
 
 ## 4. Core API
 
+> G0 で凍結した実際の API は **[CORE_API.md](CORE_API.md)**（この節と食い違うときは CORE_API が優先）。
+
 ### 4.1 共有フレーム `ngFrame`（frame.js）
 
 `export const ngFrameData = new Float32Array(4 * 24)`。**全 ShaderLib（fogColor を持つもの：basic, lambert, phong, standard, physical, toon,
@@ -257,7 +259,7 @@ ngShaderMaterial(opts) → ShaderMaterial   // lights:true, fog:true, GLSL3, NG_
 
 - アンカーは vendored の ShaderChunk に対して Node テストで存在を検査する。実行時にアンカーが無ければ **構築時に** 例外（フレーム中は投げない）→ ファサードがスタブに切り替える
 - サンプラーの上限：1 プログラムあたり fragment ≤ 12・vertex ≤ 4。lab で `gl.getActiveUniform` を数えて検査
-- 品質の差は **uniform とループの上限** で出し、define を増やさない（コンパイル数と時間の対策）。プログラム総数 ≤ 60
+- 品質の差は **uniform とループの上限** で出し、define を増やさない（コンパイル数と時間の対策）。プログラム総数 ≤ 90・1 モジュール ≤ 6（G0 で改訂：`NG_PROGRAM_BUDGET`、CORE_API.md §11.2）
 - 配列マテリアルは使わない（applyQuality の needsUpdate が効かない）
 
 ### 4.5 影（shadows.js）
