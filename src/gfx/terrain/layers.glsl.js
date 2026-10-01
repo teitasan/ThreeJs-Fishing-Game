@@ -244,7 +244,7 @@ vec4 ngTbMeadow(vec2 uv) {
   vec3 col = mix(vec3(0.050, 0.040, 0.026), vec3(0.085, 0.066, 0.042), n1) * (0.8 + 0.4 * n2);
   float h = 0.08 * n1;
   ngTbStones(uv, 90.0, 0.0, 3.0, 0.18, 0.25, col, h);
-  float dry = 0.25 + 0.55 * smoothstep(0.35, 0.75, ngTbFbm(uv, 4.0, 4.0, 3));
+  float dry = 0.12 + 0.45 * smoothstep(0.4, 0.8, ngTbFbm(uv, 4.0, 4.0, 3));
   ngTbBlades(uv, 110.0, 0.10, 5.0, dry, col, h);
   ngTbBlades(uv, 85.0, 0.30, 6.0, dry * 0.8, col, h);
   ngTbBlades(uv, 64.0, 0.50, 7.0, dry * 0.6, col, h);

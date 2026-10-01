@@ -201,9 +201,9 @@ vec3 ngRidgeAlbedo(vec3 P, vec3 Nw) {
   vec2 xz = P.xz;
   float slope = sqrt(max(1.0 - Nw.y * Nw.y, 0.0)) / max(Nw.y, 0.05);
   float a = ngVNoise2(xz / 210.0), b = ngVNoise2(xz / 75.0 + 5.3), c = ngVNoise2(xz / 31.0 + 1.7);
-  vec3 conifer = vec3(0.030, 0.050, 0.030), broad = vec3(0.066, 0.100, 0.034), pine = vec3(0.046, 0.062, 0.032);
+  vec3 conifer = vec3(0.024, 0.040, 0.025), broad = vec3(0.050, 0.078, 0.030), pine = vec3(0.038, 0.050, 0.028);
   /* 植林の帯は谷筋から中腹に（斑の閾値を標高で動かす） */
-  float plant = smoothstep(0.48, 0.56, a + 0.12 * (b - 0.5) - 0.0004 * (P.y - 250.0));
+  float plant = smoothstep(0.40, 0.50, a + 0.12 * (b - 0.5) - 0.0003 * (P.y - 250.0));
   vec3 col = mix(broad * (0.8 + 0.4 * c), conifer * (0.85 + 0.3 * c), plant);
   float ridgeTop = smoothstep(0.55, 0.75, b) * smoothstep(250.0, 600.0, P.y);
   col = mix(col, pine, ridgeTop * 0.6);

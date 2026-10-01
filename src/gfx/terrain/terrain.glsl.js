@@ -89,8 +89,11 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float beach = 1.0 - smoothstep(1.2 + 2.5 * nP, 3.0 + 5.0 * nP, sd + (nF - 0.5) * 1.4);
   float forest = smoothstep(0.08, 0.42, cn.x + (nP - 0.5) * 0.25);
   float moist = smoothstep(0.42, 0.72, nM + 0.22 * (1.0 - smoothstep(4.0, 25.0, sd)));
-  float rock = smoothstep(0.62, 1.05, slope + (nP - 0.5) * 0.45 + (nF - 0.5) * 0.18);
-  rock = max(rock, smoothstep(95.0, 125.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.18, 0.45, slope + (nF - 0.5) * 0.2));
+  /* 日本の山は 40° 近くまで森に覆われる：露岩は急な崖（> 45°）と、樹冠の無い所の急斜面だけ */
+  float forest0 = smoothstep(0.08, 0.42, cn.x);
+  float rock = smoothstep(0.95, 1.45, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.6 * forest0);
+  rock = max(rock, smoothstep(0.7, 1.1, slope + (nP - 0.5) * 0.4) * (1.0 - forest0) * smoothstep(8.0, 20.0, sd) * 0.8);
+  rock = max(rock, smoothstep(150.0, 190.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.35, 0.6, slope + (nF - 0.5) * 0.2));
   float tr = trail * (1.0 - rock) * smoothstep(0.2, 1.0, sd);
   float rest = (1.0 - rock) * (1.0 - tr);
   float lb = beach * rest, lv = (1.0 - beach) * rest;
@@ -117,7 +120,12 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
 export const GROUND_KIND = Object.freeze({ none: 0, litter: 1, moss: 2, meadow: 3, cobble: 4, sand: 5, mud: 6, rock: 7, trail: 8 });
 
 /* ---------------- 断片 ---------------- */
-export const TERRAIN_FRAG_PARS = NG_HEIGHTFIELD_GLSL + NG_SKYSPEC_GLSL + NG_WAVE_GLSL + NG_HASH_GLSL + NG_HEXTILE_GLSL + terrainWeightsGLSL() + /* glsl */ `
+/* 断片は ngTerrainH を呼ばない（高さは vNgWorld.y）。core の監査は «本文に名前が出るサンプラー» を断片に数えるので、
+   高さの 2 枚（ngHeightNear/Far）を読む ngTerrainH・ngDepth の本体だけを断片の文字列から外す（無ければそのまま） */
+const HF_FRAG = NG_HEIGHTFIELD_GLSL
+  .replace(/float ngTerrainH\(vec2 xz\) \{[\s\S]*?\n\}\n/, '')
+  .replace(/float ngDepth\(vec2 xz\)[^\n]*\n/, '');
+export const TERRAIN_FRAG_PARS = HF_FRAG + NG_SKYSPEC_GLSL + NG_WAVE_GLSL + NG_HASH_GLSL + NG_HEXTILE_GLSL + terrainWeightsGLSL() + /* glsl */ `
 precision highp sampler2DArray;
 uniform sampler2DArray ngTerrA;      // √アルベド + 高さ
 uniform sampler2DArray ngTerrB;      // 法線 xy・粗さ・AO
@@ -292,7 +300,7 @@ vec3 ngTerrShade(vec3 P) {
   float above = P.y - ru;
   float nearShore = 1.0 - smoothstep(5.0, 10.0, sd);
   float film = (1.0 - smoothstep(-0.005, 0.03, above)) * step(-0.12, P.y) * nearShore;
-  float damp = (1.0 - smoothstep(0.03, 0.40 + 0.12 * ngVNoise2(xz * 0.7), P.y - max(ru, 0.0) * 0.6)) * nearShore;
+  float damp = (1.0 - smoothstep(0.02, 0.16 + 0.10 * ngVNoise2(xz * 0.7), P.y - max(ru, 0.0) * 0.8)) * nearShore;
   wet = max(wet, max(damp * 0.85, film));
   /* 雨：樹冠の下は濡れにくい */
   float rainWet = ngWet * (1.0 - 0.55 * cn.x) * (1.0 - under);
