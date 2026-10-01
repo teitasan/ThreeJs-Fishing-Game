@@ -191,7 +191,7 @@ export class ExampleModule extends NgModule {
     this._ripT += f.dt;
     if (this._ripT > 2.5) {          // 2.5 秒ごとに浮き輪の周りへ波紋（water モジュールの受け口。投げない）
       this._ripT = 0;
-      const p = u.uAt.value;
+      const p = this.uniforms.uAt.value;
       this.ctx.services.water.addRipple(p.x, p.y, 0.8, 2.0);
     }
   }
