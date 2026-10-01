@@ -138,11 +138,22 @@ export class AtmosphereCPU {
     this._ms = [0, 0, 0];
     this.rView = ATMO.Rg + ATMO.viewH;
     this.dirs = fibonacciSphere(16);
+    this.deck = { h: 1400, occ: 0, L: [0, 0, 0] };
+    this._r0 = [0, 0, 0]; this._r1 = [0, 0, 0]; this._r2 = [0, 0, 0]; this._r3 = [0, 0, 0]; this._r4 = [0, 0, 0];
   }
 
-  /** @returns {boolean} 作り直したか */
+  /** @returns {boolean} 作り直したか（同期。重い：≈5ms） */
   setHaze(haze, force = false) {
     if (!force && this.haze > 0 && Math.abs(haze - this.haze) <= 0.02 * this.haze) return false;
+    for (const _ of this.build(haze)) { /* 最後まで */ }
+    return true;
+  }
+
+  /**
+   * 表を作り直す生成器（行ごとに yield。呼び手が時間で刻む）。作っている間の表引きは使わないこと
+   * （SkyModule は 2 つの AtmosphereCPU を交互に使う）
+   */
+  *build(haze) {
     this.haze = haze;
     const W = LUT.cpuTransW, H = LUT.cpuTransH;
     for (let j = 0; j < H; j++) {
@@ -152,9 +163,9 @@ export class AtmosphereCPU {
         const o = (j * W + i) * 3;
         this.trans[o] = T[0]; this.trans[o + 1] = T[1]; this.trans[o + 2] = T[2];
       }
+      if ((j & 3) === 3) yield j;
     }
-    this._buildMS();
-    return true;
+    yield* this._buildMS();
   }
 
   /** 透過（上端まで、地面は見ない）。out に rgb */
@@ -180,7 +191,7 @@ export class AtmosphereCPU {
     return bilerp(this.ms, N, N, u, v, out);
   }
 
-  _buildMS() {
+  *_buildMS() {
     const N = LUT.cpuMsN, dirs = this.dirs, steps = 12;
     const m = this._m, tS = [0, 0, 0];
     for (let j = 0; j < N; j++) {
@@ -224,23 +235,28 @@ export class AtmosphereCPU {
         const o = (j * N + i) * 3;
         for (let k = 0; k < 3; k++) this.ms[o + k] = L2[k] / Math.max(1 - F[k], 1e-3);
       }
+      yield j;
     }
   }
 
   /**
-   * 視線 v（単位、y が上）の空の放射輝度（上端の照度 1 あたり）。太陽 s と月 m（= 照度の重み wS・wM）
-   * GPU の skyView LUT と同じ raymarch（段数だけ少ない）
+   * 視線 v（単位、y が上）の空の放射輝度（ng 単位）。GPU の ngSkyRadiance（atmo.glsl.js）と同じ raymarch。
+   * eS / eM：太陽・月の上端の照度 rgb（ng）、G：空の係数（較正）。this.deck：雲の甲板
+   * （h m、occ = 甲板の下の太陽の遮り 0..1、L = 甲板の底の放射輝度 rgb）
    * @returns {number[]} rgb
    */
-  radiance(vx, vy, vz, sx, sy, sz, wS, wM, steps = 16, out = [0, 0, 0]) {
+  radiance(vx, vy, vz, sx, sy, sz, eS, eM, G, steps = 16, out = [0, 0, 0]) {
     const r = this.rView;
     const tG = distToGround(r, vy);
     const tMax = Math.min(tG >= 0 ? tG : distToTop(r, vy), 400e3);
-    const m = this._m, tS = [0, 0, 0], tM = [0, 0, 0], msS = [0, 0, 0], msM = [0, 0, 0];
+    const m = this._m, tS = this._r0, tM = this._r1, msS = this._r2, msM = this._r3;
     const muSv = vx * sx + vy * sy + vz * sz;
     const pRs = phaseR(muSv), pMs = phaseCS(muSv, ATMO.mieG);
     const pRm = phaseR(-muSv), pMm = phaseCS(-muSv, ATMO.mieG);
-    const thr = [1, 1, 1];
+    const useS = eS[0] + eS[1] + eS[2] > 0, useM = eM[0] + eM[1] + eM[2] > 0;
+    const dk = this.deck, gInv = 1 / Math.max(G, 1e-6);
+    const thr = this._r4;
+    thr[0] = thr[1] = thr[2] = 1;
     out[0] = out[1] = out[2] = 0;
     let tPrev = 0;
     for (let i = 0; i < steps; i++) {
@@ -251,14 +267,18 @@ export class AtmosphereCPU {
       const px = vx * tm, py = r + vy * tm, pz = vz * tm;
       const rp = Math.hypot(px, py, pz);
       const muS = (px * sx + py * sy + pz * sz) / rp;
-      medium(rp - ATMO.Rg, this.haze, m);
-      if (wS > 0) { this.sunTransmittance(rp, muS, tS); this.multiScatter(rp, muS, msS); }
-      if (wM > 0) { this.sunTransmittance(rp, -muS, tM); this.multiScatter(rp, -muS, msM); }
+      const h = rp - ATMO.Rg;
+      medium(h, this.haze, m);
+      if (useS) { this.sunTransmittance(rp, muS, tS); this.multiScatter(rp, muS, msS); }
+      if (useM) { this.sunTransmittance(rp, -muS, tM); this.multiScatter(rp, -muS, msM); }
+      const below = 1 - smooth(dk.h - 200, dk.h + 200, h);
+      const occ = 1 - dk.occ * below;
       for (let k = 0; k < 3; k++) {
         const sig = m.sR[k] + m.sM, ext = Math.max(m.t[k], 1e-12);
         let S = 0;
-        if (wS > 0) S += wS * (tS[k] * (m.sR[k] * pRs + m.sM * pMs) + msS[k] * sig);
-        if (wM > 0) S += wM * (tM[k] * (m.sR[k] * pRm + m.sM * pMm) + msM[k] * sig);
+        if (useS) S += eS[k] * occ * (tS[k] * (m.sR[k] * pRs + m.sM * pMs) + msS[k] * sig);
+        if (useM) S += eM[k] * occ * (tM[k] * (m.sR[k] * pRm + m.sM * pMm) + msM[k] * sig);
+        S += dk.L[k] * sig * 0.5 * below * gInv;
         const Tk = Math.exp(-ext * dt);
         out[k] += thr[k] * (S - S * Tk) / ext;
         thr[k] *= Tk;
@@ -269,13 +289,14 @@ export class AtmosphereCPU {
       const px = vx * tMax, py = r + vy * tMax, pz = vz * tMax;
       const rp = Math.hypot(px, py, pz);
       const muS = (px * sx + py * sy + pz * sz) / rp;
-      if (wS > 0) this.sunTransmittance(rp, muS, tS);
-      if (wM > 0) this.sunTransmittance(rp, -muS, tM);
+      if (useS) this.sunTransmittance(rp, muS, tS);
+      if (useM) this.sunTransmittance(rp, -muS, tM);
       for (let k = 0; k < 3; k++) {
-        const E = (wS > 0 ? wS * tS[k] * Math.max(muS, 0) : 0) + (wM > 0 ? wM * tM[k] * Math.max(-muS, 0) : 0);
-        out[k] += thr[k] * E * ATMO.albedo / PI;
+        const E = (useS ? eS[k] * tS[k] * Math.max(muS, 0) : 0) + (useM ? eM[k] * tM[k] * Math.max(-muS, 0) : 0);
+        out[k] += thr[k] * E * (1 - dk.occ) * ATMO.albedo / PI;
       }
     }
+    for (let k = 0; k < 3; k++) out[k] *= G;
     return out;
   }
 
