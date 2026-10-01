@@ -2,7 +2,7 @@
    G0：本編（index.html）の遊びの流れをグレーボックスで一通り通す
    -----------------------------------------------------------
    node scripts/gfx/shot.mjs scripts/gfx/scenarios/g0-gameplay.mjs --out DIR [--size 1280x720]
-   環境変数：TIERS=low,mid,high（既定は 3 段）、SEED=123456789
+   環境変数：TIERS=low,mid,high（既定は 3 段）、SEED=123456789、FISH_PLACE=1（桟橋から見える魚を必ず置き直す道を通す）
    各段について «その品質で起動»（セーブに品質を書いてから開く）し、次を確かめて撮る：
      1. 読み込みが終わる・start が効く・core の段が起動の品質と一致・全モジュールが居る
      2. 歩く（KeyW を押して 2 秒）：位置が進み、桟橋の床の高さに立つ
@@ -257,13 +257,15 @@ export default async function (h) {
     await h.shot(`${tier}-fish-refraction`);
     /* 水越しの魚の近接：桟橋の縁の目の高さ（床 + 1.6m）から、桟橋に一番よく見える魚（大きさ ÷ 距離が最大）を見下ろす。
        9 時（正午の太陽の照り返しが画面の真ん中に来ない）。カメラは桟橋の上だけに置く */
-    const fishClose = await h.eval(() => {
+    const fishClose = await h.eval((forcePlace) => {
       const g = window.__game, cam = g.camera, t = g.terrain;
       /* 桟橋ローカル（al: 岸→沖、si: 右）で、魚の横の床の縁（|si| = 1.2m、歩ける半幅 1.62m の内側）に立つ */
       const U = t._dockU, A = t.dockStart, len = t._dockLen;
       const loc = (x, z) => ({ al: (x - A.x) * U.x + (z - A.z) * U.z, si: -(x - A.x) * U.z + (z - A.z) * U.x });
       const world = (al, si) => ({ x: A.x + U.x * al - U.z * si, z: A.z + U.z * al + U.x * si });
       let best = null;
+      const pick = () => {
+      best = null;
       for (const f of g.school.fishes) {
         if (!f.active || !f.mesh?.visible) continue;
         const q = loc(f.pos.x, f.pos.z);
@@ -278,7 +280,34 @@ export default async function (h) {
         const score = (f.length || 20) / Math.max(2, Math.hypot(d, f.pos.y - t.dockY - 1.6)) * (facing > 0 ? 1e-3 : 1);   /* 逆光の候補は最後の手段 */
         if (!best || score > best.score) best = { f, c, d, score };
       }
-      if (!best) return null;
+      };
+      pick();
+      if (forcePlace) best = null;   // 置き直しの道を確かめる（FISH_PLACE=1）
+      /* 魚の位置は fish.js の Math.random で決まる（low は 14 匹）。候補が居なければ、掛かっていない魚を 1 匹
+         桟橋の横（縁から 2.5〜3.3m 外、深さ 1.2〜2.5m）へ置き直して決定的にする（どちらの道かを JSON に残す） */
+      let placed = false;
+      if (!best) {
+        const spare = g.school.fishes.find((f) => f.active && f.mesh?.visible && f !== g.hookFish && f.state !== 'hooked' && f.state !== 'nibble' && f.state !== 'bite');
+        for (const frac of [0.6, 0.45, 0.75, 0.3, 0.9]) {
+          if (!spare || best) break;
+          for (const side of [1, -1]) {
+            const p = world(len * frac, side * 4.5);
+            const depth = g.lake?.depthAt ? g.lake.depthAt(p.x, p.z) : (t.lake?.depthAt?.(p.x, p.z) ?? 0);
+            if (!(depth > 1.6)) continue;
+            const y = -Math.min(2.5, Math.max(1.2, depth * 0.5));
+            spare.pos.set(p.x, y, p.z);
+            spare.mesh.position.copy(spare.pos);
+            spare.home?.copy?.(spare.pos);
+            spare.target.copy(spare.pos);
+            spare.state = 'wander';
+            spare.timer = 30;
+            placed = true;
+            pick();
+            if (best) break;
+          }
+        }
+      }
+      if (!best) return { placed, onDock: false };
       const { f } = best;
       g.state.clock = 9;
       g.__savedCam = g._updateCamera;
@@ -292,8 +321,9 @@ export default async function (h) {
       return {
         species: f.species?.id, depth: +(-f.pos.y).toFixed(2), lengthCm: +(f.length || 0).toFixed(1), horizFromDock: +best.d.toFixed(2),
         camToFish: +f.pos.distanceTo(cam.position).toFixed(2), onDock: t.onDock(cam.position.x, cam.position.z) !== null, ndc: [v.x, v.y].map((x) => +x.toFixed(3)),
+        placed,
       };
-    });
+    }, process.env.FISH_PLACE === '1');
     T.fishClose = fishClose;
     console.log('  fish close', JSON.stringify(fishClose));
     expect(fishClose && fishClose.onDock, `${tier}: 桟橋から見える魚が居ない（${JSON.stringify(fishClose)}）`);
