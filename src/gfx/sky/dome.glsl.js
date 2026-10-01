@@ -23,6 +23,9 @@ export const DOME_FS = NG_SURFACE_GLSL + NG_SKY_TRANS_GLSL + /* glsl */ `
 uniform sampler2D uSkyClear;
 uniform sampler2D uCloudPano;
 uniform sampler2D uMoonTex;
+uniform highp sampler3D uNgDetail;
+uniform vec4 uCloudSharp;   // 縁の細部の強さ, 雲の中ほどの高さ km, 細部の周波数 1/km, 予備
+uniform vec4 uWind;         // 形の流れ km (xz), 細部の流れ km (xz)
 uniform vec3 uSunDisk;      // 太陽円盤の平均放射輝度（大気の上端、ng）
 uniform vec3 uMoonDisk;     // 月の円盤の平均放射輝度（大気の上端、ng。見た目の値）
 uniform vec4 uNightSky;     // 星の明るさ（ng の照度 / 0 等星）, 天の川の明るさ, 星の回転角, 瞬きの時刻
@@ -98,6 +101,22 @@ void main() {
   float Tc = 1.0;
   if (v.y > 0.0) {
     vec4 c = texture(uCloudPano, vec2(uv.x, clamp(uv.y * 2.0 - 1.0, 0.0, 1.0)));
+    /* 画面の解像度の縁：パノラマ（≈0.18°/テクセル）の半透明の縁だけを、雲の中ほどの面の細部ノイズで削る・足す */
+    float edge = c.a * (1.0 - c.a);
+    if (edge > 0.003 && uCloudSharp.x > 0.0) {
+      float r0 = NG_SKY_RG + 0.02;
+      float tm = ngSkyShell(r0, v.y, NG_SKY_RG + uCloudSharp.y);
+      vec3 P = vec3(0.0, r0, 0.0) + v * tm;
+      float foot = max(length(fwidth(v)), 1e-5) * tm * uCloudSharp.z;      // 画素の大きさ / 細部の周期
+      float fade = 1.0 - smoothstep(0.08, 0.35, foot);
+      if (fade > 0.0) {
+        vec3 q = vec3(P.x + uWind.z, uCloudSharp.y, P.z + uWind.w) * uCloudSharp.z;
+        float n = textureLod(uNgDetail, q, 0.0).r * 0.6 + textureLod(uNgDetail, q * 2.7 + 0.31, 0.0).g * 0.4;
+        float a2 = clamp(c.a + (n - 0.55) * uCloudSharp.x * edge * 4.0 * fade, 0.0, 1.0);
+        c.rgb *= (1.0 - a2) / max(1.0 - c.a, 1e-3);
+        c.a = a2;
+      }
+    }
     L = L * c.a + c.rgb;
     Tc = c.a;
   }

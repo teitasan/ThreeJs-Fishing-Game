@@ -180,6 +180,18 @@ uniform vec3 uSkySunCol;
 uniform vec4 uSkyDeck;
 uniform vec3 uSkyDeckL;
 uniform vec3 uSkySunDir;
+uniform vec4 uSkyTw;       // x = 薄明の持ち上げの振幅（ng の放射輝度）
+/* 薄明の持ち上げ（rig.js の twilightShape と同じ式）：太陽が −2°〜−20° の間、露出の時刻表に対して
+   夜の明るさを下回らないように足す «芸術的な» 多重散乱。天頂は深い青、太陽の方位の地平に暖色の帯、反対側に薄い桃色 */
+vec3 ngSkyTwilight(vec3 v, vec3 s) {
+  float vy = max(v.y, 0.0);
+  float mu = dot(v.xz, s.xz) / max(length(v.xz) * length(s.xz), 1e-4);
+  float g = exp(-vy * 3.5);
+  vec3 blue = vec3(0.26, 0.42, 1.0) * (0.55 + 0.45 * vy);
+  vec3 warm = vec3(1.0, 0.52, 0.22) * (g * pow(0.5 + 0.5 * mu, 3.0) * 1.4);
+  vec3 pink = vec3(0.85, 0.48, 0.70) * (exp(-vy * 5.0) * pow(0.5 - 0.5 * mu, 2.0) * 0.35);
+  return (blue + warm + pink) * smoothstep(-0.08, 0.0, v.y);
+}
 vec3 ngSkyMSAt(float r, float muS) {
   vec2 uv = vec2(ngSkyU2Uv(clamp(muS * 0.5 + 0.5, 0.0, 1.0), 32.0), ngSkyU2Uv(clamp((r - NG_SKY_RG) / (NG_SKY_RT - NG_SKY_RG), 0.0, 1.0), 32.0));
   return texture(ngSkyMS, uv).rgb;
@@ -229,7 +241,7 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
     if (uSkyE.y > 0.0) E += eM * ngSkySunT(rp, -muS) * max(-muS, 0.0);
     L += thr * E * (1.0 - uSkyDeck.y) * NG_SKY_ALBEDO / 3.14159265;
   }
-  return L * uSkyE.z;
+  return L * uSkyE.z + uSkyTw.x * ngSkyTwilight(v, s);
 }
 #endif
 `;

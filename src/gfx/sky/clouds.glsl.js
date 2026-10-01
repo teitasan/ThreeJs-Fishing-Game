@@ -47,40 +47,45 @@ float ngSkyWorleyFbm(vec3 p, float freq) {
 float ngSkyRemap(float v, float a, float b, float c, float d) { return c + (v - a) / max(b - a, 1e-5) * (d - c); }
 `;
 
-/** 形のノイズ 64³：r = Perlin-Worley、gba = Worley fbm（4・8・16 セル） */
+/** 形のノイズ 64³：r = Perlin-Worley（0..1 に広げた Perlin fbm を Worley fbm で膨らませる）、
+    gba = Worley fbm（8・16・32 セル、0..1 に正規化）。どれもタイルの周期で繋がる */
 export const SHAPE_FRAG = PERIODIC_GLSL + /* glsl */ `
+float ngSkyWn(vec3 p, float f) { return clamp((ngSkyWorleyFbm(p, f) - 0.28) / 0.55, 0.0, 1.0); }
 void main() {
   vec3 p = vec3(vUv, ngSlice);
   float pf = 0.0, amp = 0.5, fr = 4.0;
-  for (int i = 0; i < 4; i++) { pf += amp * ngSkyPerlinP(p * fr, fr); amp *= 0.5; fr *= 2.0; }
-  pf = clamp(pf * 0.9 + 0.5, 0.0, 1.0);
-  float w4 = ngSkyWorleyFbm(p, 4.0);
-  float pw = clamp(ngSkyRemap(pf, w4 - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
-  gl_FragColor = vec4(pw, w4, ngSkyWorleyFbm(p, 8.0), ngSkyWorleyFbm(p, 16.0));
+  for (int i = 0; i < 5; i++) { pf += amp * ngSkyPerlinP(p * fr, fr); amp *= 0.5; fr *= 2.0; }
+  float pn = clamp(pf * 1.4 + 0.5, 0.0, 1.0);
+  float wn = ngSkyWn(p, 4.0);
+  float pw = clamp(ngSkyRemap(pn, wn - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+  pw = clamp((pw - 0.45) / 0.50, 0.0, 1.0);                  // 0.42–0.99 に偏るのを 0..1 へ広げる
+  gl_FragColor = vec4(pw, ngSkyWn(p, 8.0), ngSkyWn(p, 16.0), ngSkyWn(p, 32.0));
 }
 `;
 
-/** 細部のノイズ 32³：rgb = Worley fbm（2・4・8 セル） */
+/** 細部のノイズ 32³：rgb = Worley fbm（2・4・8 セル、0..1 に正規化） */
 export const DETAIL_FRAG = PERIODIC_GLSL + /* glsl */ `
+float ngSkyWn(vec3 p, float f) { return clamp((ngSkyWorleyFbm(p, f) - 0.28) / 0.55, 0.0, 1.0); }
 void main() {
   vec3 p = vec3(vUv, ngSlice);
-  gl_FragColor = vec4(ngSkyWorleyFbm(p, 2.0), ngSkyWorleyFbm(p, 4.0), ngSkyWorleyFbm(p, 8.0), 1.0);
+  gl_FragColor = vec4(ngSkyWn(p, 2.0), ngSkyWn(p, 4.0), ngSkyWn(p, 8.0), 1.0);
 }
 `;
 
-/** 巻雲 512²（周期）：r = 鉤状の筋（Cirrus uncinus）、g = 薄い膜（Cirrostratus）、b = 細い繊維 */
+/** 巻雲 512²（周期）：r = 細い繊維の筋（毛状雲・鉤状雲）、g = 薄い膜（巻層雲）、b = 塊のむら */
 export const CIRRUS_FRAG = NG_NOISE_GLSL + /* glsl */ `
+float ngCiRidge(vec2 p, vec2 per) { return 1.0 - abs(2.0 * ngFbmP(p, per, 4) - 1.0); }
 void main() {
   vec2 p = vUv;
-  vec2 w = vec2(ngFbmP(p * 3.0 + 1.7, vec2(3.0), 4), ngFbmP(p * 3.0 + 9.2, vec2(3.0), 4)) - 0.5;
+  /* 大きなうねり（周期 1）で筋を曲げる。縦横比は 3〜4（毛の束、鉤） */
+  vec2 w = vec2(ngFbmP(p * 2.0 + 1.7, vec2(2.0), 3), ngFbmP(p * 2.0 + 9.2, vec2(2.0), 3)) - 0.5;
   vec2 q = p + w * 0.22;
-  /* 風下へ引き伸ばした筋（x 方向に 2 周・y に 12 周） */
-  float s = ngFbmP(vec2(q.x * 2.0, q.y * 12.0), vec2(2.0, 12.0), 5);
-  float hook = ngFbmP(vec2(q.x * 6.0 + w.y * 2.0, q.y * 24.0), vec2(6.0, 24.0), 3);
-  float streak = smoothstep(0.48, 0.80, s) * (0.55 + 0.45 * hook);
-  float veil = smoothstep(0.35, 0.75, ngFbmP(p * 4.0 + w, vec2(4.0), 4));
-  float fib = ngFbmP(vec2(q.x * 4.0, q.y * 48.0), vec2(4.0, 48.0), 3);
-  gl_FragColor = vec4(streak, veil, fib, 1.0);
+  float f1 = pow(ngCiRidge(vec2(q.x * 4.0, q.y * 14.0), vec2(4.0, 14.0)), 3.0);
+  float f2 = pow(ngCiRidge(vec2(q.x * 6.0 + 0.3, q.y * 20.0 + w.x * 3.0), vec2(6.0, 20.0)), 4.0);
+  float pch = smoothstep(0.50, 0.78, ngFbmP(p * 3.0 + w * 0.8, vec2(3.0), 4));
+  float fib = (0.75 * f1 + 0.30 * f2) * pch;
+  float veil = smoothstep(0.55, 0.90, ngFbmP(p * 2.0 + w, vec2(2.0), 5));
+  gl_FragColor = vec4(clamp(fib, 0.0, 1.0), veil, pch, 1.0);
 }
 `;
 
@@ -147,8 +152,9 @@ float ngCloudDensity(vec3 p, float distKm, bool full, out float h01) {
   if (hh > 1.0) return 0.0;
   vec3 q = vec3(p.x + uWind.x, p.y, p.z + uWind.y) * uCloud2.y;
   vec4 s = textureLod(uNgShape, q, 0.0);
+  /* 形 = Perlin-Worley を高い周波数の Worley fbm で少し削る（房の中の房） */
   float wf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
-  float shape = clamp(ngSkyRemapF(s.r, wf - 1.0, 1.0), 0.0, 1.0);
+  float shape = clamp(ngSkyRemapF(s.r, wf * 0.35, 1.0), 0.0, 1.0);
   shape *= ngCloudHeightGrad(hh, uCloud.w);
   float c = clamp(cov, 0.0, 1.0);
   float d = clamp(ngSkyRemapF(shape, 1.0 - c, 1.0), 0.0, 1.0) * c;
@@ -165,7 +171,11 @@ float ngCloudDensity(vec3 p, float distKm, bool full, out float h01) {
 /* 多重散乱の近似（Wrenninge の 3 オクターブ）+ 二重 HG（0.6 / −0.2）+ 銀の縁（0.88） */
 float ngCloudMS(float muL, float tauL) {
   float p0 = mix(ngSkyPhaseHG(muL, -0.2), ngSkyPhaseHG(muL, 0.6), 0.72) + 0.10 * ngSkyPhaseHG(muL, 0.88);
-  return p0 * exp(-tauL) + 0.5 * ngSkyPhaseHG(muL, 0.3) * exp(-0.4 * tauL) + 0.25 * ngSkyPhaseHG(muL, 0.15) * exp(-0.16 * tauL);
+  float ms = p0 * exp(-tauL) + 0.5 * ngSkyPhaseHG(muL, 0.3) * exp(-0.4 * tauL) + 0.25 * ngSkyPhaseHG(muL, 0.15) * exp(-0.16 * tauL);
+  /* 厚い雲の拡散（二流近似の透過 1/(1 + 0.75·τ·(1−g))、g = 0.85）：白く、方向に依らない。
+     日の当たる面の近くで «白い雲»（反射率 ≈ 0.75）になる大きさ */
+  float diff = 1.0 / (1.0 + 0.1125 * tauL);
+  return ms + 0.17 * diff;
 }
 /* 原点から d 方向、距離 t までの空気の透過と、内散乱のうちその手前の割合 F */
 void ngCloudAerial(vec3 d, float t, out vec3 Tair, out float F) {
@@ -249,8 +259,8 @@ void ngCirrusLayer(vec3 d, vec3 Lsky, out vec3 rgb, out float a) {
   vec3 P = vec3(0.0, r0, 0.0) + d * tc;
   vec2 uv = (P.xz + uCirrusW.xy) / uCirrus.z;
   vec4 c = texture(uNgCirrus, uv);
-  float m = c.r * 0.85 + c.g * 0.30 * uCirrus.x + 0.12 * c.b;
-  float dens = smoothstep(1.0 - uCirrus.x * 0.9, 1.05, m) * (0.6 + 0.4 * c.b);
+  /* 繊維は被覆が少なくても残り、膜は被覆が多いときだけ */
+  float dens = c.r * smoothstep(0.0, 0.5, uCirrus.x) + 0.35 * c.g * smoothstep(0.4, 1.0, uCirrus.x) * c.b;
   float tau = dens * uCirrus.w / pow(max(d.y, 0.06), 0.35);
   float T = exp(-tau);
   vec3 Ld = uLight.xyz;

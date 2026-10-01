@@ -64,13 +64,13 @@ export class SkyModule extends NgModule {
       ngFrame: { value: ngFrameData },
       ngSkyTrans: { value: null }, ngSkyMS: { value: null },
       uHaze: { value: 1 }, uLutMode: { value: 0 }, uCopyMode: { value: 0 },
-      uSkyE: V4(), uSkySunCol: { value: new T.Vector3(1, 1, 1) }, uSkyDeck: V4(), uSkyDeckL: V3(), uSkySunDir: { value: new T.Vector3(0, 1, 0) },
+      uSkyE: V4(), uSkyTw: V4(), uSkySunCol: { value: new T.Vector3(1, 1, 1) }, uSkyDeck: V4(), uSkyDeckL: V3(), uSkySunDir: { value: new T.Vector3(0, 1, 0) },
       uSteps: { value: 32 },
       uSkyClear: { value: null }, uCloudPano: { value: null }, uStrip: { value: null }, uPrev: { value: null },
       uNgShape: { value: null }, uNgDetail: { value: null }, uNgCirrus: { value: null }, uMoonTex: { value: null },
       uPano: V4(), uCloud: V4(), uCloud2: V4(), uWind: V4(), uLight: V4(), uLightE: V3(), uAmbTop: V3(), uAmbBot: V3(),
       uMode: V4(), uCirrus: V4(), uCirrusW: V4(),
-      uSunDisk: V3(), uMoonDisk: V3(), uNightSky: V4(), uSkyMisc: V4(),
+      uSunDisk: V3(), uMoonDisk: V3(), uCloudSharp: V4(), uNightSky: V4(), uSkyMisc: V4(),
     };
   }
 
@@ -226,6 +226,7 @@ export class SkyModule extends NgModule {
     U.uSkySunDir.value.set(s[0], s[1], s[2]);
     U.uSkyE.value.set(p.eS[1], p.eM[1], this.rig.G, this.rig.A.haze);
     U.uSkyDeck.value.set(wp.base / 1000, wp.deckOcc, 0, 0);
+    U.uSkyTw.value.set(p.tw, 0, 0, 0);
     U.uSkyDeckL.value.fromArray(p.deckL);
     U.uHaze.value = this.rig.A.haze;
     /* 雲 */
@@ -233,14 +234,15 @@ export class SkyModule extends NgModule {
     const a = (h / 24) * Math.PI * 2;
     const ox = F[NG.CLOUDSH * 4] / 1000, oz = F[NG.CLOUDSH * 4 + 1] / 1000;
     U.uCloud.value.set(wp.cover, wp.base / 1000, wp.top / 1000, wp.strat);
-    U.uCloud2.value.set(wp.sigma, 1 / 2.6, 1 / 0.42, wp.erosion);
+    U.uCloud2.value.set(wp.sigma, 1 / 1.6, 1 / 0.32, wp.erosion);
     /* 細部は 24h 周期の小さな円でさらに流れる（湧き立ち） */
     U.uWind.value.set(ox, oz, ox * 1.35 + Math.cos(a * 3) * 1.1, oz * 1.35 + Math.sin(a * 3) * 1.1);
     U.uLight.value.set(p.light[0], p.light[1], p.light[2], wp.belly);
     U.uLightE.value.fromArray(p.lightE);
     U.uAmbTop.value.fromArray(p.ambTop);
     U.uAmbBot.value.fromArray(p.ambBot);
-    U.uCirrus.value.set(wp.cirrus, 8.0, 14.0, 0.55);
+    U.uCirrus.value.set(wp.cirrus, 8.0, 18.0, 0.22);
+    U.uCloudSharp.value.set(1.6, (wp.base + 0.35 * (wp.top - wp.base)) / 1000, 1 / 0.32, 0);
     U.uCirrusW.value.set(ox * 2.2 + 3.0, oz * 2.2 - 5.0, 0, this.frame % 64);
     /* 円盤・星 */
     U.uSunDisk.value.fromArray(o.sunDisk);

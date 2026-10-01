@@ -31,23 +31,48 @@ const MIE_G_MEDIUM = 0.76;
 export function weatherParams(cloud, rain, hour = 12) {
   const c = clamp01(cloud), r = clamp01(rain);
   const kc = clamp01((c - 0.14) / 0.58), kr = clamp01(r / 0.85);
-  const cover = clamp01(c * 1.05);
+  /* 晴れ（0.14）でも積雲が 3 割ほど浮かぶ（雲影も流れる）。曇り 0.77・雨 0.95+ */
+  const cover = clamp01(0.30 + (c - 0.14) * 0.84);
   const strat = smooth(0.30, 0.90, c);
   /* 巻雲：晴れの日に多く、雨で隠れる。日ごとの量は時刻の周期関数（決定的） */
   const ciDay = 0.65 + 0.35 * Math.sin((hour / 24) * Math.PI * 2 + 1.3);
   return {
     cover, strat, kc, kr,
-    haze: 1 + 1.2 * kc + 2.3 * kr,
+    haze: 1.6 + 1.0 * kc + 2.9 * kr,          // 晴れでも夏の日本の湿った空気（Hillaire の 1.6 倍）
     base: 1450 - 250 * kc - 700 * kr,             // m
     top: 2550 - 250 * kc + 500 * kr,              // m
-    sigma: 42 - 12 * kc + 30 * kr,                // 1/km
-    erosion: 0.42 - 0.12 * strat,
+    sigma: 48 - 26 * kc + 26 * kr,                // 1/km（積雲 48・層積雲 22・乱層雲 48）
+    erosion: 0.55 - 0.20 * strat,
     belly: kr,
     cirrus: 0.62 * ciDay * (1 - 0.45 * kc) * (1 - kr),
     deckOcc: 0.97 * smooth(0.25, 1.0, cover),
     cloudDim: 1 - 0.9 * smooth(0.35, 1.0, cover),
     shadow: 0.85 * (1 - smooth(0.6, 0.97, cover)),
   };
+}
+
+/** 薄明の持ち上げの形（atmo.glsl.js の ngSkyTwilight と同じ式）。v・s は単位ベクトル */
+export function twilightShape(vx, vy, vz, sx, sz, out) {
+  const y = Math.max(vy, 0);
+  const mu = (vx * sx + vz * sz) / Math.max(Math.hypot(vx, vz) * Math.hypot(sx, sz), 1e-4);
+  const g = Math.exp(-y * 3.5);
+  const w = g * Math.pow(0.5 + 0.5 * mu, 3) * 1.4, pk = Math.exp(-y * 5) * Math.pow(0.5 - 0.5 * mu, 2) * 0.35;
+  const f = smooth(-0.08, 0, vy), b = 0.55 + 0.45 * y;
+  out[0] = (0.26 * b + 1.0 * w + 0.85 * pk) * f;
+  out[1] = (0.42 * b + 0.52 * w + 0.48 * pk) * f;
+  out[2] = (1.0 * b + 0.22 * w + 0.70 * pk) * f;
+  return out;
+}
+
+/**
+ * 薄明の持ち上げの照度（ng、水平面の空の照度の輝度）。露出の時刻表（palette）× 空の照度が
+ * 夜（月の空 ≈ 0.0055 × 露出 22 ≈ 0.12）を下回らず、夜明けに向けて少しずつ上がるように
+ * @param {number} sy sin(太陽高度)
+ */
+export function twilightIrradiance(sy) {
+  const alt = Math.asin(Math.max(-1, Math.min(1, sy))) * 180 / Math.PI;
+  const D0 = 0.12 + 0.10 * smooth(-0.37, -0.03, sy);
+  return Math.max(0, D0 / ngScheduledExposure(alt, 0, 0) - 0.0055) * (1 - smooth(-0.035, 0.07, sy));
 }
 
 /** three の SphericalHarmonics3.getBasisAt と同じ順・係数 */
@@ -68,6 +93,13 @@ export class SkyRig {
     this.A.setHaze(1, true);
     this.sunCol = [1, 1, 1];
     this._calibrate();
+    /* 薄明の形の水平面照度（輝度）。太陽の方位に依らない */
+    {
+      const ds = fibonacciSphere(512), o = [0, 0, 0];
+      let E = 0;
+      for (const d of ds) { if (d[1] <= 0) continue; twilightShape(d[0], d[1], d[2], 1, 0.3, o); E += ngLuminance(o[0], o[1], o[2]) * d[1] * (4 * Math.PI / 512); }
+      this.twNorm = 1 / Math.max(E, 1e-6);
+    }
     this.dirs = fibonacciSphere(SH_N);
     for (let i = 0; i < HZ_N; i++) {
       const a = (i / HZ_N) * Math.PI * 2, l = Math.hypot(1, HZ_Y);
@@ -84,7 +116,7 @@ export class SkyRig {
     this._shT = -1; this._last = null;
     this.canopy = 0;
     this.uwInsc = null; this.uw = 0;
-    this.p = { eS: [0, 0, 0], eM: [0, 0, 0], ambTop: [0, 0, 0], ambBot: [0, 0, 0], deckL: [0, 0, 0], lightE: [0, 0, 0], light: [0, 1, 0], useMoonLight: false };
+    this.p = { tw: 0, eS: [0, 0, 0], eM: [0, 0, 0], ambTop: [0, 0, 0], ambBot: [0, 0, 0], deckL: [0, 0, 0], lightE: [0, 0, 0], light: [0, 1, 0], useMoonLight: false };
     this.out = {
       keyDir: [0, 1, 0], keyE: [0, 0, 0], keyColor: [1, 1, 1], keyIntensity: 0,
       zenith: [0, 0, 0], horizon: [0, 0, 0], exposure: 1, wp: null, sunDisk: [0, 0, 0], moonDisk: [0, 0, 0],
@@ -159,21 +191,21 @@ export class SkyRig {
     for (let k = 0; k < 3; k++) p.deckL[k] = p.lightE[k] * Tcl[k] * D * lyE / Math.PI * smooth(0.2, 0.9, wp.cover);
     A.deck.h = wp.base; A.deck.occ = wp.deckOcc; A.deck.L = p.deckL;
     if (this.B !== A && this.B) { this.B.deck = A.deck; }
+    /* 薄明の持ち上げ（雲の甲板の下では半分） */
+    p.tw = twilightIrradiance(s[1]) * this.twNorm * (1 - 0.5 * wp.deckOcc);
     /* 晴れの空の方向ごとの値（毎フレーム 9 方向ずつ、跳びは全部） */
     const n = this.dirs.length;
     const per = jumped || this.rr === 0 && !this._filled ? n : 9;
-    const o = [0, 0, 0];
+    const o = [0, 0, 0], tw = [0, 0, 0];
     for (let c = 0; c < per; c++) {
       const i = this.rr % n;
       const d = this.dirs[i];
       A.radiance(d[0], d[1], d[2], s[0], s[1], s[2], p.eS, p.eM, this.G, 12, o);
-      this.Lclear[i * 3] = o[0]; this.Lclear[i * 3 + 1] = o[1]; this.Lclear[i * 3 + 2] = o[2];
+      twilightShape(d[0], d[1], d[2], s[0], s[2], tw);
+      this.Lclear[i * 3] = o[0] + p.tw * tw[0]; this.Lclear[i * 3 + 1] = o[1] + p.tw * tw[1]; this.Lclear[i * 3 + 2] = o[2] + p.tw * tw[2];
       this.rr = (this.rr + 1) % n;
     }
     this._filled = true;
-    /* 雲の上の空（雲の環境光）：天頂の晴れの空 × 0.8 + 夜の底 */
-    const zc = A.radiance(0, 1, 0, s[0], s[1], s[2], p.eS, p.eM, this.G, 10, [0, 0, 0]);
-    for (let k = 0; k < 3; k++) p.ambTop[k] = zc[k] * 1.6 + NIGHT_FLOOR[k];
     /* 雲を見かけの模型で重ねる（SH・地平・ファサード） */
     for (let i = 0; i < n; i++) this._cloudy(i, wp, Tcl, D);
     /* SH（0.25s ごと・跳びで即）と空の照度 */
@@ -183,6 +215,8 @@ export class SkyRig {
       this._projectSH(E, kd, wp);
     }
     const up = this.skyUp;
+    /* 雲の上の空（雲の環境光）：空の半球照度 / π × 0.75（雲の中では上の雲が遮る）+ 夜の底 */
+    for (let k = 0; k < 3; k++) p.ambTop[k] = (this.skyUp[k] / Math.PI) * 0.55 + NIGHT_FLOOR[k];
     for (let k = 0; k < 3; k++) p.ambBot[k] = ATMO.albedo * (E[k] * Math.max(kd[1], 0) + up[k]) / Math.PI;
     /* 媒質（core の ngApplyMedium）：Rayleigh・谷の霞（雨で 2 倍以上）・朝霧 */
     const bM = 3.5e-5 * (1 + 1.5 * cloud + 3.5 * rain);
@@ -229,9 +263,9 @@ export class SkyRig {
     for (let k = 0; k < 3; k++) out.sunDisk[k] = this.Etop * this.sunCol[k] * smooth(-0.02, 0.0, s[1]) / omegaSun;
     /* 月の円盤は «見た目の» 値：露出 22 で AgX の肩に海が残る明るさ（照度としての月は key が持つ） */
     const mv = smooth(-0.02, 0.0, -s[1]);
-    for (let k = 0; k < 3; k++) out.moonDisk[k] = 0.40 * this.sunCol[k] * mv * (k === 2 ? 0.97 : 1);
+    for (let k = 0; k < 3; k++) out.moonDisk[k] = 0.22 * this.sunCol[k] * mv * (k === 2 ? 0.96 : 1);
     /* 星（0 等星の照度 ≈ 月の 8e-6）・天の川（晴れの夜だけ、満月の明かりで半分） */
-    out.stars = 8e-6 * NG_UNITS.MOON;
+    out.stars = 8e-6 * NG_UNITS.MOON * 6.0;    // 満月でも星が見える «絵の» 明るさ（物理の 6 倍）
     out.milky = NIGHT_FLOOR[1] * 1.4 * (1 - smooth(0.3, 0.75, cloud)) * 0.5;
     out.night = night;
     return out;
