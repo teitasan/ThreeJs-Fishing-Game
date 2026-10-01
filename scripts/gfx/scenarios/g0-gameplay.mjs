@@ -255,6 +255,46 @@ export default async function (h) {
     console.log('  fish', JSON.stringify(T.fish));
     expect(nNear > 0 && fishInfo.hook !== null, `${tier}: 魚が寄ってこない（${fishInfo.fs}）`);
     await h.shot(`${tier}-fish-refraction`);
+    /* 水越しの魚の近接：桟橋の縁の目の高さ（床 + 1.6m）から、桟橋に一番よく見える魚（大きさ ÷ 距離が最大）を見下ろす。
+       9 時（正午の太陽の照り返しが画面の真ん中に来ない）。カメラは桟橋の上だけに置く */
+    const fishClose = await h.eval(() => {
+      const g = window.__game, cam = g.camera, t = g.terrain;
+      const ax = t.dockStart.x, az = t.dockStart.z, bx = t.dockEnd.x, bz = t.dockEnd.z;
+      const vx = bx - ax, vz = bz - az, vv = vx * vx + vz * vz;
+      let best = null;
+      for (const f of g.school.fishes) {
+        if (!f.active || !f.mesh?.visible) continue;
+        const u = Math.max(0, Math.min(1, ((f.pos.x - ax) * vx + (f.pos.z - az) * vz) / vv));
+        const px = ax + vx * u, pz = az + vz * u;
+        const d = Math.hypot(f.pos.x - px, f.pos.z - pz);
+        if (d < 3.2 || d > 14) continue;   /* 床の下（半幅 1.7m）と遠すぎる魚は外す */
+        const L = f.mesh.scale.x;
+        const score = L / Math.max(2, Math.hypot(d, f.pos.y - t.dockY - 1.6));
+        if (!best || score > best.score) best = { f, px, pz, d, score };
+      }
+      if (!best) return null;
+      const { f } = best;
+      const ex = f.pos.x - best.px, ez = f.pos.z - best.pz, eL = Math.hypot(ex, ez) || 1;
+      const edge = Math.min(1.5, eL);
+      g.state.clock = 9;
+      g.__savedCam = g._updateCamera;
+      g._updateCamera = function () {
+        cam.position.set(best.px + ex / eL * edge, t.dockY + 1.6, best.pz + ez / eL * edge);
+        cam.lookAt(f.pos.x, f.pos.y, f.pos.z);
+        cam.updateMatrixWorld();
+      };
+      for (let i = 0; i < 4; i++) g.update(1 / 60);
+      const v = f.pos.clone().project(cam);
+      return {
+        species: f.species?.id, depth: +(-f.pos.y).toFixed(2), scale: +f.mesh.scale.x.toFixed(2), horizFromDock: +best.d.toFixed(2),
+        camToFish: +f.pos.distanceTo(cam.position).toFixed(2), onDock: t.onDock(cam.position.x, cam.position.z) !== null, ndc: [v.x, v.y].map((x) => +x.toFixed(3)),
+      };
+    });
+    T.fishClose = fishClose;
+    console.log('  fish close', JSON.stringify(fishClose));
+    expect(fishClose && fishClose.onDock, `${tier}: 桟橋から見える魚が居ない（${JSON.stringify(fishClose)}）`);
+    await h.shot(`${tier}-fish-refraction-close`);
+    await h.eval(() => { const g = window.__game; g.state.clock = 12; if (g.__savedCam) { g._updateCamera = g.__savedCam; delete g.__savedCam; } });
 
     /* 6. アタリ → アワセ → ファイト → 水中カメラ */
     const nBite = await run(h, 1500, 1 / 30, "g.fs === 'bite'");
@@ -286,21 +326,28 @@ export default async function (h) {
     /* 巻いて取り込むか切れるまで（最大 40 秒）。どちらでもファイトの流れが最後まで通ること */
     const end = await h.eval(() => {
       const g = window.__game;
-      g.actionHeld = true;
-      g.keys.add('Space');
-      let n = 0;
-      for (; n < 1200 && g.fs === 'fight'; n++) g.update(1 / 30);
+      /* 張力を見て巻く／止める（人の遊び方。巻きっぱなしだと強い魚で糸が切れて «取り込み» を通らない） */
+      let n = 0, landed = false, snapped = false;
+      for (; n < 1200 && g.fs === 'fight'; n++) {
+        const t = g.fight ? g.fight.tension / g.line.cap : 0;
+        g.actionHeld = t < 0.6;
+        g.update(1 / 30);
+      }
       g.actionHeld = false;
-      g.keys.delete('Space');
       const fs = g.fs;
+      landed = fs === 'landing';
+      for (let i = 0; i < 300 && g.fs === 'landing'; i++) g.update(1 / 30);
+      snapped = fs !== 'landing';
+      const modal = g.ui.openModal || null;
       if (g.ui.openModal === 'catch') g.dismissCatch();
       if (g.underwaterCam) g._toggleUnderwater();
       for (let i = 0; i < 20; i++) g.update(1 / 30);
-      return { frames: n, fsAfterFight: fs, fs: g.fs, uwCam: g.underwaterCam };
+      return { frames: n, fsAfterFight: fs, landed, snapped, modal, fs: g.fs, uwCam: g.underwaterCam };
     });
     T.fightEnd = end;
     console.log('  fight end', JSON.stringify(end));
     expect(end.fsAfterFight !== 'fight', `${tier}: 40 秒巻いてもファイトが終わらない`);
+    expect(end.landed, `${tier}: 張力を見て巻いても取り込み（landing）に入らない（${end.fsAfterFight}）`);
 
     /* 7. F3 のデバッグ表示（当たりの箱と障害物の円）を桟橋の斜め上から */
     const dbg = await h.eval(() => {
