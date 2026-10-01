@@ -113,7 +113,7 @@ export class ExampleModule extends NgModule {
     /* 3. ngExtendStandard：three の光・影・霧（ngApplyMedium）はそのまま効く。決まった口にだけ GLSL を入れる */
     const mat = new T.MeshStandardMaterial({ map: this.stripes, roughness: 0.7, metalness: 0 });
     ngExtendStandard(mat, {
-      key: 'example-stake',       // customProgramCacheKey = 'ng:example-stake:<tier>'。同じ key = 同じ GLSL
+      key: 'example-stake',       // customProgramCacheKey = 'ng:example:example-stake:<tier>…'（key はモジュールの名前空間の中）。同じ key = 同じ GLSL
       module: 'example',
       uniforms: { ...heightfield.uniforms },   // 共有の {value} をそのまま（複製しない）
       vertex: {

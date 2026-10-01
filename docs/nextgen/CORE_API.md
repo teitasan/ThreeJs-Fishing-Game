@@ -880,6 +880,9 @@ forge.releaseScratch()                                   // core が読み込み
 
 `src/gfx/core/examples/exampleModule.js`（id `'example'`）が、ここまでの口を全部使った «動く» 雛形。`lab/example.html` で起動し、
 `scripts/gfx/scenarios/example-smoke.mjs` が 3 段で撮って検査する（G0 で合格：プログラム 3 本（杭・杭の影・浮き輪）・断片サンプラー最大 4・頂点 2・GPU ≈0.04ms・NaN 0・エラー 0）。
+**G0 後の修正**：update が未定義の変数を読んでいて、止めずに回すと 7.5 秒で無効化されていた（example-smoke は freeze して dt = 0 で回していたので見逃した）。
+雛形は止めずに 300 フレーム回し、最後に «自分が健在»（例外の数 0・無効化なし・スタブへの差し戻しなし・止まったパスなし・`[ng] <id>.` の警告 0）を検査する
+（`INJECT=prepare` で例外を入れると不合格になる）
 
 中身（抜粋。全文はファイルを読むこと）：
 
@@ -993,7 +996,8 @@ PW_MODULE=<playwright の index.mjs の絶対パス> node scripts/gfx/shot.mjs s
 - ヘッドレスの Chrome（Metal の GPU）で開き、console のエラー・警告・ページ例外を `<DIR>/console.txt` に書く。シナリオが投げたら `_failure.png` を撮って終了コード 1
 - シナリオ = `export default async function (h)`。道具：`h.open(rel)`・`h.waitFor(fn, arg, sec)`・`h.eval(fn, arg)`・`h.shot(name)`・`h.counts()`（errors / warnings / pageErrors）・
   `h.logs`・`h.sleep(ms)`・`h.page`（playwright）・`h.out`・本編用 `h.bootGame({ quality, bootQuality, seed, start, query })`・`h.tick(n, dt)`・`h.hideHud()`・`h.stats()`・`h.frameMs(n)`
-- **雛形**：`scripts/gfx/scenarios/example-smoke.mjs`（起動・撮影・NaN・プログラムの監査・自分の GPU ms・エラー 0。`ID` を自分の id に変える）
+- **雛形**：`scripts/gfx/scenarios/example-smoke.mjs`（起動・止めずに 300 フレーム・撮影・NaN・プログラムの監査・自分の GPU ms・エラー 0・自分が健在。`ID` を自分の id に変える）。
+  例外は `safety.guard` が握って console の **警告** にするので、console のエラーだけを見ても落ちたモジュールは見えない（雛形の «健在» の検査を消さない）
 
 | 既存のシナリオ | 用途 |
 | --- | --- |
