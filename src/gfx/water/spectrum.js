@@ -67,6 +67,7 @@ export const SPECTRUM_DEFAULTS = Object.freeze({
   spread: 6,        // cos^{2s} の s（短い吹送距離の風波は広がる）
   minLambda: 0.017, // 毛管の切り捨て m
   maxLambdaFrac: 0.5, // タイルの 1/2 より長い波は持たない（タイルの繰り返しを目立たせない）
+  maxLambda: 0,     // > 0 なら帯の長い側の端 m（カスケードの帯分け。maxLambdaFrac·L より優先）
   loopSec: 256,     // 生きた FFT の量子化の周期 s（float32 の精度のため）
   seed: 0x5eed,
 });
@@ -83,9 +84,9 @@ export const freqIndex = (i, N) => (i < N / 2 ? i : i - N);
  */
 export function buildSpectrum(o) {
   const p = { ...SPECTRUM_DEFAULTS, ...o };
-  const { N, L, U, F, spread, minLambda, maxLambdaFrac, seed } = p;
+  const { N, L, U, F, spread, minLambda, maxLambdaFrac, maxLambda, seed } = p;
   const dk = (2 * Math.PI) / L;
-  const kMax = (2 * Math.PI) / minLambda, kMin = (2 * Math.PI) / (L * maxLambdaFrac);
+  const kMax = (2 * Math.PI) / minLambda, kMin = (2 * Math.PI) / (maxLambda > 0 ? maxLambda : L * maxLambdaFrac);
   /* 1 の側：振幅 a(k) = sqrt(S(k) Δk² / 2) とガウス乱数 */
   const re = new Float64Array(N * N), im = new Float64Array(N * N);
   let slopeVar = 0, heightVar = 0;
@@ -101,7 +102,7 @@ export function buildSpectrum(o) {
       const theta = Math.atan2(kz, kx);
       /* S(k) = S(ω) D(θ) (dω/dk) / k */
       const Sk = jonswap(w, U, F) * spreading(theta, spread) * dwdk / k;
-      const a = Math.sqrt(Math.max(Sk, 0) * dk * dk / 2);
+      const a = Math.sqrt(Math.max(Sk, 0) * dk * dk / 4);   // 実部・虚部の分散 a² → E|h0|² = S Δk² / 2
       const u1 = Math.max(hash01(seed, i, j * 2 + 1), 1e-12), u2 = hash01(seed, i, j * 2);
       const r = Math.sqrt(-2 * Math.log(u1));
       re[j * N + i] = a * r * Math.cos(2 * Math.PI * u2);
@@ -225,4 +226,41 @@ export function fftFactors(N) {
   const lg = Math.round(Math.log2(N));
   const q = 1 << Math.floor(lg / 2), p = N / q;
   return [p, q];
+}
+
+/**
+ * GPU の 2 段の DFT（fft.js の段 0・段 1 と同じ式）を 1 次元で CPU に写したもの（テストで ifft1 と比べる）。
+ * 段 0：Y[k1·Q + n2] = W_N^{n2·k1} Σ_{n1<P} x[Q·n1 + n2] W_P^{n1·k1}、段 1：X[k1 + P·k2] = Σ_{n2<Q} Y[k1·Q + n2] W_Q^{n2·k2}
+ * @param {Float64Array} re
+ * @param {Float64Array} im
+ * @returns {{re: Float64Array, im: Float64Array}}
+ */
+export function dft2Stage1D(re, im) {
+  const N = re.length;
+  const [P, Q] = fftFactors(N);
+  const W = (num, den) => [Math.cos((2 * Math.PI * num) / den), Math.sin((2 * Math.PI * num) / den)];
+  const yr = new Float64Array(N), yi = new Float64Array(N);
+  for (let o = 0; o < N; o++) {
+    const k1 = Math.floor(o / Q), n2 = o - k1 * Q;
+    let ar = 0, ai = 0;
+    for (let m = 0; m < P; m++) {
+      const idx = Q * m + n2;
+      const [wr, wi] = W((m * k1) % P, P);
+      ar += re[idx] * wr - im[idx] * wi; ai += re[idx] * wi + im[idx] * wr;
+    }
+    const [tr, ti] = W((n2 * k1) % N, N);
+    yr[o] = ar * tr - ai * ti; yi[o] = ar * ti + ai * tr;
+  }
+  const xr = new Float64Array(N), xi = new Float64Array(N);
+  for (let o = 0; o < N; o++) {
+    const k1 = o % P, k2 = Math.floor(o / P);
+    let ar = 0, ai = 0;
+    for (let m = 0; m < Q; m++) {
+      const idx = k1 * Q + m;
+      const [wr, wi] = W((m * k2) % Q, Q);
+      ar += yr[idx] * wr - yi[idx] * wi; ai += yr[idx] * wi + yi[idx] * wr;
+    }
+    xr[o] = ar; xi[o] = ai;
+  }
+  return { re: xr, im: xi };
 }
