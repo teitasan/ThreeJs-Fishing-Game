@@ -208,6 +208,7 @@ export class Gfx {
       frameInfo: () => this.f,
       prepareModules: (f) => this._each('prepare', f),
       beforePass: (passId, cam) => this._each('beforePass', passId, cam),
+      ownerOf: (o) => this._ownerOf(o),
     });
     this.pipeline.setReflectionHidden(this._reflHidden || []);
     if (this.camera) this.pipeline.setCamera(this.camera);
@@ -318,6 +319,17 @@ export class Gfx {
     this.modules.set(id, m);
   }
 
+  /* 物体の持ち主のモジュール（root «ng-<id>» の子孫なら id）。いちばん外側の root を採る
+     （モジュールの中の物の名前が ng- で始まってもよい） */
+  _ownerOf(o) {
+    let id = null;
+    for (let p = o; p; p = p.parent) {
+      const n = p.name;
+      if (p.userData?.ngOwned && typeof n === 'string' && n.startsWith('ng-') && this.modules.has(n.slice(3))) id = n.slice(3);
+    }
+    return id;
+  }
+
   _cleanupRoot(id) {
     const r = this.scene.getObjectByName(`ng-${id}`);
     r?.parent?.remove(r);
@@ -344,7 +356,7 @@ export class Gfx {
     this.safety.disabled.delete(id);
     this.safety.strikes.delete(id);
     /* post の P7 は guardPass でも数えている。止まっていたら新しい post で生き返らせる */
-    if (id === 'post') { this.safety.deadPasses.delete('post'); this.safety.passFails.delete('post'); }
+    if (id === 'post') this.safety.revivePass('post');
     console.warn(`[ng] モジュール ${id} をスタブで立て直す（${m._ngStub ? 'スタブの作り直し' : '担当者の実装から差し戻し'}）`);
     this._startModule(id, null, null);
   }

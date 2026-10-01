@@ -11,8 +11,10 @@
    - late 物体（ng 以外で transparent / depthTest=false / renderOrder ≥ 5）は不透明パスで
      visible を退避して隠し、LATE 層を足して late パスで描く。描画後は必ず戻す
    - ライトは毎フレーム layers.enableAll（late のマスクで太陽が消える事故を防ぐ）
-   - 各パスは guardPass で包む。パイプラインは例外を game へ再送出しない。
+   - 各パスは guardPass で包む。パイプラインは例外を game へ再送出しない。止まったパスは間を空けて試し直す。
      post が落ちたら sceneColor（main）を簡易トーンマップで画面へ出す
+   - render の中で呼ばれる物体・マテリアルの関数（onBeforeRender・onBeforeCompile など）は毎フレームの走査で
+     包む（safety.guardRenderHooks）。投げても render は外へ例外を出さず、持ち主のモジュールだけが数えられる
    - WebGL の文脈の喪失：preventDefault して描画を止め、復帰でモジュールの restoreGPU
    =========================================================== */
 import { NG_PASS } from './frame.js';
@@ -73,14 +75,17 @@ export class FramePipeline {
    * @param {() => object} o.frameInfo gfx の f（モジュールの prepare に渡す）
    * @param {(f:object) => void} o.prepareModules
    * @param {(passId:number, camera:object) => void} o.beforePass
+   * @param {(obj:object) => (string|null)} [o.ownerOf] 物体の持ち主のモジュール id（描画の中の失敗の数え先）
    */
   constructor(o) {
     Object.assign(this, {
       THREE: o.THREE, renderer: o.renderer, scene: o.scene, frame: o.frame, shadows: o.shadows,
       quality: o.quality, targets: o.targets, budget: o.budget, safety: o.safety,
       _frameInfo: o.frameInfo, _prepareModules: o.prepareModules, _beforePass: o.beforePass,
+      _ownerOf: o.ownerOf || (() => null),
     });
     const T = this.THREE;
+    this._protos = { object: T.Object3D.prototype, material: T.Material.prototype };
     /** @type {import('three').PerspectiveCamera|null} */
     this.camera = null;
     /** 共有 uniforms（RT を作り直しても {value} は同じ。水・post が読む） */
@@ -192,15 +197,17 @@ export class FramePipeline {
     return changed;
   }
 
-  /* ゲームの late 物体を集め、ライトを全層にする（1 回の traverse）。反射と本描画で同じフレームに
+  /* ゲームの late 物体を集め、ライトを全層にし、描画の中で呼ばれる関数を包む（1 回の traverse）。反射と本描画で同じフレームに
      2 回呼ばれるが、その間に game は物体を動かさない（updateUnderwater だけ）ので 1 フレーム 1 回 */
   _scan() {
     if (this._scannedFrame === this.state.frameIndex) return;
     this._scannedFrame = this.state.frameIndex;
     const late = this._late;
     late.length = 0;
+    const safety = this.safety, owner = this._ownerOf, protos = this._protos;
     this.scene.traverse((o) => {
       if (o.isLight) { o.layers.enableAll(); return; }
+      safety.guardRenderHooks(o, owner, protos);
       if (o.userData.ngOwned) return;
       const m = o.material;
       if (!m || !(o.isMesh || o.isLine || o.isPoints || o.isSprite)) return;

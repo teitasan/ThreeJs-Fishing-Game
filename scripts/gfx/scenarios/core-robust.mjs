@@ -6,6 +6,7 @@
    - late 物体（ゲームの半透明）の visible の退避と復元、ライトの layers.enableAll
    - 品質の切り替え（high → mid → low → high）でライトの数・castShadow・影の種類が変わらない
    - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化してスタブで立て直す
+   - 止まったパス（不透明）は間を空けて試し直して戻る
    - WebGL の文脈の喪失と復帰：喪失中のフレームが例外にならず、復帰後に NaN の無い絵に戻る
    - サンプラーの上限（fragment ≤ 12・vertex ≤ 4）と全プログラムのリンク、本物の createFishMaterial の caustics
    すべての判定を console に PASS / FAIL で出し、FAIL があれば終了コード 1
@@ -118,6 +119,25 @@ export default async function (h) {
     w.update = origU; t.prepare = origP;
     L.tick(2);
     return out;
+  });
+
+  /* 止まったパスは試し直す（不透明パスをセッション中に失わない。safe.js の guardPass） */
+  await run('pass-retry', () => {
+    const L = window.__lab, g = L.gfx, p = g.pipeline;
+    L.cam('dock-3p'); L.freeze(10); L.tick(2);
+    const orig = p._beforePass;
+    let n = 0;
+    p._beforePass = function (id, cam) { if (id === 0 && n < 2) { n++; throw new Error('注入：不透明パスの例外'); } return orig.call(this, id, cam); };
+    let errors = 0;
+    try { L.tick(3); } catch (e) { errors++; }
+    const deadAfter = g.safety.deadPasses.has('opaque');
+    try { L.tick(40); } catch (e) { errors++; }
+    p._beforePass = orig;
+    return [
+      ['不透明パスが 2 回落ちたら止まる', deadAfter, [...g.safety.deadPasses].join(',')],
+      ['止めた不透明パスは試し直して戻る', !g.safety.deadPasses.has('opaque') && p.state.rendered === p.state.frameIndex, [...g.safety.deadPasses].join(',')],
+      ['例外がフレームの外へ出ない', errors === 0, errors],
+    ];
   });
 
   const lost = await h.eval(async () => {
