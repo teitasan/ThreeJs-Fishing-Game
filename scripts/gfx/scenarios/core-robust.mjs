@@ -68,6 +68,21 @@ export default async function (h) {
     return out;
   });
 
+  /* 近景の影マップに物が入っていること（three は影の物体を render() のカメラの layers で判定するので、
+     何も描かない tick カメラのままだと影マップが空になる。shadows.js の renderNear） */
+  await run('shadow', () => {
+    const L = window.__lab, g = L.gfx, r = L.renderer;
+    L.cam('dock-3p'); L.setHour(12); L.freeze(10); L.tick(3);
+    const map = g.rig.key?.shadow?.map;
+    if (!map) return [['近景の影マップがある', false, 'map なし']];
+    const n = 64, x = (map.width - n) >> 1, y = (map.height - n) >> 1;
+    const px = new Uint8Array(n * n * 4);
+    r.readRenderTargetPixels(map, x, y, n, n, px);
+    let occ = 0;
+    for (let k = 0; k < px.length; k += 4) if (px[k] < 255 || px[k + 1] < 255 || px[k + 2] < 255) occ++;
+    return [['近景の影マップの中央（注視点 = 釣り人・桟橋）に遮蔽物が描かれている', occ > 16, `${occ}/${n * n} 画素`]];
+  });
+
   await run('quality', () => {
     const L = window.__lab, g = L.gfx;
     const lights = () => { const a = []; L.scene.traverse((o) => { if (o.isLight) a.push(`${o.type}:${o.castShadow}`); }); return a.join(','); };
