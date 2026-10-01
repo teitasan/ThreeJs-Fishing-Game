@@ -135,6 +135,9 @@ export class Gfx {
     this._skyStub = STUBS.sky(this._ctx());
     /* 代わりの producer は別の id で数える（sky モジュールが無効化されても、こちらは生き残る） */
     this._skyFallback = { id: 'sky-fallback', produce: (input) => this._skyStub.produce(input) };
+    /** 読み込みの実時間（ms）。attachWorld の内訳（高さ場・モジュールごとの init）と warmup の内訳。
+     *  spikes.md の «追加の読み込み» と、モジュールの読み込み予算（§6）の確かめに使う */
+    this.loadStats = { heightfield: 0, modules: {}, attachWorld: 0, warmup: null };
     /** 無効化したモジュールをスタブで立て直した回数（スタブ自身の作り直しは 1 セッション 1 回まで） */
     this._restarts = new Map();
     this.safety.onDisable = (id) => this._onModuleDisabled(id);
@@ -241,6 +244,8 @@ export class Gfx {
     ngExtendContext.shadowUniforms = this.shadows.uniforms;
     ngExtendContext.tier = this.quality.tier;
     this.frame.setComp(NG.CORE, 1, meanShore(lake));
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const t0 = now();
     const prog = (a, b) => (f) => { try { progress?.(a + (b - a) * f); } catch (e) { /* 進捗の表示で落とさない */ } };
     this.heightfield = new HeightField(THREE, this.forge);
     try {
@@ -249,15 +254,19 @@ export class Gfx {
     } catch (e) {
       console.warn('[ng] 高さ場の構築に失敗（地形の無いグレーボックス）', e);
     }
+    this.loadStats.heightfield = Math.round(now() - t0);
     const loaded = this._modulesLoading;
     const ids = NG_MODULE_IDS.filter((id) => !this.disabled.has(id) || REQUIRED.has(id));
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       const mod = loaded[id] ? await loaded[id] : null;
+      const tm = now();
       await this._startModule(id, mod, prog(0.35 + 0.65 * (i / ids.length), 0.35 + 0.65 * ((i + 1) / ids.length)));
+      this.loadStats.modules[id] = Math.round(now() - tm);
       await this.forge.step();
     }
     this.forge.releaseScratch();
+    this.loadStats.attachWorld = Math.round(now() - t0);
     this.ready = true;
   }
 
@@ -615,7 +624,13 @@ export class Gfx {
   async warmup() {
     const r = this.renderer, cam = this.camera;
     if (!r || !cam) return;
+    const now = () => performance.now();
+    const w = { wait: 0, compile: 0, msaa: 0, frames: 0, total: 0 };
+    let t = now();
+    const t0 = t;
+    const lap = (k) => { const n = now(); w[k] = Math.round(n - t); t = n; };
     try { await this._worldPromise; } catch (e) { /* attachWorld は reject しない */ }
+    lap('wait');
     try {
       const mask = cam.layers.mask;
       cam.layers.enableAll();
@@ -626,12 +641,17 @@ export class Gfx {
     if (post) {
       try { await post.compile?.(); } catch (e) { this.safety.warn('post の compile に失敗', e); }
     }
+    lap('compile');
     if (this.quality.tier === 'high') this.probeMsaa();
+    lap('msaa');
     for (let k = 0; k < 3; k++) {
       this.pipeline.beginFrame();
       this.pipeline.renderMain(0);
       await new Promise((res) => setTimeout(res, 0));
     }
+    lap('frames');
+    w.total = Math.round(now() - t0);
+    this.loadStats.warmup = w;
   }
 
   /* 文脈の復帰：焼いた RT を作り直す */

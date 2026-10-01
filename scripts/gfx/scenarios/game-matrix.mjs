@@ -4,9 +4,10 @@
    node scripts/gfx/shot.mjs scripts/gfx/scenarios/game-matrix.mjs --size 2560x1440 --out DIR
    環境変数：QUALITY=high|mid|low（既定 high）、HOURS=6,12,18.5,23、WEATHERS=clear,rain、
    VIEWS=above,below（below は水中カメラ：仕掛けを投げた «待ち» の状態にして桟橋の方を見上げる）、
-   SHOTS=0 で撮らない、BENCH=0 で計測しない、FRAMES=60（計測のフレーム数）
+   SHOTS=0 で撮らない、BENCH=0 で計測しない、FRAMES=60（計測のフレーム数）、
+   HIDE=all（または trees,terrain…）でモジュールの root を隠す（core とキャラクターだけの取り分）
    計測は ?gpuTimer=sync（パスの前後を 1×1 の readPixels で挟む）。DIR/game-matrix.json に
-   視点ごとのパス別の GPU ms（中央値の代わりに最小と平均）と合計を書く
+   視点ごとのパス別の GPU ms（中央値の代わりに最小と平均）と合計、フレームの実時間（update + GPU 完了、p50/p95）を書く
    =========================================================== */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,17 @@ export default async function (h) {
   const frames = Number(process.env.FRAMES) || 60;
   await h.bootGame({ quality, query: '?gpuTimer=sync' });
   await h.hideHud();
+  /* 動的解像度を止めて «その画面の大きさ» で測る（§9 perf-matrix は DRS 無効）。止めないと、計測の同期で
+     重くなったフレームに DRS が反応して 0.7 倍まで落ち、2560×1440 の数字が 1792×1008 のものになる */
+  await h.eval(() => { window.__gfxCapture = true; for (let i = 0; i < 3; i++) window.__game.update(1 / 60); });
+  /* HIDE=all|trees,terrain,...：モジュールの root を隠して測る（core とキャラクターだけの取り分を見る） */
+  if (process.env.HIDE) {
+    await h.eval(async (hide) => {
+      const { getGfx } = await import('/src/gfx/core/index.js');
+      const gfx = getGfx();
+      for (const [id, m] of gfx.modules) if (hide === 'all' || hide.split(',').includes(id)) m.root.visible = false;
+    }, process.env.HIDE);
+  }
   const out = { quality, size: null, views: {} };
   for (const hour of hours) {
     for (const weather of weathers) {
@@ -66,17 +78,30 @@ export default async function (h) {
             gfx.budget.reset();
             for (let i = 0; i < frames; i++) { g.state.clock = hour; g.update(1 / 60); }
             const m = gfx.budget.mean();
+            /* フレームの実時間：game.update（CPU）+ GPU の完了まで（1×1 の readPixels で待つ）。
+               パス別の同期を外して測る（gpuTimer の sync はパスごとに GPU を止めるので、その分を含めない） */
+            const mode = gfx.budget.mode;
+            gfx.budget.setMode('off');
+            const ft = [];
+            for (let i = 0; i < frames; i++) {
+              const t0 = performance.now();
+              g.state.clock = hour; g.update(1 / 60); gfx._gpuSync();
+              ft.push(performance.now() - t0);
+            }
+            gfx.budget.setMode(mode);
+            ft.sort((a, b) => a - b);
+            const frameMs = { p50: +ft[Math.floor(ft.length * 0.5)].toFixed(2), p95: +ft[Math.floor(ft.length * 0.95)].toFixed(2), min: +ft[0].toFixed(2) };
             const rt = gfx.targets.main;
             const pick = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== 'capture' && k !== 'composer').map(([k, v]) => [k, +v.toFixed(2)]));
             const sum = (o) => +Object.entries(o).filter(([k]) => k !== 'capture' && k !== 'composer').reduce((s, [, v]) => s + v, 0).toFixed(2);
             return {
               size: [rt.width, rt.height], msaa: gfx.quality.profile.msaa, uw: +gfx.frame.cam.uw.toFixed(2),
-              gpuMin: pick(m.gpuMin), gpuMean: pick(m.gpuMs), totalMin: sum(m.gpuMin), totalMean: sum(m.gpuMs),
+              gpuMin: pick(m.gpuMin), gpuMean: pick(m.gpuMs), totalMin: sum(m.gpuMin), totalMean: sum(m.gpuMs), frameMs,
             };
           }, { frames, hour });
           out.size = r.size;
           out.views[name] = r;
-          console.log(`${name.padEnd(22)} total min ${r.totalMin.toFixed(2)} mean ${r.totalMean.toFixed(2)}ms (uw ${r.uw}) | ${Object.entries(r.gpuMin).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(' ')}`);
+          console.log(`${name.padEnd(22)} total min ${r.totalMin.toFixed(2)} mean ${r.totalMean.toFixed(2)}ms frame p50 ${r.frameMs.p50} p95 ${r.frameMs.p95} (uw ${r.uw}) | ${Object.entries(r.gpuMin).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(' ')}`);
         }
       }
     }
