@@ -183,7 +183,7 @@ core の凍結の後、render・api・contract の 3 つの観点で査読し、
 | R-5 | **修正**（8c42c3d） | テクセルスナップの格子を注視点の近くの基準点に固定（原点に固定すると太陽の回転で縁がざわついた） |
 | R-6 | **修正**（ddd90f6） | MSAA の降格（high のまま）では古い段のプログラムを手放さない（?msaa=2 の最大プログラム id 48 → 42） |
 | R-7 | **修正**（c46697e） | DRS は粗い段 `NG_DRS_LEVELS` だけを動き、上の段の見積もりが入るときだけ上げる（境目の負荷の模擬で RT の作り直し 38 → 1 回 / 600 秒）。viewport で描く範囲を変える案は、post（pmndrs の EffectPass は uv 0..1 で全体を読む）と sceneColor の mip の縁・ngScreen の意味を全部変えるので採らなかった。作り直しの 1 回 +7ms は残る |
-| R-8 | **一部採用**（57586a2） | late の深度を resolve しない（空のシーンで late 0.8 → 0.6ms / 4× 1.4 → 1.1ms）。sceneColor の mip を 4 段に限る案は TEXTURE_MAX_LEVEL を入れても縮まず（費用は 1 段目）採らない。spikes S-4 に空のシーンの下限（2× で ≈3.7ms + post のスタブ）を書いた。予算表の core の行は 1.5ms のまま（キャラクター・MSAA の費用は別に数える） |
+| R-8 | **一部採用**（57586a2・下の g0 の道具の修正） | late の深度を resolve しない（g0-gameplay の水面の読み戻しは late の深度が要るので、読み戻すフレームだけ `pipeline.resolveLateDepth = true`）（空のシーンで late 0.8 → 0.6ms / 4× 1.4 → 1.1ms）。sceneColor の mip を 4 段に限る案は TEXTURE_MAX_LEVEL を入れても縮まず（費用は 1 段目）採らない。spikes S-4 に空のシーンの下限（2× で ≈3.7ms + post のスタブ）を書いた。予算表の core の行は 1.5ms のまま（キャラクター・MSAA の費用は別に数える） |
 | R-9 | **修正**（614fb10） | ngCutout は A2C の段でも alphaTest を残す（反射 RT とインポスターの撮影でカードが四角く塗られていた） |
 | R-10 | **修正**（614fb10） | ngExtendStandard の鍵にモジュールと caustics を入れる。同じ «module:key» で違う GLSL なら警告 |
 | R-11 | **修正**（e0f6ec7） | 例のモジュールの update の ReferenceError（止めずに回すと 7.5 秒で無効化） |

@@ -102,6 +102,8 @@ export class FramePipeline {
     /** フレームの状態（lab と post が読む） */
     this.state = { frameIndex: 0, underwater: false, reflectionEnabled: true, prepared: -1, reflected: -1, rendered: -1, lost: false };
     this.renderScale = 1;
+    /** true なら late の深度も main.depthTexture へ resolve する（既定 false。描いた水面の深度を読み戻す検査の道具だけが立てる） */
+    this.resolveLateDepth = false;
     this._size = new T.Vector2(1, 1);
     this._preparers = [];
     this._reflHidden = [];
@@ -383,7 +385,7 @@ export class FramePipeline {
         /* MSAA の段では late の深度を resolve しない：main.depthTexture は不透明の後の resolve のまま（= 不透明の深度。
            post が水中の Effect に渡すのもこれ）。high 2560×1440 の空のシーンで late 0.8 → 0.6ms（2×）・1.4 → 1.1ms（4×）。
            G0 後の修正。MSAA の無い段は深度へ直接描くので late の深度（水面）が入る。CORE_API §9 */
-        t.main.resolveDepthBuffer = false;
+        t.main.resolveDepthBuffer = this.resolveLateDepth;
         try {
           cam.layers.mask = NG_MASK.LATE;
           this.frame.beginPass(NG_PASS.MAIN, cam);

@@ -663,7 +663,8 @@ uniforms：`ngHfShadow0`・`ngHfShadow1`（R8 相当、1 = 日向）・`ngHfShad
 
 - `ctx.pipeline.targets`：`main`（WebGLRenderTarget、samples = profile.msaa、`depthTexture`）・`copy`（`textures[0]` sceneColor、`textures[1]` 線形深度）・`refl`
 - `main.depthTexture` の中身：MSAA の段（high）は **不透明の深度**（late の深度は resolve しない。G0 後の修正で late 0.2–0.3ms）。MSAA の無い段（low・mid）は
-  深度へ直接描くので late の深度（水面など depthWrite の物）も入る。段に依らず不透明の深度が要るなら線形の `ngSceneDepth`（m）を使う
+  深度へ直接描くので late の深度（水面など depthWrite の物）も入る。段に依らず不透明の深度が要るなら線形の `ngSceneDepth`（m）を使う。
+  検査の道具（g0-gameplay の水面の読み戻し）だけが `ctx.pipeline.resolveLateDepth = true` で late の深度も resolve させる（モジュールは立てない）
 - 大きさ = 描画バッファの物理 px × DRS の倍率（`pipeline.renderScale`）。倍率は **`NG_DRS_LEVELS = [1, 0.85, 0.75, 0.7, 0.6, 0.5]` の段だけ**
   （`setRenderScale` が `ngSnapRenderScale` で丸める。quality.js）。倍率が変わると main・copy・refl を全部作り直す（high 2560×1440 で その 1 フレーム +≈7ms）ので、
   **G0 後の修正**：以前は 0.05 刻みで 1 段ごとに作り直していた。`DrsController` は上の段の重さを «p90 × (上の段 / 今)²» で見積もって 16ms 未満のときだけ上げ、

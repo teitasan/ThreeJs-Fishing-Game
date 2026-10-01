@@ -33,7 +33,8 @@ async function run(h, n, dt = 1 / 30, predSrc = null) {
 }
 
 /* ページ内：描いた水面の高さの読み戻し。カメラを (x, y0 + 3, z) から真下へ向けて 1 フレーム描き、
-   mainRT の深度（水面は late パスで深度を書く）から画素ごとに世界の位置を戻して surfaceY と比べる */
+   mainRT の深度（水面は late パスで深度を書く）から画素ごとに世界の位置を戻して surfaceY と比べる。
+   MSAA の段は既定で late の深度を resolve しないので（CORE_API §9）、読み戻すフレームだけ pipeline.resolveLateDepth を立てる */
 async function surfaceReadback(h) {
   return h.eval(async () => {
     const g = window.__game;
@@ -49,10 +50,12 @@ async function surfaceReadback(h) {
       cam.lookAt(b.x, b.y, b.z);
       cam.updateMatrixWorld();
     };
+    gfx.pipeline.resolveLateDepth = true;
     try {
       g.update(1 / 60);
       g.update(1 / 60);
     } finally {
+      gfx.pipeline.resolveLateDepth = false;
       g._updateCamera = saved;
       cam.up.set(0, 1, 0);
     }
