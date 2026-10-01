@@ -9,6 +9,7 @@
    - 品質の切り替え（high → mid → low → high）でライトの数・castShadow・影の種類が変わらない
    - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化してスタブで立て直す
    - 止まったパス（不透明）は間を空けて試し直して戻る
+   - ngCutout（A2C）が MSAA の無い RT でも抜く・ngExtendStandard の鍵がモジュールの名前空間の中
    - WebGL の文脈の喪失と復帰：喪失中のフレームが例外にならず、復帰後に NaN の無い絵に戻る
    - サンプラーの上限（fragment ≤ 12・vertex ≤ 4）と全プログラムのリンク、本物の createFishMaterial の caustics
    すべての判定を console に PASS / FAIL で出し、FAIL があれば終了コード 1
@@ -229,6 +230,49 @@ export default async function (h) {
       ['不透明パスが 2 回落ちたら止まる', deadAfter, [...g.safety.deadPasses].join(',')],
       ['止めた不透明パスは試し直して戻る', !g.safety.deadPasses.has('opaque') && p.state.rendered === p.state.frameIndex, [...g.safety.deadPasses].join(',')],
       ['例外がフレームの外へ出ない', errors === 0, errors],
+    ];
+  });
+
+  /* マテリアルの口：ngCutout は MSAA の無い RT（反射・インポスターの撮影）でも抜ける。ngExtendStandard の鍵は
+     モジュールの名前空間の中（別のモジュールの同じ key が同じプログラムを共有しない） */
+  await run('materials', async () => {
+    const { ngExtendStandard, ngCutout } = await import('/src/gfx/core/extend.js');
+    const L = window.__lab, g = L.gfx, T = g.THREE, R = L.renderer;
+    const tex = new T.DataTexture(new Uint8Array([200, 200, 200, 0, 200, 200, 200, 255]), 2, 1, T.RGBAFormat);
+    tex.magFilter = tex.minFilter = T.NearestFilter; tex.needsUpdate = true;
+    const mat = ngExtendStandard(new T.MeshStandardMaterial({ map: tex, side: T.DoubleSide }), { key: 'robust-card', module: 'robust' });
+    ngCutout(mat, g.quality.profile);
+    const sc = new T.Scene(); sc.add(new T.Mesh(new T.PlaneGeometry(2, 2), mat), new T.AmbientLight(0xffffff, 1));
+    const cam = new T.OrthographicCamera(-1, 1, 1, -1, 0.1, 10); cam.position.z = 5; cam.layers.enableAll();
+    const count = (rt) => {
+      R.setRenderTarget(rt); R.setClearColor(0x000000, 0); R.clear(); R.setRenderTarget(null);
+      g.forge.renderView(rt, 0, sc, cam);
+      const px = new Uint8Array(64 * 64 * 4);
+      R.readRenderTargetPixels(rt, 0, 0, 64, 64, px);
+      let left = 0, right = 0;
+      for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) if (px[(y * 64 + x) * 4] > 0) { if (x < 32) left++; else right++; }
+      return { left, right };
+    };
+    const single = new T.WebGLRenderTarget(64, 64), msaa = new T.WebGLRenderTarget(64, 64, { samples: 4 });
+    const s1 = count(single), s4 = count(msaa);
+    const mk = (module, rgb) => ngExtendStandard(new T.MeshStandardMaterial({ color: 0xffffff }), {
+      key: 'robust-leaf', module, fragment: { surface: `diffuseColor.rgb = vec3(${rgb});` } });
+    const a = new T.Mesh(new T.PlaneGeometry(1, 2), mk('trees', '1.0, 0.0, 0.0'));
+    const b = new T.Mesh(new T.PlaneGeometry(1, 2), mk('shoreflora', '0.0, 1.0, 0.0'));
+    a.position.x = -0.5; b.position.x = 0.5;
+    const sc2 = new T.Scene(); sc2.add(a, b, new T.AmbientLight(0xffffff, 3));
+    R.setRenderTarget(single); R.setClearColor(0, 0); R.clear(); R.render(sc2, cam); R.setRenderTarget(null);
+    const px = new Uint8Array(64 * 64 * 4); R.readRenderTargetPixels(single, 0, 0, 64, 64, px);
+    const at = (x) => Array.from(px.slice((32 * 64 + x) * 4, (32 * 64 + x) * 4 + 3));
+    const pa = R.properties.get(a.material).currentProgram, pb = R.properties.get(b.material).currentProgram;
+    const left = at(16), right = at(48);
+    for (const m of [mat, a.material, b.material]) m.dispose();
+    single.dispose(); msaa.dispose(); tex.dispose();
+    R.resetState();
+    return [
+      ['ngCutout（high は A2C）が MSAA の無い RT で透明の半分を抜く', g.quality.profile.msaa === 0 || (mat.alphaToCoverage && s1.left === 0 && s1.right > 1500), `A2C ${mat.alphaToCoverage}・alphaTest ${mat.alphaTest}・単一 ${JSON.stringify(s1)}`],
+      ['ngCutout が MSAA の RT でも抜く', s4.left === 0 && s4.right > 1500, JSON.stringify(s4)],
+      ['別のモジュールの同じ key は別のプログラム', pa && pb && pa !== pb && left[0] > 100 && left[1] < 30 && right[1] > 100 && right[0] < 30, `trees ${left}・shoreflora ${right}`],
     ];
   });
 

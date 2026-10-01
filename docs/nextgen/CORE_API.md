@@ -415,7 +415,8 @@ result = {
 ```js
 import { ngExtendStandard, ngAttachDepth, ngCutout } from '../core/extend.js';
 ngExtendStandard(mat /* MeshStandardMaterial | MeshPhysicalMaterial */, {
-  key: 'trees-leaf',          // 必須。customProgramCacheKey = 'ng:' + key + ':' + tier（+ defines の指紋）。同じ key = 同じ GLSL
+  key: 'trees-leaf',          // 必須。customProgramCacheKey = 'ng:' + module + ':' + key + ':' + tier（+ defines の指紋・caustics の印）。
+                              // key はモジュールの名前空間の中。同じモジュールの同じ key = 同じ GLSL（違えば警告を 1 回）
   module: 'trees',            // シェーダの印 «// ngmod:trees:trees-leaf»（onShaderError の出どころ）
   uniforms: { ...ctx.heightfield.uniforms, uLeafTex: { value: tex } },   // 共有の {value} をそのまま（複製しない）
   defines: { NG_TREES_LEAF: 1 },                                            // 段で変えない
@@ -450,8 +451,14 @@ ngExtendStandard(mat /* MeshStandardMaterial | MeshPhysicalMaterial */, {
 - アンカーが無ければ **構築時に** 例外（three の版が変わったとき）。init の中で作ること（フレーム中に作らない）
 - `depth: true` の影の変種に入るのは `vertex.pars / normal / begin` と `fragment.pars / alpha` だけ（worldpos は無い）。`frustumCulled` は自分で判断（頂点で大きく動かすなら false）
 - 影の変種を mesh に付ける：`ngAttachDepth(mesh)`（map / alphaMap / alphaTest / side を写す。map を差し替えたらもう一度）
-- 切り抜き（葉・草のカード）：`ngCutout(mat, profile, cutoff = 0.5)` を setQuality で呼ぶ。MSAA の段（high、2× 降格でも）は alpha-to-coverage、無い段は alphaTest。影は常に alphaTest
+- 切り抜き（葉・草のカード）：`ngCutout(mat, profile, cutoff = 0.5)` を setQuality で呼ぶ。MSAA の段（high、2× 降格でも）は alpha-to-coverage、無い段は alphaTest。影は常に alphaTest。
+  **A2C の段でも `alphaTest = cutoff` が残る**（three の A2C は `smoothstep(alphaTest, alphaTest + fwidth(a), a)` と «0 なら discard»）ので、
+  MSAA の無い RT（反射 `targets.refl`・`forge.renderView` のインポスター）でも抜ける（**G0 後の修正**：以前は A2C で alphaTest = 0 にしていて、
+  反射とインポスターでカードが四角く塗られた。core-robust の materials が検査）
 - `mat.userData.ngTiered = true` が付く（段を替えると core が古い段のプログラムを手放す）
+- **鍵の名前空間（G0 後の修正）**：以前の鍵は `'ng:' + key + ':' + tier` で module を含まず、trees と shoreflora が同じ `'leaf'` を使うと
+  後から作った方が先の方のプログラム（GLSL と `ngmod` の印）を黙って共有した。今は module と caustics の有無が鍵に入る。
+  同じ «module:key» を違う口の文字列・defines・uniforms の名前で作ると `[ng] ngExtendStandard: «module:key» が違う GLSL で作られた` と警告する
 
 ### 7.2 ngShaderMaterial（水・空・粒子のような自前シェーダ）
 

@@ -6,8 +6,9 @@
      釣り人と同じ光と空気の中に居る。
    ngShaderMaterial：水・空・粒子のような自前シェーダ。lights / fog / GLSL ES 3.00 / NG_FRAME 付き。
    - アンカーが無ければ «構築時に» 例外（フレーム中は投げない）。ファサードがスタブへ切り替える
-   - customProgramCacheKey = 'ng:' + key + ':' + tier（+ defines の指紋）。
-     同じ key のマテリアルは同じ GLSL であること（key でプログラムを共有する）
+   - customProgramCacheKey = 'ng:' + module + ':' + key + ':' + tier（+ defines の指紋 + caustics の印）。
+     key はモジュールの名前空間の中（別のモジュールの同じ key とは共有しない）。同じモジュールの同じ key は
+     同じ GLSL であること（key でプログラムを共有する。違う GLSL を同じ key で作ると警告を 1 回出す）
    - シェーダ先頭に «// ngmod:<module>:<key>» を入れ、onShaderError で出どころを特定する
    - 品質の差は uniform とループ上限で出す（define を増やすとプログラムが増える）
    =========================================================== */
@@ -42,6 +43,23 @@ function assertAnchors(src, anchors, where, keys) {
 function definesGLSL(defines) {
   if (!defines) return '';
   return Object.entries(defines).map(([k, v]) => `#define ${k} ${v === true ? '' : v}`).join('\n') + '\n';
+}
+
+/* 同じ «module:key» で違う GLSL を作ったら警告する（プログラムは鍵で共有されるので、後から作った方の GLSL は
+   黙って捨てられ、先に作った方の絵になる）。指紋は口の文字列・defines・caustics / hfShadow / depth・uniforms の名前 */
+const _keyPrints = new Map();
+function checkKeyPrint(id, spec) {
+  let print;
+  try {
+    print = JSON.stringify([spec.vertex || {}, spec.fragment || {}, spec.defines || {}, !!spec.caustics, !!spec.hfShadow, !!spec.depth,
+      Object.keys(spec.uniforms || {}).sort()]);
+  } catch (e) { return; }
+  const had = _keyPrints.get(id);
+  if (had === undefined) { _keyPrints.set(id, print); return; }
+  if (had !== print && had !== null) {
+    _keyPrints.set(id, null);   // 1 回だけ言う
+    console.warn(`[ng] ngExtendStandard: «${id}» が違う GLSL で作られた（同じ key はプログラムを共有する。中身が違うなら key を分ける）`);
+  }
 }
 
 function insertAfter(src, anchor, code) {
@@ -80,12 +98,14 @@ export function ngExtendStandard(mat, spec) {
   const module = spec.module || 'core';
   const defs = { ...(spec.defines || {}) };
   if (spec.hfShadow) defs.NG_HF_SHADOW = true;
-  const defTag = Object.keys(defs).length ? ':' + JSON.stringify(defs) : '';
+  const defTag = (Object.keys(defs).length ? ':' + JSON.stringify(defs) : '') + (spec.caustics ? ':caustics' : '');
   const head = `${NG_MODULE_TAG}${module}:${spec.key}\n#ifndef NG_FRAME\n#define NG_FRAME\n#endif\n${definesGLSL(defs)}`;
   const shared = { ngFrame: { value: ngFrameData } };
   const extra = spec.uniforms || {};
+  checkKeyPrint(`${module}:${spec.key}`, spec);
 
-  mat.customProgramCacheKey = () => `ng:${spec.key}:${ngExtendContext.tier}${defTag}`;
+  /* 鍵はモジュールの名前空間の中（trees の 'leaf' と shoreflora の 'leaf' は別のプログラム。G0 後の修正） */
+  mat.customProgramCacheKey = () => `ng:${module}:${spec.key}:${ngExtendContext.tier}${defTag}`;
   mat.userData.ngModule = module;
   mat.userData.ngKey = spec.key;
   /* プログラムの鍵に段が入る印。段を替えたら gfx が古い段のプログラムを手放す（_releaseStalePrograms） */
@@ -125,7 +145,7 @@ export function ngExtendStandard(mat, spec) {
   if (spec.depth) {
     /* 影用は NG_HF_SHADOW を立てない（媒質ライブラリの前方宣言を宙に浮かせない） */
     const dHead = `${NG_MODULE_TAG}${module}:${spec.key}\n#ifndef NG_FRAME\n#define NG_FRAME\n#endif\n${definesGLSL(spec.defines)}`;
-    buildDepthVariants(mat, spec, dHead, shared, extra);
+    buildDepthVariants(mat, spec, dHead, shared, extra, module);
   }
   return mat;
 }
@@ -133,7 +153,7 @@ export function ngExtendStandard(mat, spec) {
 /* 影用のマテリアル：同じ頂点の変形とアルファ。vNgWorld はここで自前に渡す
    （depth / distance のシェーダは fog チャンクを含まない）。断片に入るのは
    frame・媒質（高さ場影は解析版）・hfShadow なら影のライブラリと f.pars だけ */
-function buildDepthVariants(mat, spec, head, shared, extra) {
+function buildDepthVariants(mat, spec, head, shared, extra, module) {
   const v = spec.vertex || {}, f = spec.fragment || {};
   const D = A.depthVertex, DF = A.depthFragment;
   for (const lib of [THREE.ShaderLib.depth, THREE.ShaderLib.distanceRGBA]) {
@@ -143,7 +163,7 @@ function buildDepthVariants(mat, spec, head, shared, extra) {
   const defTag = spec.defines && Object.keys(spec.defines).length ? ':' + JSON.stringify(spec.defines) : '';
   const make = (m, kind) => {
     syncDepth(m, mat);
-    m.customProgramCacheKey = () => `ng:${spec.key}:${kind}:${ngExtendContext.tier}${defTag}`;
+    m.customProgramCacheKey = () => `ng:${module}:${spec.key}:${kind}:${ngExtendContext.tier}${defTag}`;
     m.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, shared, extra);
       if (spec.hfShadow && ngExtendContext.shadowUniforms) Object.assign(shader.uniforms, ngExtendContext.shadowUniforms);
@@ -197,7 +217,11 @@ export function ngAttachDepth(mesh) {
 
 /**
  * 切り抜き（葉・草のカード）の抜き方を品質に合わせる：MSAA のある段は alpha-to-coverage、
- * 無い段は alphaTest。どちらも define が変わるので、変わったときだけ needsUpdate（setQuality から呼ぶ）
+ * 無い段は alphaTest。どちらも define が変わるので、変わったときだけ needsUpdate（setQuality から呼ぶ）。
+ * A2C の段でも alphaTest = cutoff を残す：three は alphaTest > 0 のときだけ USE_ALPHATEST を立て、
+ * ALPHA_TO_COVERAGE では «a = smoothstep(alphaTest, alphaTest + fwidth(a), a); a == 0 なら discard» になる。
+ * MSAA の RT（main）では縁が滑らかな被覆のまま、MSAA の無い RT（反射 targets.refl・forge.renderView の
+ * インポスターの撮影）では alphaTest と同じに抜ける（alphaTest = 0 にすると、そこでカードが四角く塗られていた）
  * @param {THREE.Material} mat
  * @param {{msaa:number}} profile quality.js のプロファイル
  * @param {number} [cutoff=0.5] alphaTest の閾値
@@ -205,7 +229,7 @@ export function ngAttachDepth(mesh) {
  */
 export function ngCutout(mat, profile, cutoff = 0.5) {
   const a2c = (profile?.msaa || 0) > 0;
-  const test = a2c ? 0 : cutoff;
+  const test = cutoff;
   mat.userData.ngDepthAlphaTest = cutoff;
   if (mat.alphaToCoverage !== a2c || mat.alphaTest !== test) {
     mat.alphaToCoverage = a2c;
