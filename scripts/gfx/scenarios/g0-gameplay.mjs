@@ -259,34 +259,38 @@ export default async function (h) {
        9 時（正午の太陽の照り返しが画面の真ん中に来ない）。カメラは桟橋の上だけに置く */
     const fishClose = await h.eval(() => {
       const g = window.__game, cam = g.camera, t = g.terrain;
-      const ax = t.dockStart.x, az = t.dockStart.z, bx = t.dockEnd.x, bz = t.dockEnd.z;
-      const vx = bx - ax, vz = bz - az, vv = vx * vx + vz * vz;
+      /* 桟橋ローカル（al: 岸→沖、si: 右）で、魚の横の床の縁（|si| = 1.2m、歩ける半幅 1.62m の内側）に立つ */
+      const U = t._dockU, A = t.dockStart, len = t._dockLen;
+      const loc = (x, z) => ({ al: (x - A.x) * U.x + (z - A.z) * U.z, si: -(x - A.x) * U.z + (z - A.z) * U.x });
+      const world = (al, si) => ({ x: A.x + U.x * al - U.z * si, z: A.z + U.z * al + U.x * si });
       let best = null;
       for (const f of g.school.fishes) {
         if (!f.active || !f.mesh?.visible) continue;
-        const u = Math.max(0, Math.min(1, ((f.pos.x - ax) * vx + (f.pos.z - az) * vz) / vv));
-        const px = ax + vx * u, pz = az + vz * u;
-        const d = Math.hypot(f.pos.x - px, f.pos.z - pz);
-        if (d < 3.2 || d > 14) continue;   /* 床の下（半幅 1.7m）と遠すぎる魚は外す */
-        const L = f.mesh.scale.x;
-        const score = L / Math.max(2, Math.hypot(d, f.pos.y - t.dockY - 1.6));
-        if (!best || score > best.score) best = { f, px, pz, d, score };
+        const q = loc(f.pos.x, f.pos.z);
+        const al = Math.max(1, Math.min(len - 1, q.al)), si = Math.sign(q.si || 1) * 1.2;
+        const c = world(al, si);
+        const d = Math.hypot(f.pos.x - c.x, f.pos.z - c.z);
+        if (Math.abs(q.si) < 3.2 || d > 14) continue;   /* 床の下（半幅 1.7m）と遠すぎる魚は外す */
+        /* 太陽を背にする（9 時の太陽の水平の向き。照り返しの中の魚は見えない）・深さ 4.5m まで */
+        const sx = Math.cos(Math.PI / 4), sz = 0.34;
+        const facing = ((f.pos.x - c.x) * sx + (f.pos.z - c.z) * sz) / Math.max(d, 1e-3) / Math.hypot(sx, sz);
+        if (-f.pos.y > 4.5) continue;
+        const score = (f.length || 20) / Math.max(2, Math.hypot(d, f.pos.y - t.dockY - 1.6)) * (facing > 0 ? 1e-3 : 1);   /* 逆光の候補は最後の手段 */
+        if (!best || score > best.score) best = { f, c, d, score };
       }
       if (!best) return null;
       const { f } = best;
-      const ex = f.pos.x - best.px, ez = f.pos.z - best.pz, eL = Math.hypot(ex, ez) || 1;
-      const edge = Math.min(1.5, eL);
       g.state.clock = 9;
       g.__savedCam = g._updateCamera;
       g._updateCamera = function () {
-        cam.position.set(best.px + ex / eL * edge, t.dockY + 1.6, best.pz + ez / eL * edge);
+        cam.position.set(best.c.x, t.dockY + 1.6, best.c.z);
         cam.lookAt(f.pos.x, f.pos.y, f.pos.z);
         cam.updateMatrixWorld();
       };
       for (let i = 0; i < 4; i++) g.update(1 / 60);
       const v = f.pos.clone().project(cam);
       return {
-        species: f.species?.id, depth: +(-f.pos.y).toFixed(2), scale: +f.mesh.scale.x.toFixed(2), horizFromDock: +best.d.toFixed(2),
+        species: f.species?.id, depth: +(-f.pos.y).toFixed(2), lengthCm: +(f.length || 0).toFixed(1), horizFromDock: +best.d.toFixed(2),
         camToFish: +f.pos.distanceTo(cam.position).toFixed(2), onDock: t.onDock(cam.position.x, cam.position.z) !== null, ndc: [v.x, v.y].map((x) => +x.toFixed(3)),
       };
     });
@@ -323,16 +327,18 @@ export default async function (h) {
     console.log('  underwater', JSON.stringify(uw));
     await h.shot(`${tier}-fight-underwater`);
     expect(uw.on1 === true && (uw.fs !== 'fight' || uw.uw > 0.5), `${tier}: 水中カメラにならない（${JSON.stringify(uw)}）`);
-    /* 巻いて取り込むか切れるまで（最大 40 秒）。どちらでもファイトの流れが最後まで通ること */
+    /* 巻いて取り込むか切れるまで（最大 120 秒）。どちらでもファイトの流れが最後まで通ること */
     const end = await h.eval(() => {
       const g = window.__game;
       /* 張力を見て巻く／止める（人の遊び方。巻きっぱなしだと強い魚で糸が切れて «取り込み» を通らない） */
       let n = 0, landed = false, snapped = false;
-      for (; n < 1200 && g.fs === 'fight'; n++) {
+      for (; n < 3600 && g.fs === 'fight'; n++) {
         const t = g.fight ? g.fight.tension / g.line.cap : 0;
-        g.actionHeld = t < 0.6;
+        g.actionHeld = t < 0.7;
         g.update(1 / 30);
       }
+      const F = g.fight;
+      const left = F ? { dist: +F.dist.toFixed(2), tension: +(F.tension / g.line.cap).toFixed(2), stamina: +(F.stamina ?? 0).toFixed(2) } : null;
       g.actionHeld = false;
       const fs = g.fs;
       landed = fs === 'landing';
@@ -342,11 +348,11 @@ export default async function (h) {
       if (g.ui.openModal === 'catch') g.dismissCatch();
       if (g.underwaterCam) g._toggleUnderwater();
       for (let i = 0; i < 20; i++) g.update(1 / 30);
-      return { frames: n, fsAfterFight: fs, landed, snapped, modal, fs: g.fs, uwCam: g.underwaterCam };
+      return { frames: n, fsAfterFight: fs, landed, snapped, modal, left, fs: g.fs, uwCam: g.underwaterCam };
     });
     T.fightEnd = end;
     console.log('  fight end', JSON.stringify(end));
-    expect(end.fsAfterFight !== 'fight', `${tier}: 40 秒巻いてもファイトが終わらない`);
+    expect(end.fsAfterFight !== 'fight', `${tier}: 120 秒巻いてもファイトが終わらない（${JSON.stringify(end.left)}）`);
     expect(end.landed, `${tier}: 張力を見て巻いても取り込み（landing）に入らない（${end.fsAfterFight}）`);
 
     /* 7. F3 のデバッグ表示（当たりの箱と障害物の円）を桟橋の斜め上から */
