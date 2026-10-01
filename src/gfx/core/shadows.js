@@ -22,6 +22,10 @@ import { NG_HEIGHTFIELD_GLSL } from './glsl/heightfield.glsl.js';
 export const NG_HF_SHADOW_R = Object.freeze([256, 1024]);
 const BAKE_H_N = 1024;
 const KEY_JUMP_COS = Math.cos((2 * Math.PI) / 180);
+/** 光（key）を注視点から引く距離（m） */
+const KEY_DIST = 600;
+/** 近景の影の深さの bias（世界の長さ m）。これより受け手に近い遮蔽物は影を落とさない */
+export const NEAR_SHADOW_BIAS_M = 0.04;
 /** 高さ場影を一巡するフレーム数（§4.5 の «4 象限 × 4 フレーム»） */
 export const NG_HF_CYCLE_FRAMES = 16;
 
@@ -135,10 +139,15 @@ export class Shadows {
     }
     const c = s.camera;
     c.left = -ns.extent; c.right = ns.extent; c.top = ns.extent; c.bottom = -ns.extent;
-    c.near = 0.5; c.far = 1500;
+    /* 光は注視点から KEY_DIST 引いた所。近景の影を使う受け手は注視点から extent 以内（その外は高さ場影）なので、
+       深さは KEY_DIST + extent·√3 で足りる。余裕を見て + 2·extent（high で 696m。以前の 1500m は精度の無駄） */
+    c.near = 0.5; c.far = KEY_DIST + 2 * ns.extent;
     c.updateProjectionMatrix();
-    s.bias = -0.0004;
+    /* three の bias は [0,1] の深さに足される（shadowCoord.z += bias）。正射影なので世界の長さ ÷ (far − near)。
+       以前の −0.0004 は 1500m で ≈0.6m に当たり、受け手から 0.6m 以内の遮蔽物（足元・柱の根元・小石）の影が消えていた */
+    s.bias = -NEAR_SHADOW_BIAS_M / (c.far - c.near);
     s.normalBias = 0.04;
+    /* radius は three の元の PCF（chunks の自己検査が落ちた degraded のとき）だけが使う。ngShadowPCF は 3×3 の固定 */
     s.radius = ns.radius;
     if (this._hf && this._hf.levels !== profile.hfShadow.levels) this._buildHf();
   }
@@ -165,7 +174,7 @@ export class Shadows {
     const da = Math.round(a / texel) * texel - a, db = Math.round(b / texel) * texel - b;
     this.focus.set(focus.x + r.x * da + u.x * db, focus.y + r.y * da + u.y * db, focus.z + r.z * da + u.z * db);
     key.target.position.copy(this.focus);
-    key.position.set(this.focus.x + keyDir.x * 600, this.focus.y + keyDir.y * 600, this.focus.z + keyDir.z * 600);
+    key.position.set(this.focus.x + keyDir.x * KEY_DIST, this.focus.y + keyDir.y * KEY_DIST, this.focus.z + keyDir.z * KEY_DIST);
     key.target.updateMatrixWorld();
     key.updateMatrixWorld();
     key.shadow.intensity = 1 - 0.65 * Math.min(1, Math.max(0, cloud));

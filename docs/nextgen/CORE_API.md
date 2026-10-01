@@ -792,7 +792,8 @@ forge.releaseScratch()                                   // core が読み込み
 
 ### 14.1 影（`ctx.shadows`、shadows.js）
 
-- 近景：key の three の影マップ。`shadow.camera.layers.mask = NG_MASK.SHADOW`。注視点へテクセルスナップで追従、near 0.5 / far 1500、bias −0.0004 / normalBias 0.04、
+- 近景：key の three の影マップ。`shadow.camera.layers.mask = NG_MASK.SHADOW`。注視点へテクセルスナップで追従、光は注視点から 600m、near 0.5 / far 600 + 2·extent（high 696m）、
+  bias = −0.04m ÷ (far − near)（**世界の長さで 4cm**。G0 後の修正：以前の −0.0004 は far 1500 で ≈0.6m に当たり、受け手から 0.6m 以内の遮蔽物の影が消えていた。core-robust の shadow-bias が 0.1m の遮蔽物を検査）/ normalBias 0.04、
   雲量で `shadow.intensity` 1 → 0.35。更新は P2 で 1 フレーム 1 回（`renderer.shadowMap.autoUpdate = false`）。
   **G0 の修正（b3c210c）**：影に入れる物の判定は shadow.camera のマスク（three r180 の仕様の回避）。影を落とす物は castShadow と層（§4）
 - 高さ場影：core が焼く（地形の高さ場 + `ngCanopyAt` の樹冠）。2 段 × 4 象限を 16 フレームで一巡、key が 2° 跳んだら全部。`NG_HF_SHADOW_R = [256, 1024]`

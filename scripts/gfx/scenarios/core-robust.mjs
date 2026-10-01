@@ -4,6 +4,7 @@
    node scripts/gfx/shot.mjs scripts/gfx/scenarios/core-robust.mjs --out DIR
    - prepare / renderReflection の冪等（同じフレームで 2 回呼んでも描画の回数が増えない）
    - late 物体（ゲームの半透明）の visible の退避と復元、ライトの layers.enableAll
+   - 0.1〜0.4m の低い遮蔽物も近景の影を落とす（bias が世界の長さで小さい）
    - 品質の切り替え（high → mid → low → high）でライトの数・castShadow・影の種類が変わらない
    - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化してスタブで立て直す
    - 止まったパス（不透明）は間を空けて試し直して戻る
@@ -82,6 +83,56 @@ export default async function (h) {
     let occ = 0;
     for (let k = 0; k < px.length; k += 4) if (px[k] < 255 || px[k + 1] < 255 || px[k + 2] < 255) occ++;
     return [['近景の影マップの中央（注視点 = 釣り人・桟橋）に遮蔽物が描かれている', occ > 16, `${occ}/${n * n} 画素`]];
+  });
+
+  /* 低い遮蔽物も影を落とす（bias は世界の長さ 4cm。以前の −0.0004 は far 1500m で 0.6m に当たり、足元の影が消えた）。
+     桟橋の先の水の上 2m に白い受け板、その上 0.1m・0.2m・0.4m に «影だけ» の板（SHADOW_ONLY 層）を浮かべ、
+     受け板の上の影の位置と日向の輝度（sceneColor、露出前）を比べる */
+  await run('shadow-bias', () => {
+    const L = window.__lab, g = L.gfx, T = g.THREE, r = L.renderer, D = L.dock;
+    L.setHour(12.5); L.setWeather('clear', { instant: true }); L.freeze(10);
+    const dir = new T.Vector3(D.dockDir.x, 0, D.dockDir.z).normalize();
+    const c = new T.Vector3(D.dockEnd.x, 2, D.dockEnd.z).addScaledVector(dir, 6);
+    const right = new T.Vector3(dir.z, 0, -dir.x);
+    const grp = new T.Group();
+    const recv = new T.Mesh(new T.PlaneGeometry(7, 3).rotateX(-Math.PI / 2), new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 }));
+    recv.position.copy(c);
+    recv.receiveShadow = true;
+    grp.add(recv);
+    const hs = [0.1, 0.2, 0.4];
+    const occ = hs.map((hgt, i) => {
+      const m = new T.Mesh(new T.PlaneGeometry(0.6, 0.6).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ side: T.DoubleSide }));
+      m.position.copy(c).addScaledVector(right, (i - 1) * 2.2).add(new T.Vector3(0, hgt, 0));
+      m.castShadow = true;
+      m.layers.set(8);   // SHADOW_ONLY：影だけ
+      grp.add(m);
+      return m;
+    });
+    L.scene.add(grp);
+    L.cam({ pos: [c.x - dir.x * 4, c.y + 5, c.z - dir.z * 4], target: [c.x, c.y, c.z] });
+    L.tick(4);
+    const kd = g.f.keyDir, cam = L.camera, rt = g.targets.copy;
+    const half = (v) => { const e = (v >> 10) & 31, f = v & 1023; return e === 0 ? f * 2 ** -24 : e === 31 ? NaN : (1 + f / 1024) * 2 ** (e - 15) * (v & 0x8000 ? -1 : 1); };
+    const lum = (p) => {
+      const v = p.clone().project(cam);
+      const x = Math.round((v.x * 0.5 + 0.5) * rt.width), y = Math.round((v.y * 0.5 + 0.5) * rt.height);
+      const buf = new Uint16Array(4 * 9);
+      r.readRenderTargetPixels(rt, x - 1, y - 1, 3, 3, buf, undefined, 0);
+      let s = 0;
+      for (let k = 0; k < buf.length; k += 4) s += 0.2126 * half(buf[k]) + 0.7152 * half(buf[k + 1]) + 0.0722 * half(buf[k + 2]);
+      return s / 9;
+    };
+    const lit = lum(c.clone().addScaledVector(dir, -1.1));
+    const res = occ.map((m, i) => {
+      const p = m.position.clone().addScaledVector(kd, -hs[i] / Math.max(kd.y, 0.05));
+      p.y = c.y;
+      return +(lum(p) / Math.max(lit, 1e-6)).toFixed(3);
+    });
+    L.scene.remove(grp);
+    grp.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+    return [
+      ['0.1m・0.2m・0.4m の高さの遮蔽物が影を落とす（影の輝度 / 日向 < 0.6）', res.every((x) => x < 0.6), `${res.join(' / ')}（日向 ${lit.toFixed(3)}、bias ${g.rig.key.shadow.bias.toExponential(2)}、far ${g.rig.key.shadow.camera.far}）`],
+    ];
   });
 
   await run('quality', () => {
