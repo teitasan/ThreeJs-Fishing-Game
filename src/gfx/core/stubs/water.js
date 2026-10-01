@@ -247,7 +247,7 @@ export class WaterStub extends NgModule {
     ctx.scene.add(this.root);
     ctx.services.provide('water', {
       addRipple: (x, z, size = 1, dur = 1.6) => this.addRipple(x, z, size, dur),
-      addSplash: () => {}, addImpulse: () => {}, addDamper: () => {}, detailTile: null,
+      addSplash: () => {}, addImpulse: () => {}, detailTile: null,   // addDamper / dampers は core が持つ（services.water.dampers を prepare で読む）
     });
     progress?.(1);
   }

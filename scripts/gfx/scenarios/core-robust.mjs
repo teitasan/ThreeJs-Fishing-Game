@@ -380,6 +380,39 @@ export default async function (h) {
     ];
   });
 
+  /* core が持つ services：減衰体の一覧は water の作り直しを越えて残り、持ち主（hardscape）が外されたら外れて立て直しで戻る。
+     registerDebugView は provide で上書きされない */
+  await run('services-core-owned', () => {
+    const L = window.__lab, g = L.gfx;
+    L.tick(1);
+    const d = g.services.water.dampers, n0 = d.length, byHs = d.filter((x) => x.owner === 'hardscape').length;
+    const throwN = (id, method) => {
+      const m = g.modules.get(id), orig = m[method];
+      m[method] = () => { throw new Error('注入：' + id); };
+      L.tick(4);
+      return g.modules.get(id) !== m;
+    };
+    /* water は fault で 1 回立て直し済みなので、ここでは «外される»（スタブの作り直しは 1 回まで）。どちらでも services.water は既定へ戻る */
+    const wRestarted = throwN('water', 'update') || g.safety.disabled.has('water');
+    const afterWater = g.services.water.dampers.length;
+    const sameArr = g.services.water.dampers === d;
+    const hRestarted = throwN('hardscape', 'update');
+    L.tick(2);
+    const afterHs = g.services.water.dampers.length, hsOwned = g.services.water.dampers.filter((x) => x.owner === 'hardscape').length;
+    let viewed = null;
+    g.services.provide('post', { registerDebugView: () => { viewed = 'post'; } });
+    g.services.post.registerDebugView('robust-view', 'vec4 ngDebug(vec2 uv) { return vec4(1.0); }');
+    const inCore = g.debugViews.has('robust-view');
+    g.debugViews.delete('robust-view');
+    g.services.reset('post');
+    return [
+      ['hardscape の杭が減衰体の一覧に入る（持ち主 hardscape）', n0 > 0 && byHs === n0, `${n0} 件・hardscape ${byHs}`],
+      ['water を外しても（services.water が既定へ戻っても）一覧は残る', wRestarted && afterWater === n0 && sameArr, `${afterWater} 件`],
+      ['hardscape を立て直すと自分の分が外れて足し直される（重複しない）', hRestarted && afterHs === n0 && hsOwned === byHs, `${afterHs} 件`],
+      ['registerDebugView は provide で上書きされず core の表へ入る', inCore && viewed === null, `${inCore}・${viewed}`],
+    ];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');

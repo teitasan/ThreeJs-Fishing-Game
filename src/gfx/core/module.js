@@ -63,8 +63,10 @@ export class NgModule {
  * @param {typeof import('three')} THREE
  * @param {{frame: import('./frame.js').NgFrame,
  *          underwaterContext: (camera: object) => object,
- *          registerDebugView: (name: string, glsl: string, uniforms?: object) => void}} core
- *   core が持つ代替（水中の文脈は ngFrame から、デバッグ表示は core の登録表へ）
+ *          registerDebugView: (name: string, glsl: string, uniforms?: object) => void,
+ *          addDamper?: (list: Array<{x:number,z:number,r:number}>) => void,
+ *          dampers?: Array<{x:number,z:number,r:number}>}} core
+ *   core が持つ代替（水中の文脈は ngFrame から、デバッグ表示は core の登録表へ、減衰体は core の一覧へ）
  * @returns {Record<string, Record<string, any>>}
  */
 export function ngServiceDefaults(THREE, core) {
@@ -91,7 +93,9 @@ export function ngServiceDefaults(THREE, core) {
       cloudShadowAt: (x, z) => cloudShadow(F, { x, y: 0, z }),
     },
     water: {
-      addRipple: () => {}, addSplash: () => {}, addImpulse: () => {}, addDamper: () => {},
+      addRipple: () => {}, addSplash: () => {}, addImpulse: () => {},
+      /* 減衰体は core が持つ（NG_CORE_OWNED）：呼ぶ人の順・water の作り直しに依らず、water は dampers を prepare で読む */
+      addDamper: core.addDamper || (() => {}), dampers: core.dampers || [],
       detailTile: null,
     },
     underwater: {
@@ -108,6 +112,14 @@ export function ngServiceDefaults(THREE, core) {
     post: { registerDebugView: (name, glsl, uniforms) => core.registerDebugView(name, glsl, uniforms) },
   };
 }
+
+/**
+ * core が持ち、提供者が上書きできない項目（provide に入れても無視して警告する）。
+ * - water.addDamper / water.dampers：減衰体の一覧（shoreflora・hardscape が init で足し、water が prepare で読む。
+ *   water が先に init されても、無効化されて立て直されても一覧は残る）
+ * - post.registerDebugView：デバッグ表示の登録表（gfx.debugViews。lab の view(name) と、post が本編で出すときの元）
+ */
+export const NG_CORE_OWNED = Object.freeze({ water: Object.freeze(['addDamper', 'dampers']), post: Object.freeze(['registerDebugView']) });
 
 /**
  * モジュール間の受け口。provide で提供者の値を差し込む（関数は例外を握りつぶす包みになる）
@@ -131,7 +143,12 @@ export class Services {
   provide(id, impl) {
     const base = this._defaults[id] || {};
     const out = { ...base };
+    const owned = NG_CORE_OWNED[id] || [];
     for (const [k, v] of Object.entries(impl || {})) {
+      if (owned.includes(k)) {
+        if (v !== base[k]) this._safety.warn(`services.${id}.${k} は core が持つ項目（provide では上書きしない。CORE_API §6）`);
+        continue;
+      }
       if (typeof v !== 'function') { out[k] = v; continue; }
       const fallback = base[k];
       out[k] = (...args) => {

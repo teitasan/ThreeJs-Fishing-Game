@@ -320,6 +320,14 @@ ctx.services.provide('water', { addRipple: (x, z, size, dur) => this.addRipple(x
 provide は既定値の上に重ねる（足りない項目は既定のまま）。関数は例外を握りつぶす包みになる。値（テクスチャ等）は参照のまま。
 **使う側は毎回 `ctx.services.sky.skyViewTex` のように引き直す**（provide で項目のオブジェクトが差し替わる。無効化で既定へ戻る）。
 
+- **起動の順（§3.1）と services**：init は `NG_MODULE_IDS` の順に 1 つずつ。**自分より後に init するモジュールの services を init で読まない**
+  （まだ既定値。例：water の init の時点で `hardscape.piles` は `[]`）。他のモジュールの値は **prepare / update で毎フレーム引き直す**
+  （作り直し・無効化で差し替わる。同じオブジェクトかどうかで «変わった» を判定してよい）
+- **core が持つ項目（`NG_CORE_OWNED`、G0 後に決めた）**：`water.addDamper` / `water.dampers` と `post.registerDebugView`。
+  提供者が provide に入れても無視される（警告が出る）。呼ぶ人の起動の順・提供者の作り直しに依らず残る
+- `ctx.services` はモジュールごとの «見え方»：中身は共有（provide・reset も共有へ）で、`water.addDamper` だけが呼んだモジュールを持ち主として覚える
+  （そのモジュールが外されたら、その分が一覧から外れ、立て直したスタブが足し直す）
+
 ### 6.1 sky（提供：sky）
 
 | 項目 | 型・シグネチャ | 既定値 | 使う人 |
@@ -355,7 +363,8 @@ result = {
 | `addRipple(x, z, size, dur)` | size m（ファサードが 0.01–50 に丸める）、dur s（≤ 30） | 何もしない | ファサード（ゲームのウキ・魚・着水）・weatherfx・hardscape |
 | `addSplash(x, y, z, count, power)` | count 0–256 の整数、power 0–20 | 何もしない | ファサード |
 | `addImpulse(x, z, amp)` | 波紋シミュへの点の衝撃（雨粒など） | 何もしない | weatherfx |
-| `addDamper(list)` | `list: Array<{x, z, r}>`（m。杭・茎・岩の円。波紋シミュの減衰体。**G0 で決めた形**） | 何もしない | shoreflora・hardscape（init の後で 1 回） |
+| `addDamper(list)` | `list: Array<{x, z, r}>`（m。杭・茎・岩の円。波紋シミュの減衰体。**G0 で決めた形**）。**core が持つ**（G0 後）：core の一覧へ足す（r ≤ 20m、NaN は捨てる） | core の一覧へ足す | shoreflora・hardscape（init の中か後で 1 回。water の起動の順に依らない） |
+| `dampers` | `Array<{x, z, r, owner}>`（読むだけ）+ `dampers.version`（足す・持ち主が外されるたびに増える）。**core が持つ**。water が無効化・立て直しされても残る | core の一覧 | water（prepare で読み、version が変わったら減衰体のマスクを作り直す） |
 | `detailTile` | `{ tex /*周期 FFT の高さ・勾配の配列テクスチャ（層 = 時刻のフレーム）*/, period /*タイルの一辺 m*/, frames, loopSec }` または null（**G0 で決めた形**。足りなければ water と underwater で相談して core-requests へ） | null（機能なし） | underwater（caustics） |
 
 **投げない・NaN は捨てる**（ゲームから 25 か所以上）。リングバッファで受ける。
@@ -405,9 +414,9 @@ result = {
 | 項目 | 型・シグネチャ | 既定 | 使う人 |
 | --- | --- | --- | --- |
 | `trees.impostorBake` | `{ albedoTex, normalDepthTex, frames, size }`（半八面体のインポスターの配列テクスチャ。**G0 で決めた形**）または null | null | hardscape（立ち枯れ） |
-| `hardscape.piles` | `Array<{ x, z, r }>`（m。桟橋の杭・係留杭の円） | `[]` | water（減衰体・接触の泡） |
+| `hardscape.piles` | `Array<{ x, z, r }>`（m。桟橋の杭・係留杭の円）。hardscape は同じ円を `water.addDamper` にも足す（スタブがそうしている） | `[]` | water（接触の泡。**hardscape は water より後に init するので、prepare で引き直す**。減衰体は `water.dampers` から） |
 | `hardscape.setLamp(night, dt)` | night 0..1、dt s（damp。ポーズで止まる）。灯籠の PointLight（`ctx.gfx.rig.lamp`、2200K、起動時は intensity 0・位置 (0, −1000, 0)）を `placement.lamp` の位置へ置き、強さを決める | 何もしない | ファサード（`terrain.updateLamp`） |
-| `post.registerDebugView(name, glsl, uniforms?)` | glsl は `vec4 ngDebug(vec2 uv)` を定義する断片の部品。使える入力：NG_FRAME の #define、`ngSceneColor`・`ngSceneDepth`・`ngReflection`・`ngScreen`、渡した uniforms。出力はリニアの色（0..1、表示で sRGB） | core の登録表（lab の `view(name)`） | 全員 |
+| `post.registerDebugView(name, glsl, uniforms?)` | glsl は `vec4 ngDebug(vec2 uv)` を定義する断片の部品。使える入力：NG_FRAME の #define、`ngSceneColor`・`ngSceneDepth`・`ngReflection`・`ngScreen`、渡した uniforms。出力はリニアの色（0..1、表示で sRGB）。**core が持つ**（G0 後に決めた：post は上書きしない。本編で表示したい post は `ctx.gfx.debugViews`（Map：name → { glsl, uniforms }）を読む。post は最後に init するので、上書きできると他の 9 つの登録が消えた） | core の登録表（`gfx.debugViews`、lab の `view(name)`） | 全員（init の中で呼んでよい） |
 
 ### 6.7 post の口（core が直接呼ぶ）
 

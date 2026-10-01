@@ -51,6 +51,8 @@ export class HardscapeStub extends NgModule {
     this.root.userData.ngOwned = true;
     ctx.scene.add(this.root);
     ctx.services.provide('hardscape', { piles: this.piles, setLamp: (n, dt) => this.setLamp(n, dt) });
+    /* 杭を波紋の減衰体に（core の一覧。water の init の順・作り直しに依らない） */
+    ctx.services.water.addDamper(this.piles);
     progress?.(1);
   }
 

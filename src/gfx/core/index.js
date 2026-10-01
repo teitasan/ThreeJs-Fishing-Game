@@ -81,10 +81,15 @@ export class Gfx {
     /** デバッグ表示の登録表（services.post.registerDebugView → lab の view(name)） */
     this.debugViews = new Map();
     this._uwCtx = null;
+    /** 減衰体の一覧（services.water.addDamper が足し、water が services.water.dampers で読む）。
+     *  version は足すたび・持ち主のモジュールが外されるたびに増える（water は変わったときだけ作り直せばよい） */
+    this.dampers = Object.assign([], { version: 0 });
     this.services = new Services(this.safety, ngServiceDefaults(THREE, {
       frame: this.frame,
       underwaterContext: (cam) => this._underwaterFallback(cam),
       registerDebugView: (name, glsl, uniforms) => this.registerDebugView(name, glsl, uniforms),
+      addDamper: (list) => this.addDamper(list, null),
+      dampers: this.dampers,
     }));
     this.wind = new Wind(this.frame);
     this.layers = NG_LAYER;
@@ -150,13 +155,32 @@ export class Gfx {
   /** chunks の自己検査が落ちたら 'fog' */
   get degraded() { return this.chunks.degraded; }
 
-  _ctx() {
+  /* モジュールごとの services の見え方：中身は共有の services そのもの（provide・reset も共有へ）で、
+     water.addDamper だけが «呼んだモジュール» を持ち主として core の一覧へ足す（外されたら一緒に外すため） */
+  _servicesFor(id) {
+    const base = this.services, gfx = this;
+    let lastW = null, wrapped = null;
+    const view = Object.create(base);
+    Object.defineProperty(view, 'water', {
+      enumerable: true,
+      get() {
+        const w = base.water;
+        if (w !== lastW) { lastW = w; wrapped = { ...w, addDamper: (list) => gfx.addDamper(list, id) }; }
+        return wrapped;
+      },
+    });
+    view.provide = (k, impl) => base.provide(k, impl);
+    view.reset = (k) => base.reset(k);
+    return view;
+  }
+
+  _ctx(id = null) {
     return {
       THREE, renderer: this.renderer, scene: this.scene, camera: this.camera, tier: this.quality.tier,
       profile: this.quality.profile, lake: this.world?.lake || null, terrain: this.world?.terrain || null,
       heightfield: this.heightfield, placement: this.world?.placement || null, frame: this.frame, wind: this.wind,
       pipeline: this.pipeline, shadows: this.shadows, forge: this.forge, workers: null, caustics: this.caustics,
-      services: this.services, budget: this.budget, gfx: this,
+      services: id ? this._servicesFor(id) : this.services, budget: this.budget, gfx: this,
       log: (...a) => this.safety.warn(...a),
     };
   }
@@ -296,7 +320,7 @@ export class Gfx {
   /* モジュールを作って init する。失敗したらスタブで作り直す */
   async _startModule(id, mod, progress) {
     const tryMake = async (factory, isStub) => {
-      const m = factory(this._ctx());
+      const m = factory(this._ctx(id));
       await m.init(progress);
       m.setQuality(this.quality.tier, this.quality.profile);
       m.setLodScale(this._lod);
@@ -309,6 +333,7 @@ export class Gfx {
         this.safety.warn(`モジュール ${id} の init に失敗、スタブへ`, e);
         this._cleanupRoot(id);
         this.services.reset(id);
+        this._dropDampers(id);
       }
     }
     if (!m) {
@@ -342,6 +367,31 @@ export class Gfx {
     for (const m of this.modules.values()) this.safety.guard(m, method, ...args);
   }
 
+  /**
+   * 減衰体を足す（services.water.addDamper の本体。core が持つ一覧）。有限でない・r ≤ 0 の物は捨てる。
+   * owner（モジュールの ctx.services から呼ばれたらそのモジュールの id）が外されたら一緒に外す
+   * @param {Array<{x:number, z:number, r:number}>} list m
+   * @param {string|null} [owner]
+   */
+  addDamper(list, owner = null) {
+    if (!Array.isArray(list) || !list.length) return;
+    let n = 0;
+    for (const d of list) {
+      const x = Number(d?.x), z = Number(d?.z), r = Number(d?.r);
+      if (!Number.isFinite(x) || !Number.isFinite(z) || !(r > 0) || !Number.isFinite(r)) continue;
+      this.dampers.push(Object.freeze({ x, z, r: Math.min(r, 20), owner }));
+      n++;
+    }
+    if (n) this.dampers.version++;
+  }
+
+  /* 外されたモジュールの減衰体を一覧から外す（立て直したスタブが足し直す） */
+  _dropDampers(id) {
+    const d = this.dampers, before = d.length;
+    for (let i = d.length - 1; i >= 0; i--) if (d[i].owner === id) d.splice(i, 1);
+    if (d.length !== before) d.version++;
+  }
+
   /* 3 回投げたモジュール：root を隠し、スタブで立て直す（水面・地形・空が消えるとゲームが読めない）。
      担当者の実装が落ちたらスタブへ差し戻す。スタブ自身が落ちたときも 1 回だけ新しいスタブで作り直す
      （同じ不具合なら次も落ちるので、それ以上は繰り返さず、隠したままにする） */
@@ -355,6 +405,7 @@ export class Gfx {
     this.modules.delete(id);
     try { m.dispose(); } catch (e) { /* 落ちたモジュールの後片付けで落とさない */ }
     this.services.reset(id);
+    this._dropDampers(id);
     this.safety.disabled.delete(id);
     this.safety.strikes.delete(id);
     /* post の P7 は guardPass でも数えている。止まっていたら新しい post で生き返らせる */
