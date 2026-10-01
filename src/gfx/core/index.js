@@ -634,8 +634,16 @@ export class Gfx {
     try {
       const mask = cam.layers.mask;
       cam.layers.enableAll();
-      await r.compileAsync(this.scene, cam);
-      cam.layers.mask = mask;
+      /* three はプログラムの鍵に «描く先» の色空間を入れる（画面 = sRGB、RT = リニア）。シーンはいつも mainRT へ
+         描くので、mainRT を束縛してからコンパイルする（画面向けに作ると、使われないプログラムが全部の
+         マテリアルで 1 本ずつ増え、読み込み時間とプログラムの予算を食う）。compile の本体は同期で、
+         待つのは KHR_parallel_shader_compile の完了だけなので、束縛は compile の呼び出しの間だけでよい */
+      const prev = r.getRenderTarget();
+      this.safety.guardPass('targets', () => this.pipeline._ensureTargets());
+      if (this.targets?.main) r.setRenderTarget(this.targets.main);
+      let done;
+      try { done = r.compileAsync(this.scene, cam); } finally { r.setRenderTarget(prev); cam.layers.mask = mask; }
+      await done;
     } catch (e) { this.safety.warn('compileAsync に失敗（同期コンパイルで続行）', e); }
     const post = this.modules.get('post');
     if (post) {

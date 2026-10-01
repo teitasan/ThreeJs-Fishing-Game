@@ -3,8 +3,11 @@
    -----------------------------------------------------------
    近景：key（DirectionalLight、castShadow 固定）の three 影マップを注視点へ追従。
      テクセルにスナップして、歩いても影の縁がちらつかないようにする。
-     影の更新は «prepare の中で 1 回だけ»（renderNear）。何も描かないカメラで
-     render すると three は影マップだけ更新する（ライトは layers.enableAll）
+     影の更新は «prepare の中で 1 回だけ»（renderNear）。何も描かないカメラ（layer 31 だけ）で
+     render すると three は影マップだけ更新する（ライトは layers.enableAll）。
+     注意：three r180 の影の描画（WebGLShadowMap の renderObject）は物体の layers を «shadow.camera» ではなく
+     «render() に渡したカメラ» で判定する。何も描かないカメラのままだと影マップに何も入らないので、
+     renderNear の間だけ shadowMap.render へ渡すカメラを shadow.camera（layers = NG_MASK.SHADOW）に差し替える
    高さ場影：地形 + 樹冠の高さ（R16F に焼いた合成高さ）を key の方向へ raymarch して
      R8 に焼く。2 段（±256m @1024²、±1024m @1024²。low は ±1024m @512² のみ）。
      太陽は 1 実秒で 0.25° しか動かないので、段 × 4 象限を 16 フレーム（≒ 0.27s）で一巡するように
@@ -175,12 +178,20 @@ export class Shadows {
    */
   renderNear(renderer, scene) {
     if (!this.key || !renderer.shadowMap.enabled) return;
-    renderer.shadowMap.needsUpdate = true;
+    const sm = renderer.shadowMap, render = sm.render, layerCam = this.key.shadow.camera;
+    sm.needsUpdate = true;
     const prev = renderer.getRenderTarget();
     this.frame.beginPass(NG_PASS.SHADOW, this.key);
-    renderer.setRenderTarget(this._tickRT);
-    renderer.render(scene, this._tickCam);
-    renderer.setRenderTarget(prev);
+    /* 影に入れる物の layers の判定に shadow.camera（SHADOW のマスク）を使わせる（上の注意）。
+       renderObject がカメラから読むのは layers と onBeforeShadow の引数だけ */
+    sm.render = function (lights, sc) { return render.call(this, lights, sc, layerCam); };
+    try {
+      renderer.setRenderTarget(this._tickRT);
+      renderer.render(scene, this._tickCam);
+    } finally {
+      sm.render = render;
+      renderer.setRenderTarget(prev);
+    }
   }
 
   /* 段ごとの合成高さと影の RT を作る（heightfield の後） */

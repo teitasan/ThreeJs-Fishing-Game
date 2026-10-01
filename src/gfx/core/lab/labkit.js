@@ -77,7 +77,9 @@ void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0
 export const Lab = {
   /**
    * @param {{modules?:string[], seed?:number, tier?:string, size?:[number,number]|null, characters?:boolean,
-   *          canvas?:HTMLCanvasElement, chart?:boolean, onProgress?:(t:string)=>void}} o
+   *          canvas?:HTMLCanvasElement, chart?:boolean, onProgress?:(t:string)=>void,
+   *          extraModules?:Array<(ctx:object)=>import('../module.js').NgModule>}} o
+   *   extraModules：10 の id 以外の createModule（lab 専用。core の例 examples/exampleModule.js が使う）
    * @returns {Promise<object>} window.__lab と同じもの
    */
   async boot(o = {}) {
@@ -182,6 +184,10 @@ export const Lab = {
 
     const lab = makeLabApi({ renderer, scene, camera, gfx, lake, dock, placement, caustics, chars, worldMs });
     window.__lab = lab;
+    /* 10 の id 以外のモジュール（core の例 src/gfx/core/examples/ など）を足す。warmup の前に init まで済ませる */
+    for (const factory of o.extraModules || []) {
+      try { await lab.addModule(factory); } catch (e) { console.warn('[lab] extraModules の起動に失敗', e); }
+    }
     say('compile');
     await gfx.warmup();
     lab._loop();
@@ -474,6 +480,24 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
     },
     /** 品質 */
     setTier(t) { gfx.setQuality(t); },
+    /**
+     * 10 の id 以外のモジュールを足す（lab 専用）。gfx の ctx で作り、init → setQuality → setLodScale の後で
+     * gfx.modules に入れる（以後は update / prepare / beforePass / setQuality / stats が他のモジュールと同じに回る）。
+     * 落ちたときのスタブは無い（3 回で root を隠すだけ）
+     * @param {(ctx:object) => import('../module.js').NgModule} factory createModule
+     * @returns {Promise<import('../module.js').NgModule>}
+     */
+    async addModule(factory) {
+      const m = factory(gfx._ctx());
+      const id = m.constructor.id;
+      if (!id || id === 'module' || gfx.modules.has(id)) throw new Error(`[lab] addModule: id «${id}» が無いか既にある`);
+      await m.init(() => {});
+      m.setQuality(gfx.quality.tier, gfx.quality.profile);
+      m.setLodScale(gfx._lod);
+      m._ngStub = false;
+      gfx.modules.set(id, m);
+      return m;
+    },
     /** カメラ：プリセット名 か {pos:[x,y,z], target:[x,y,z]} */
     cam(p) {
       const c = typeof p === 'string' ? preset(p) : p;

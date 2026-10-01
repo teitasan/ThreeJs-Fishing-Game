@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab: example（core の最小モジュールの例）</title>
+<!-- 相対 URL（assets/…・importmap）をリポジトリの根から解決する -->
+<base href="../">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="lab/_kit/lab.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/",
+    "postprocessing": "./vendor/postprocessing/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="lab-status">lab: loading</div>
+<script type="module">
+/* docs/nextgen/CORE_API.md §12 の例。全モジュールはグレーボックス（core のスタブ）のまま、
+   src/gfx/core/examples/exampleModule.js（id 'example'）を 1 つ足す。
+   本物のモジュールの lab は bootLabPage({ modules: ['<自分の id>'] }) と書く（extraModules は要らない） */
+import { bootLabPage } from './lab/_kit/page.js';
+import { createModule } from './src/gfx/core/examples/exampleModule.js';
+bootLabPage({ modules: [], extraModules: [createModule] });
+</script>
+</body>
+</html>
