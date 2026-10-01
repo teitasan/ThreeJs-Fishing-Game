@@ -18,7 +18,7 @@ import { NG_CHART_24, ngLuminance } from '../palette.js';
 import { resolveLake } from '../../../lakefield.js';
 import { buildHeightGrids } from '../../../world/heightgrid.js';
 import { buildPlacement } from '../../../world/placement.js';
-import { makeDock } from '../../../world/dock.js';
+import { makeDock, dockLocal, onDock, distToDock, dockBlocksSegment } from '../../../world/dock.js';
 import { createCausticsUniforms, CAUSTICS_GLSL } from '../../../shaders.js';
 import { waveGLSL } from '../../../waveField.js?v=20260828-lakescale1';
 import { NG_MEDIUM_GLSL } from '../glsl/medium.glsl.js';
@@ -126,8 +126,9 @@ export const Lab = {
     const dock = makeDock(lake);
     say('world');
     const t0 = performance.now();
+    const terrain = makeLabTerrain(lake, dock, placement, caustics, gfx);
     await gfx.attachWorld({
-      lake, placement, caustics, grids: buildHeightGrids(lake, { resolvedSeed: resolved.seed }),
+      lake, terrain, placement, caustics, grids: buildHeightGrids(lake, { resolvedSeed: resolved.seed }),
       progress: (f) => say(`world ${(f * 100) | 0}%`),
     });
     const worldMs = performance.now() - t0;
@@ -182,7 +183,7 @@ export const Lab = {
       camera.add(chartGroup);
     }
 
-    const lab = makeLabApi({ renderer, scene, camera, gfx, lake, dock, placement, caustics, chars, worldMs });
+    const lab = makeLabApi({ renderer, scene, camera, gfx, lake, dock, terrain, placement, caustics, chars, worldMs });
     window.__lab = lab;
     /* 10 の id 以外のモジュール（core の例 src/gfx/core/examples/ など）を足す。warmup の前に init まで済ませる */
     for (const factory of o.extraModules || []) {
@@ -196,6 +197,44 @@ export const Lab = {
     return lab;
   },
 };
+
+/**
+ * lab の ctx.terrain（読むだけのファサードの写し。CORE_API §3.3）。本編の src/terrain.js の Terrain が持つ
+ * «モジュールが読む» 項目を同じ値・同じ式で持つ：桟橋（dockDir / dockStart / dockEnd / spawnPos は Vector3、dockY、
+ * shoreR0、dockAngle、onDock / distToDock / dockBlocksSegment）、高さ（heightAt / depthAt / isWater / normalAt /
+ * slopeAt / bedAt / shoreRadius = lakefield）、placement・structures・heightTexture・causticsUniforms。
+ * 当たり（addObstacle / blockedAt / lineBlocked）と描画のフック（updateTrees など）は持たない（lab では呼ばれない）。
+ * isLabFacade = true で見分けられる
+ */
+export function makeLabTerrain(lake, dock, placement, caustics, gfx) {
+  const v3 = (p) => new THREE.Vector3(p.x, p.y ?? 0, p.z);
+  const t = {
+    isLabFacade: true,
+    lake, seed: lake.seed, noise: lake.noise, hole: lake.hole, flat: lake.flat, dockAngle: dock.dockAngle,
+    _dockU: dock._dockU, _dockLen: dock._dockLen, shoreR0: dock.shoreR0,
+    dockDir: v3(dock.dockDir), dockStart: v3(dock.dockStart), dockEnd: v3(dock.dockEnd), dockY: dock.dockY, spawnPos: v3(dock.spawnPos),
+    placement, structures: lake.structures, causticsUniforms: caustics, lodScale: 1,
+    shoreRadius: (x, z) => lake.shoreRadius(x, z),
+    heightAt: (x, z) => lake.heightAt(x, z),
+    depthAt: (x, z) => Math.max(0, -lake.heightAt(x, z)),
+    isWater: (x, z) => lake.heightAt(x, z) < 0,
+    normalAt(x, z, e = 0.7) {
+      const hL = lake.heightAt(x - e, z), hR = lake.heightAt(x + e, z), hD = lake.heightAt(x, z - e), hU = lake.heightAt(x, z + e);
+      return new THREE.Vector3(hL - hR, 2 * e, hD - hU).normalize();
+    },
+    slopeAt(x, z, e = 1.2) {
+      const dx = (lake.heightAt(x + e, z) - lake.heightAt(x - e, z)) / (2 * e), dz = (lake.heightAt(x, z + e) - lake.heightAt(x, z - e)) / (2 * e);
+      return Math.sqrt(dx * dx + dz * dz);
+    },
+    bedAt: (x, z) => lake.bedAt(x, z),
+    _dockLocal(x, z, out) { return dockLocal(t, x, z, out); },
+    onDock: (x, z) => onDock(t, x, z),
+    distToDock: (x, z) => distToDock(t, x, z),
+    dockBlocksSegment: (x0, y0, z0, x1, y1, z1) => dockBlocksSegment(t, x0, y0, z0, x1, y1, z1),
+    get heightTexture() { return gfx.heightfield?.uniforms?.ngHeightNear?.value || null; },
+  };
+  return t;
+}
 
 /* __lab の中身 */
 function makeLabApi(env) {
@@ -472,7 +511,7 @@ void main() { vec4 c = ngDebug(vUv); gl_FragColor = vec4(pow(clamp(c.rgb, 0.0, 1
   }
 
   const api = {
-    gfx, renderer, scene, camera, lake, dock, placement: env.placement, worldMs: env.worldMs,
+    gfx, renderer, scene, camera, lake, dock, terrain: env.terrain, placement: env.placement, worldMs: env.worldMs,
     /** 時刻（0..24） */
     setHour(h) { st.hour = h; },
     /** 天候。instant: true で damp を飛ばす */

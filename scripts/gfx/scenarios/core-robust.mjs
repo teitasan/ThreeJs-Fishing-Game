@@ -294,6 +294,15 @@ export default async function (h) {
     ];
   });
 
+  /* lab の ctx.terrain は本編の Terrain と同じ読むだけの項目を持つ（CORE_API §3.3・§10.2） */
+  await run('ctx-terrain', () => {
+    const L = window.__lab, c = L.gfx._ctx(), t = c.terrain, d = L.dock;
+    const mid = { x: (d.dockStart.x + d.dockEnd.x) / 2, z: (d.dockStart.z + d.dockEnd.z) / 2 };
+    const ok = !!t && t.dockY === d.dockY && t.dockDir.isVector3 && t.spawnPos.isVector3 && Math.abs(t.heightAt(3, 4) - L.lake.heightAt(3, 4)) < 1e-9
+      && t.onDock(mid.x, mid.z) !== false && t.onDock(mid.x, mid.z) !== null && t.heightTexture === c.heightfield.uniforms.ngHeightNear.value;
+    return [['lab の ctx.terrain が dockY・dockDir・heightAt・onDock・heightTexture を持つ', ok, t ? `dockY ${t.dockY}・onDock ${t.onDock(mid.x, mid.z)}` : 'null']];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');

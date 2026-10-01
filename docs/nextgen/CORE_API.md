@@ -174,7 +174,7 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 | `camera` | PerspectiveCamera \| null | 起動時のカメラ（null のことがある）。**毎フレームは `f.camera` を使う** |
 | `tier` / `profile` | string / object | 起動時の段と core のプロファイル（§11）。**以後は `setQuality` の引数を使う** |
 | `lake` | object | lakefield の湖（§10.4）。`lake.dock` / `lake.structures` / `lake.flats` / `heightAt` / `depthAt` / `shoreAtAngle` / `seed` |
-| `terrain` | Terrain | ファサード（読むだけ。`heightAt` 等の旧 API、`dockY`・`dockStart` 等） |
+| `terrain` | Terrain | ファサード（読むだけ）。読んでよい項目：`dockY`・`dockDir` / `dockStart` / `dockEnd` / `spawnPos`（Vector3）・`shoreR0`・`dockAngle`・`onDock` / `distToDock` / `dockBlocksSegment`・`heightAt` / `depthAt` / `isWater` / `normalAt` / `slopeAt` / `bedAt` / `shoreRadius`（lakefield）・`placement`・`structures`・`heightTexture`・`causticsUniforms`。**lab では同じ項目を持つ写し**（`makeLabTerrain`、`isLabFacade = true`。当たりと描画のフックは無い。G0 後の修正：以前の lab は null） |
 | `heightfield` | HeightField | 高さ場の GPU テクスチャと CPU の双子（§10.1） |
 | `placement` | Placement | 配置（§10.3）。**品質に依らない** |
 | `frame` | NgFrame | ngFrame の書き込み口（§5）。`frame.data` が共有の Float32Array、`frame.cam.uw` / `frame.cam.waterY` |
