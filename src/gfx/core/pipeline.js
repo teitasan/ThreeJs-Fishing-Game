@@ -19,6 +19,7 @@
    =========================================================== */
 import { NG_PASS } from './frame.js';
 import { NG_LAYER, NG_MASK } from './layers.js';
+import { ngSnapRenderScale } from './quality.js';
 
 const COPY_VS = /* glsl */ `
 in vec3 position;
@@ -167,8 +168,8 @@ export class FramePipeline {
    */
   setSize() { this.targets._key = ''; }
 
-  /** 動的解像度の倍率 */
-  setRenderScale(s) { this.renderScale = Math.min(1, Math.max(0.5, s || 1)); }
+  /** 動的解像度の倍率。NG_DRS_LEVELS の段に丸める（RT の作り直しは段が変わったときだけ） */
+  setRenderScale(s) { this.renderScale = ngSnapRenderScale(s || 1); }
 
   /** 品質の変更（RT は次の描画で作り直す） */
   setQuality() { this.targets._key = ''; }

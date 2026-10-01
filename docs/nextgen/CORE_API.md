@@ -413,7 +413,7 @@ result = {
 - `renderPost(targets, dt)`：P7。`targets.main`（resolve 済みの HDR）から **画面（render target null）** へ。水中エフェクト
   （`services.underwater.createEffect()`。§6.3 の約束：鎖の先頭・露出前）→ 露出（slot 16 を書く）→ AO・光芒・Bloom・グレード・AgX・ディザ → `profile.postAA`（'none' | 'smaa' | 'fxaa'）→ DRS のアップスケール。
   （**G0 後の変更**：以前の表は «露出 → 水中» の順だったが、pmndrs が深度を使う Effect を前へ並べ替えるので先頭に固定した）
-  DRS は `ctx.pipeline.setRenderScale(s)`（`DrsController` が quality.js にある。`window.__gfxCapture` のときは 1.0 固定）
+  DRS は `ctx.pipeline.setRenderScale(s)`（`DrsController` が quality.js にある。`window.__gfxCapture` のときは 1.0 固定。倍率は `NG_DRS_LEVELS` の段に丸められる。§9）
 - `async compile()`（任意）：warmup の中で 1 回。自分のパスのプログラムを先に作る
 - `setSize(w, h)`：描画バッファの大きさが変わった
 - 読み込み中・失敗時は core が `main` を露出 × Reinhard で画面へ出す（黒い画面にしない）
@@ -630,7 +630,11 @@ uniforms：`ngHfShadow0`・`ngHfShadow1`（R8 相当、1 = 日向）・`ngHfShad
 | `ngCopyMips` | float | sceneColor の mip 段数 |
 
 - `ctx.pipeline.targets`：`main`（WebGLRenderTarget、samples = profile.msaa、`depthTexture`）・`copy`（`textures[0]` sceneColor、`textures[1]` 線形深度）・`refl`
-- 大きさ = 描画バッファの物理 px × DRS の倍率（`pipeline.renderScale`、0.5–1.0）。毎フレーム必要なら作り直す
+- 大きさ = 描画バッファの物理 px × DRS の倍率（`pipeline.renderScale`）。倍率は **`NG_DRS_LEVELS = [1, 0.85, 0.75, 0.7, 0.6, 0.5]` の段だけ**
+  （`setRenderScale` が `ngSnapRenderScale` で丸める。quality.js）。倍率が変わると main・copy・refl を全部作り直す（high 2560×1440 で その 1 フレーム +≈7ms）ので、
+  **G0 後の修正**：以前は 0.05 刻みで 1 段ごとに作り直していた。`DrsController` は上の段の重さを «p90 × (上の段 / 今)²» で見積もって 16ms 未満のときだけ上げ、
+  上げて 20 秒以内に下げたら上げるまでの待ちを倍に（5 → 40 秒）する（境目の負荷 600 秒の模擬で段の変化 38 → 1 回。`scripts/gfx-tests/drs-levels.mjs`）。
+  自分の RT を main の大きさに合わせるモジュールは、大きさの変化を毎フレーム比べて作り直す（段の変化は数十秒に 1 回より少ない）
 - `ctx.pipeline.addPreparer(id, fn, budgetMs)`：P1 に毎フレームの関数を足す（guardPass で包まれる）。モジュールは普通 `prepare(f)` で足りる
 - `ctx.pipeline.state`：`{ frameIndex, underwater, reflectionEnabled, prepared, reflected, rendered, lost }`（読むだけ）
 - sceneColor を読むのは late の物（水面・粒）だけ。不透明の物が読むと 1 フレーム前の絵になる

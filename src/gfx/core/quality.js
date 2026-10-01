@@ -123,23 +123,73 @@ export class Quality {
 }
 
 /**
- * 動的解像度の制御（§4.10）。2 秒の p90 が 17.2ms を超えたら −0.05、
- * 5 秒続けて 14ms 未満なら +0.05。window.__gfxCapture のときは 1.0 固定
+ * 動的解像度の段（倍率）。RT は倍率が変わるたびに全部（main・copy・refl）作り直すので、細かく刻まない
+ * （G0 後の修正：以前は 0.05 刻みで、1 段ごとに high 2560×1440 で +7ms の引っかかりが出ていた）。
+ * 各段の範囲（profile.drs）の中の段だけを使う：low [1, 0.85, 0.7, 0.6]、mid [1, 0.85, 0.75]、high [1, 0.85, 0.7]
+ */
+export const NG_DRS_LEVELS = Object.freeze([1.0, 0.85, 0.75, 0.7, 0.6, 0.5]);
+
+/**
+ * 倍率を NG_DRS_LEVELS のいちばん近い段に丸める（pipeline.setRenderScale が使う。post がどんな値を渡しても段に乗る）
+ * @param {number} s
+ * @returns {number}
+ */
+export function ngSnapRenderScale(s) {
+  const v = Number.isFinite(s) ? Math.min(1, Math.max(0.5, s)) : 1;
+  let best = 1, d = Infinity;
+  for (const l of NG_DRS_LEVELS) { const e = Math.abs(l - v); if (e < d - 1e-9) { d = e; best = l; } }
+  return best;
+}
+
+/* 範囲の中の段（大きい順）。範囲の下限が段に無ければ足す */
+function drsLevels(range) {
+  const lo = Math.min(range?.[0] ?? 1, range?.[1] ?? 1), hi = Math.max(range?.[0] ?? 1, range?.[1] ?? 1);
+  const out = NG_DRS_LEVELS.filter((l) => l <= hi + 1e-6 && l >= lo - 1e-6);
+  if (!out.length) out.push(ngSnapRenderScale(hi));
+  return out;
+}
+
+/**
+ * 動的解像度の制御（§4.10）。2 秒の p90 が 17.2ms を超えたら 1 段下げ（NG_DRS_LEVELS）、
+ * 続けて 14ms 未満が upWait 秒（既定 5）続き、かつ «上の段の見積もり = p90 × (上の段 / 今)²» が 16ms 未満なら 1 段上げる。
+ * 上げてから 20 秒以内にまた下げたら（境目の負荷での往復）
+ * upWait を倍に（上限 40 秒）、60 秒動かなければ 5 秒へ戻す。RT の作り直しは段の変化のときだけ。
+ * window.__gfxCapture のときは 1.0 固定
  */
 export class DrsController {
   /** @param {[number, number]} range */
   constructor(range = [0.7, 1.0]) {
     this.range = range;
+    this.levels = drsLevels(range);
     this.scale = 1;
+    /** 段を変えた回数（RT の作り直しの回数の目安） */
+    this.changes = 0;
     this._win = [];
     this._t = 0;
     this._calm = 0;
+    this._clock = 0;
+    this._upWait = 5;
+    this._lastUp = -Infinity;
+    this._lastChange = 0;
+    this._p90 = 0;
   }
 
-  /** 段が変わったら範囲を差し替える（今の倍率は範囲に収める） */
+  /** 段が変わったら範囲を差し替える（今の倍率は範囲の段に収める） */
   setRange(range) {
     this.range = range;
-    this.scale = Math.min(range[1], Math.max(range[0], this.scale));
+    this.levels = drsLevels(range);
+    const lv = this.levels;
+    if (!lv.includes(this.scale)) this.scale = lv.reduce((b, l) => (Math.abs(l - this.scale) < Math.abs(b - this.scale) ? l : b), lv[0]);
+  }
+
+  _step(dir) {
+    const lv = this.levels;
+    const i = Math.max(0, lv.indexOf(this.scale));
+    const j = Math.min(lv.length - 1, Math.max(0, i + dir));
+    if (j === i) return;
+    this.scale = lv[j];
+    this.changes++;
+    this._lastChange = this._clock;
   }
 
   /**
@@ -147,22 +197,38 @@ export class DrsController {
    * @param {number} frameMs このフレームの所要時間（ms）
    * @param {number} dt 実時間の経過（s）
    * @param {boolean} frozen 撮影中など、倍率を 1 に固定するとき true
-   * @returns {number} 倍率
+   * @returns {number} 倍率（NG_DRS_LEVELS のどれか）
    */
   update(frameMs, dt, frozen) {
     if (frozen) { this.scale = 1; this._win.length = 0; this._t = 0; this._calm = 0; return 1; }
     if (!(frameMs > 0) || !(dt > 0)) return this.scale;
+    this._clock += dt;
     this._win.push(frameMs);
     this._t += dt;
     this._calm = frameMs < 14 ? this._calm + dt : 0;
     if (this._t >= 2) {
       const s = this._win.slice().sort((a, b) => a - b);
       const p90 = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
-      if (p90 > 17.2) this.scale = Math.max(this.range[0], this.scale - 0.05);
+      this._p90 = p90;
+      if (p90 > 17.2 && this.scale > this.levels[this.levels.length - 1]) {
+        if (this._clock - this._lastUp < 20) this._upWait = Math.min(40, this._upWait * 2);
+        this._step(+1);
+        this._calm = 0;
+      }
       this._win.length = 0;
       this._t = 0;
     }
-    if (this._calm >= 5) { this.scale = Math.min(this.range[1], this.scale + 0.05); this._calm = 0; }
+    if (this._calm >= this._upWait && this.scale < this.levels[0]) {
+      /* 上の段の重さを «画素の数に比例» で見積もり、予算に余裕で入るときだけ上げる（入らない段へ上げてすぐ下げる往復をしない） */
+      const lv = this.levels, next = lv[Math.max(0, lv.indexOf(this.scale) - 1)];
+      const k = (next / this.scale) ** 2;
+      if (!(this._p90 > 0) || this._p90 * k < 16) {
+        this._step(-1);
+        this._lastUp = this._clock;
+      }
+      this._calm = 0;
+    }
+    if (this._clock - this._lastChange > 60) this._upWait = 5;
     return this.scale;
   }
 }
