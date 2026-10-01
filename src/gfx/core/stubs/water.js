@@ -296,11 +296,26 @@ export class WaterStub extends NgModule {
     u.uTime.value = f.waterTime;
     u.uWind.value = f.waterWind;
     this._packRipples(f.waterTime);
+    this._snap(f);
+    u.ngSkyViewTex.value = this.ctx.services.sky.skyViewTex;
+    u.ngSkyViewMips.value = this.ctx.services.sky.skyViewMips || 0;
+  }
+
+  /* 水の時刻と風は gfx.waterUpdate（game の順で updateModules の後）が書く。描く直前の prepare で
+     受け直して、CPU の surfaceY と同じフレームの波にする（update のままだと 1 フレーム前の波で ≈1mm ずれる） */
+  prepare(f) {
+    const u = this.uniforms;
+    u.uTime.value = f.waterTime;
+    u.uWind.value = f.waterWind;
+    this._packRipples(f.waterTime);
+    this._snap(f);
+  }
+
+  _snap(f) {
+    const u = this.uniforms;
     const s = 32 / this._n;
     const c = f.camera?.position;
     if (c) u.uSnap.value.set(Math.round(c.x / s) * s, Math.round(c.z / s) * s);
-    u.ngSkyViewTex.value = this.ctx.services.sky.skyViewTex;
-    u.ngSkyViewMips.value = this.ctx.services.sky.skyViewMips || 0;
   }
 
   setQuality(tier) { if (this.mesh) this._rebuild(tier); }

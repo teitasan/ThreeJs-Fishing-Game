@@ -187,9 +187,6 @@ export class ExampleModule extends NgModule {
 
   /** 毎フレームの CPU（gfx.updateModules から。f は毎フレーム書き換わる同じオブジェクト。保存しない） */
   update(f) {
-    const u = this.uniforms;
-    u.uTime.value = f.waterTime;     // 浮き輪は water.time の波（ngWaterTime と同じ値 → 位相は倍精度）
-    u.uWind.value = f.waterWind;
     if (f.paused) return;            // ポーズ中は時間の進む物を止める
     this._ripT += f.dt;
     if (this._ripT > 2.5) {          // 2.5 秒ごとに浮き輪の周りへ波紋（water モジュールの受け口。投げない）
@@ -197,6 +194,14 @@ export class ExampleModule extends NgModule {
       const p = u.uAt.value;
       this.ctx.services.water.addRipple(p.x, p.y, 0.8, 2.0);
     }
+  }
+
+  /** GPU の準備（P1、pipeline.prepare の中）。f.waterTime / f.waterWind / f.uw は gfx.waterUpdate が
+   *  updateModules の «後» に書くので、同じフレームの水の値はここで受ける（update で読むと 1 フレーム前） */
+  prepare(f) {
+    const u = this.uniforms;
+    u.uTime.value = f.waterTime;     // 浮き輪は water.time の波（ngWaterTime と同じ値 → 位相は倍精度）
+    u.uWind.value = f.waterWind;
   }
 
   /** パスの直前（任意）。反射では浮き輪を出さない、のようなパス別の切り替えに使う */
