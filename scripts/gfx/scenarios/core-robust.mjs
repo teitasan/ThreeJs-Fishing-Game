@@ -5,6 +5,7 @@
    - prepare / renderReflection の冪等（同じフレームで 2 回呼んでも描画の回数が増えない）
    - late 物体（ゲームの半透明）の visible の退避と復元、ライトの layers.enableAll
    - 0.1〜0.4m の低い遮蔽物も近景の影を落とす（bias が世界の長さで小さい）
+   - 太陽が回っても桟橋の位置で近景の影の縁がざわつかない（スナップの基準点が注視点の近く）
    - 品質の切り替え（high → mid → low → high）でライトの数・castShadow・影の種類が変わらない
    - 故障の注入：モジュールの update / prepare が投げてもフレームは完走し、3 回で無効化してスタブで立て直す
    - 止まったパス（不透明）は間を空けて試し直して戻る
@@ -132,6 +133,46 @@ export default async function (h) {
     grp.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
     return [
       ['0.1m・0.2m・0.4m の高さの遮蔽物が影を落とす（影の輝度 / 日向 < 0.6）', res.every((x) => x < 0.6), `${res.join(' / ')}（日向 ${lit.toFixed(3)}、bias ${g.rig.key.shadow.bias.toExponential(2)}、far ${g.rig.key.shadow.camera.far}）`],
+    ];
+  });
+
+  /* 太陽が回っても近景の影の縁がざわつかない（テクセルスナップの格子は注視点の近くの基準点に固定。
+     原点に固定すると原点から 88m の桟橋で毎フレーム 0.2 テクセル滑る）。
+     桟橋の先の受け板に «影だけ» の細い柱 36 本、カメラ固定で時刻を 1/3600h（60fps の 1 フレーム分）ずつ進め、
+     連続フレームで sceneColor の G が 0.2 以上変わった画素を数える */
+  await run('shadow-shimmer', () => {
+    const L = window.__lab, g = L.gfx, T = g.THREE, r = L.renderer, D = L.dock;
+    L.setWeather('clear', { instant: true }); L.freeze(100);
+    const dir = new T.Vector3(D.dockDir.x, 0, D.dockDir.z).normalize();
+    const c = new T.Vector3(D.dockEnd.x, 2, D.dockEnd.z).addScaledVector(dir, 8);
+    const grp = new T.Group();
+    const recv = new T.Mesh(new T.PlaneGeometry(14, 14).rotateX(-Math.PI / 2), new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }));
+    recv.position.copy(c); recv.receiveShadow = true; grp.add(recv);
+    for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) {
+      const p = new T.Mesh(new T.CylinderGeometry(0.05, 0.05, 2, 8), new T.MeshStandardMaterial());
+      p.position.set(c.x - 4 + i * 1.5, c.y + 1, c.z - 4 + j * 1.5); p.rotation.z = 0.3; p.castShadow = true; p.layers.set(8); grp.add(p);
+    }
+    L.scene.add(grp);
+    L.cam({ pos: [c.x, c.y + 8, c.z + 0.01], target: [c.x, c.y, c.z] });
+    let hour = 15; L.setHour(hour); L.tick(6);
+    const read = () => { const t = g.targets.copy, b = new Uint16Array(t.width * t.height * 4); r.readRenderTargetPixels(t, 0, 0, t.width, t.height, b, undefined, 0); return b; };
+    const half = (v) => { const e = (v >> 10) & 31, f = v & 1023; return e === 0 ? f * 2 ** -24 : (1 + f / 1024) * 2 ** (e - 15); };
+    let prev = read();
+    const steps = [];
+    for (let k = 0; k < 6; k++) {
+      hour += 1 / 3600; L.setHour(hour); L.tick(1);
+      const cur = read();
+      let n = 0;
+      for (let i = 1; i < cur.length; i += 4) if (Math.abs(half(cur[i]) - half(prev[i])) > 0.2) n++;
+      steps.push(n); prev = cur;
+    }
+    const A = g.shadows.snapAnchor, F = g.shadows.focus;
+    L.scene.remove(grp);
+    grp.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+    const t = g.targets.copy, lim = Math.round(t.width * t.height * 0.0008);   // 1280×720 で 737px（基準点 12.7m で ≈430、原点に固定した旧版は ≈930）
+    return [
+      ['時刻を 1 フレーム進めても影の縁の変化が小さい（桟橋の位置）', Math.max(...steps) < lim,
+        `${steps.join(',')} px（上限 ${lim}、注視点の原点からの距離 ${Math.hypot(F.x, F.z).toFixed(0)}m、基準点まで ${Math.hypot(F.x - A.x, F.z - A.z).toFixed(1)}m）`],
     ];
   });
 

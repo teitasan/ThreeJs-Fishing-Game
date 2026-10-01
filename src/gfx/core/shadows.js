@@ -2,7 +2,9 @@
    影（ARCHITECTURE §4.5）
    -----------------------------------------------------------
    近景：key（DirectionalLight、castShadow 固定）の three 影マップを注視点へ追従。
-     テクセルにスナップして、歩いても影の縁がちらつかないようにする。
+     テクセルにスナップして、歩いても影の縁がちらつかないようにする。スナップの格子は «注視点の近くの基準点»
+     （32m のセルの中心。注視点が 24m 離れたら 1 回だけ移す）に固定する。世界の原点に固定すると、太陽が回るたびに
+     格子が «原点からの距離 × 回転角» だけ滑り、原点から 88m の桟橋では毎フレーム 0.2 テクセル動いて縁がざわついた
      影の更新は «prepare の中で 1 回だけ»（renderNear）。何も描かないカメラ（layer 31 だけ）で
      render すると three は影マップだけ更新する（ライトは layers.enableAll）。
      注意：three r180 の影の描画（WebGLShadowMap の renderObject）は物体の layers を «shadow.camera» ではなく
@@ -22,6 +24,9 @@ import { NG_HEIGHTFIELD_GLSL } from './glsl/heightfield.glsl.js';
 export const NG_HF_SHADOW_R = Object.freeze([256, 1024]);
 const BAKE_H_N = 1024;
 const KEY_JUMP_COS = Math.cos((2 * Math.PI) / 180);
+/** スナップの基準点のセル（m）と、移すまでの距離（m） */
+const SNAP_CELL = 32;
+const SNAP_KEEP = 24;
 /** 光（key）を注視点から引く距離（m） */
 const KEY_DIST = 600;
 /** 近景の影の深さの bias（世界の長さ m）。これより受け手に近い遮蔽物は影を落とさない */
@@ -86,6 +91,9 @@ export class Shadows {
     this.key = null;
     this.profile = null;
     this.focus = new THREE.Vector3();
+    /** テクセルスナップの基準点（注視点の近く。SNAP_KEEP を出たら移す） */
+    this.snapAnchor = new THREE.Vector3(0, 0, 0);
+    this._anchorSet = false;
     const T = THREE;
     const white = () => {
       const t = new T.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, T.RGBAFormat);
@@ -169,8 +177,15 @@ export class Shadows {
     if (r.lengthSq() < 1e-8) r.set(1, 0, 0);
     r.normalize();
     u.crossVectors(r, f);
-    const a = focus.x * r.x + focus.y * r.y + focus.z * r.z;
-    const b = focus.x * u.x + focus.y * u.y + focus.z * u.z;
+    const A = this.snapAnchor;
+    if (!this._anchorSet || Math.hypot(focus.x - A.x, focus.y - A.y, focus.z - A.z) > SNAP_KEEP) {
+      A.set(Math.round(focus.x / SNAP_CELL) * SNAP_CELL, Math.round(focus.y / 8) * 8, Math.round(focus.z / SNAP_CELL) * SNAP_CELL);
+      this._anchorSet = true;
+    }
+    /* 基準点から測ってテクセルに丸める：格子は基準点を通る面に固定され、太陽の回転で滑るのは «基準点からの距離 × 角» だけ */
+    const fx = focus.x - A.x, fy = focus.y - A.y, fz = focus.z - A.z;
+    const a = fx * r.x + fy * r.y + fz * r.z;
+    const b = fx * u.x + fy * u.y + fz * u.z;
     const da = Math.round(a / texel) * texel - a, db = Math.round(b / texel) * texel - b;
     this.focus.set(focus.x + r.x * da + u.x * db, focus.y + r.y * da + u.y * db, focus.z + r.z * da + u.z * db);
     key.target.position.copy(this.focus);
