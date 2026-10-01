@@ -142,7 +142,7 @@ postfx.render(sdt)             → pipeline.renderMain() + post チェーン [pe
 | P4 | 不透明 | mainRT（RGBA16F、MSAA 4×、DepthTexture） | layers = DEFAULT\|WORLD\|NO_REFLECT\|UNDERWATER\|FAR。**late 物体（transparent / depthTest=false / renderOrder ≥ 5 の非 ng 物体）は visible を退避して隠し、描画後に必ず戻す**。空は最後に全画面三角形で depth=1・LEQUAL |
 | P5 | コピー | sceneColor（RGBA16F、4 mip）+ sceneDepthLin（R32F） | 全画面 1 パス。MSAA の resolve 後 |
 | P6 | late | mainRT（同じ MSAA） | layers = WATER\|LATE_FX\|LATE（late 物体は visible を戻して描く）。水面（renderOrder 1、NoBlending、depthWrite）→ パーティクル・雨・霧の板・しぶき・蛍・プランクトン → ゲームの半透明（波紋 3、糸 5、マーカー 6、名札 7、debug 900） |
-| P7 | post | 画面 | NaN 除去 → 露出 → 水中エフェクト（水中時のみ）→ GTAO 合成（high、不透明の画素だけ）→ 光芒（太陽が画面近く・高度 < 25°）→ Bloom（エネルギー保存）→ グレード → AgX → ディザ → SMAA/FXAA（mid/low）→ 動的解像度のアップスケール |
+| P7 | post | 画面 | NaN 除去 → 水中エフェクト（鎖の先頭・露出前。水上ではほぼ 0。G0 後に順を入れ替え：CORE_API §6.3）→ 露出 → GTAO 合成（high、不透明の画素だけ）→ 光芒（太陽が画面近く・高度 < 25°）→ Bloom（エネルギー保存）→ グレード → AgX → ディザ → SMAA/FXAA（mid/low）→ 動的解像度のアップスケール |
 
 - **ライトは必ず `layers.enableAll()`**（three はライトもカメラの layers で間引く。late のマスクで太陽が消える事故を防ぐ）
 - **MSAA に resolve 後もう一度描く**のは Chrome では中身が保たれる（invalidate は OculusBrowser だけ）。ただし ANGLE/Metal の load/store の帯域を
@@ -238,7 +238,7 @@ float ngCloudShadow(vec3 P);                           // 解析（sky の被覆
 - 水：T_w = e^(−(σa+σs)·L_w)、Lin_w = (1−T_w)·ngWaterInsc·e^(−σd·平均深さ)、σd = σa + 0.3σs。既定 σa = (0.20, 0.075, 0.045)/m、σs = 0.03（視程 26–70m）
 - H と β には `max(·, ε)`（ゼロ除算の黒・NaN を防ぐ）
 - JS 双子は同じ式を持ち、`scene.fog.near / far`（T = 0.98 / 0.02 になる距離）を毎フレーム書く（debug.js 用）。1000 区間の数値積分との差 < 1% をテスト
-- 将来のフロクセル用に `ngVolEnd`（区間分割の境界、既定 0 = 全区間を解析）を予約しておく
+- 将来のフロクセル用に `ngVolEnd`（区間分割の境界、既定 0 = 全区間を解析）を予約しておく（**Phase 1 は誰も読み書きしない**。Phase 2 で core が分割と書く口を足す）
 
 ### 4.4 マテリアル（extend.js）
 
@@ -345,6 +345,7 @@ f   = { dt, sdt, envTime, waterTime, waterWind, hour, camera, camPos, focus, fra
 - 全体の表（§7）を 1 か所に持ち、`onQuality(fn)` で配る。各モジュールは `src/gfx/<m>/quality.js` に自分の表を持つ
 - setQuality は部分集合の作り直しと RT の再確保だけ。**ライト数と castShadow は変えない**
 - 動的解像度（post/drs.js）：2 秒の p90 が 17.2ms を超えたら −0.05、5 秒 14ms 未満なら +0.05。範囲は high 0.7–1.0 / mid 0.75–1.0 / low 0.6–1.0。
+  （**G0 後の変更**：倍率は粗い段 `NG_DRS_LEVELS` だけを動き、上の段の見積もりが入るときだけ上げる。RT の作り直しを減らすため。CORE_API §9）
   `window.__gfxCapture` のときは無効
 
 ### 4.11 例外と計測（safe.js / budget.js）
@@ -498,6 +499,7 @@ Placement = {
 
 各モジュールの **合格条件**：lab の証拠一式（撮影と数値）・3 品質で予算内・例外 0・NaN 0・サンプラー上限内・ドロー数の予算内・run-tests 緑・
 art-metrics の該当項目が合格。技法の詳細は proposals の該当節（→）を読む。
+**口（関数・uniform・services・層・順序・持ち主）は `docs/nextgen/CORE_API.md` が正本**：この節と食い違うときは CORE_API に従う（G0 で凍結、G0 後のレビューで直した所は CORE_API に «G0 後» の印）。
 
 ### 6.1 sky（空・大気・雲・天体・光のリグ）→ robust §sky、fidelity M1、art §sky
 - Hillaire 2020：Rayleigh (5.8,13.5,33.1)e−6/m H 8km、Mie 3.996e−6 × haze（1 / 2.2 / 4.5 + 夜明け項）H 1.2km g 0.8、**オゾン** (0.65,1.88,0.085)e−6（ブルーアワーに必須）。
@@ -516,15 +518,18 @@ art-metrics の該当項目が合格。技法の詳細は proposals の該当節
 
 ### 6.2 water（水面）→ robust §water、fidelity M3/M4、art §water
 - 幾何：カメラ中心のクリップマップ（中心 0.25m、2 倍ずつ 5 リング、〜520m、high ≈ 80k 頂点）。リングごとにスナップ。
-  VS：`y = ngWaveH(p,t)·wind·ngShoalGain(ngDepth(p))`（`waveGLSL({prefix:'ng'})` の出力をそのまま埋め込む。手で写さない）。陸は平らにして地形の下へ
+  VS：`y = ngWaveH(p,t)·wind·ngShoalGain(ngDepth(p))`（**`NG_WAVE_GLSL`（core の glsl/wave.glsl.js）を使い、`t` には `f.waterTime` を prepare で渡す**。
+  `waveGLSL({prefix:'ng'})` を直接埋め込まない：float32 の t·ω で何時間かで mm ずれる。CORE_API §8.8）。陸は平らにして地形の下へ
 - 法線：波の解析勾配 + 周期 FFT（JONSWAP、fetch 300m、風 1–6m/s、ω を 2π/16s の倍数に量子化して周期化、32 フレーム × 256² の勾配を配列に、
   2–3 スケール）× `ngWindAt` の振幅（猫足の斑と鏡のような凪）+ high は **波動方程式の波紋シミュ**（RG16F 512²、カメラ前方の窓、整数テクセルでスクロール、
-  杭・葦・岸を減衰体に、2 サブステップ）+ 解析リング（最新 16 件、全品質、ウキが遠くても）+ 雨の輪（ハッシュセル 3 層）
+  杭・葦・岸を減衰体に（減衰体は core が持つ `services.water.dampers` を prepare で読む。water より後に init する hardscape・shoreflora の分も、
+  water が立て直されても残る。CORE_API §6）、2 サブステップ）+ 解析リング（最新 16 件、全品質、ウキが遠くても）+ 雨の輪（ハッシュセル 3 層）
 - 粗さ：LEAN/Toksvig（mip の分散から α² = 0.02² + 2σ²）。遠くの湖面が正しくぼけ、黄金時間の光の道にきらつきのエイリアスが出ない
 - 反射：reflRT を画面 uv + 法線の歪み、粗さ（と反射点までの距離）で mip を選ぶ。外れは skyView/雲パノラマで補う。Fresnel は Schlick F0 0.02 を粗さ補正
 - 鏡面：GGX（円盤光の粗さ拡張）× key × ngSunVisibility（桟橋や釣り人の影できらめきが欠ける）。夜は月の道。灯籠の点光源
 - 屈折：sceneColor（uv + 法線 × 厚みで歪み、深度で有効性を判定して戻す）。**吸収は足さない**（§3.4）。浅場の淡い青緑の散乱項だけ
 - 汀：厚み 0–3cm で F → 0（硬い縁を出さない）、泡（forge の泡ノイズ × 薄さ × `ngShoreRunUp` の位相）、杭・葦・岩の周りの接触の泡
+  （杭は `services.hardscape.piles` を **prepare で** 引き直す。init の時点では hardscape はまだ起動していない）
 - 裏面：スネルの窓（臨界角 48.6°）、窓の外は全反射（水の散乱色 + 湖底の暗い映り）、窓の縁の明るさ
 - しぶき：GPU の解析弾道（1024 粒、CPU の粒子ループなし）。着水で波紋を予約
 - 予算：水面 high 1.10 / mid 0.80 / low 0.60（波紋を含む）、しぶき最大 0.1、CPU 0.2ms。反射パスの中身は各モジュールの反射列
@@ -538,8 +543,9 @@ art-metrics の該当項目が合格。技法の詳細は proposals の該当節
   `csWaveD` は文字列の中だけで宣言、時刻フレームの線形補間、深さで LOD、太陽高度・夜・雨・雲で弱める。サンプラーは sampler2DArray のみ（魚の GLSL3 で動く）
 - 光学：σa = (0.20, 0.075, 0.045) × (1 + 0.5·rain)、σs 0.03–0.06。ngWaterInsc = σs/(σa+σs) × (E_key·透過·0.55 + E_sky·0.8) × 青緑
 - `getUnderwaterContext(camera)` → `{strength, time, sunDir, night, rain, cloud, absorb (Vector3 = σa), camPos, camNear, camFar, waterY}`
-- 水中エフェクト（pmndrs Effect、post が差し込む）：光柱（半解像度 16 ステップ、caustics パターン × 近景の影 × 減衰。桟橋・舟・釣り人で切れる）、
-  距離による mip ぼけ、ウォーターラインのメニスカス（近平面の 4 隅の surfaceY で線を引く）
+- 水中エフェクト（pmndrs Effect、`createEffect()`。post が **HDR の鎖の先頭（露出前）** に差し込み、深度とカメラを渡す。呼ばれる時・渡る物・持ち主は CORE_API §6.3）：
+  光柱（半解像度 16 ステップ、caustics パターン × 近景の影（`ctx.shadows.nearUniforms` + `NG_NEAR_SHADOW_GLSL` の `ngNearShadowAt`。CORE_API §8.4）× 減衰。桟橋・舟・釣り人で切れる）、
+  距離による mip ぼけ、ウォーターラインのメニスカス（近平面の 4 隅の surfaceY で線を引く）。水上では 0 に近い重さにする（予算：水上 0）
 - プランクトン：800/400/150 のソフト点、カメラ中心の 12m 箱で wrap（生成と消滅の処理なし）
 - 読みやすさ：**10/20/30m のグレーカードのコントラスト**を数値化（魚を見つけるゲーム性）。藻場・葦際・ストラクチャーが桟橋から屈折で読めること
 - 予算：水上 0（caustics はホストのマテリアルに含む）、水中 high 1.2 / mid 0.8 / low 0.4、焼き込み ≤ 30ms
@@ -556,7 +562,8 @@ art-metrics の該当項目が合格。技法の詳細は proposals の該当節
 - 180m より先と反射パス：farAlbedo（2048² ±512m、起動時に上から描いた地形 + 樹冠色）
 - 汀：`ngShoreRunUp` の遡上に合わせた濡れ帯（albedo × 0.55、粗さ 0.12、空の鏡面）。雨の濡れ・水たまり（雨の輪の法線）。水中は下向き光と caustics
 - 遠景の稜線：700–1200 / 1200–2000 / 2000–3000m の 3 リング（ridged ノイズで lakefield の山を延長）、FAR 層。空気遠近で日本の青い層の山並み
-- 高さ場影（§4.5）の焼き込みは terrain が担当（樹冠の高さは ngCanopy）
+- 高さ場影（§4.5）の焼き込みは **core が担当**（shadows.js が heightfield の地形 + `ngCanopyAt` の樹冠から焼く。CORE_API §14.1）。terrain は焼かない
+  （受け手として `hfShadow: true` で読むだけ。高さを変えたいときは heightfield の要望を core-requests へ）
 - 予算：main high 1.40 / mid 1.00 / low 0.80、反射 0.30 / 0.20、近景の影 0.30 / 0.20 / 0.15、CPU 0.15ms、読み込み ≤ 600ms
 - 証拠：shore-low 13:00（砂 → 草 → 林床の移り変わりと濡れ帯の 4 コマ）、forest-floor、aerial60（3 距離でタイル繰り返しが見えない）、
   far-ridge 6:00 と 17:45、noon-fp-down の湖底、雨の水たまり、LOD の色分け、heightAt 誤差のヒートマップ
@@ -583,13 +590,15 @@ art-metrics の該当項目が合格。技法の詳細は proposals の該当節
   1 株 8 枚（5 節）。high 25k 株 / 32m、mid 12k / 25m、low 4k / 18m。遠くは株を減らし刃を太くして面積を保つ。**根元の色を地形と一致**（ΔE < 6）
 - 陰影：ラップ Lambert + 透過（逆光 HG）+ 先端の光沢 + 高さ方向の AO + 色むら・枯れた先端。近景の影を受け、落とさない。風は `ngWindAt`、プレイヤーの踏み倒し
 - クマザサ（林床の群落）、シダ（沢筋と水辺）、苔の塊、落ち枝と落葉、玉石の浜の小石（実体、半径 15m、岩のマテリアルを共有）
-- 歩ける帯の境目の藪の見た目（placement.thicket の位置に低木の塊、見た目の半径 ≈ 当たり × 1.1、高さ ≥ 1.2m、低木は影を落とす）
+- 歩ける帯の境目の藪の見た目（placement.thicket の位置に低木の塊、見た目の半径 ≈ 当たり × 1.1、高さ ≥ 1.2m、低木は影を落とす：
+  `ngOwn(shrub, NG_LAYER.NO_REFLECT, NG_LAYER.SHADOW_ONLY)` で «描く・影を落とす・反射に写さない» を 1 つのメッシュで。CORE_API §4）
 - 予算：high 1.35 / mid 0.85 / low 0.30。反射には写さない（NO_REFLECT）
 - 証拠：一人称の林床、岸の草地、17:30 の逆光の草原、藪の輪を 10m から、雨で濡れた草、草の消える縁が見えない（60m）
 
 ### 6.7 shoreflora（水生植物）→ robust §shoreflora、fidelity M7、art §aquatic
 - ヨシ・マコモ：placement.reeds（isEdge）に茎（テーパーしたリボン 6 節）+ 葉 4–6 枚、穂。high 30k 本（〜80m、その先は株のカード）/ mid 15k / low 6k。
-  強い風の揺れ、根元の濡れ色（水面の高さで）。反射に写す（LOD1）。water の減衰体として茎を登録
+  強い風の揺れ、根元の濡れ色（水面の高さで）。反射に写す（LOD1）。water の減衰体として茎を登録（`services.water.addDamper(list)` を init で 1 回。
+  一覧は core が持つので water の起動の順に依らない）
 - 睡蓮（ヒツジグサ）・ヒシ：入り江の浅場の群落。**頂点の y は同じ波の関数**（CPU の surfaceY と一致、±1cm）、水面の法線で傾ける、蝋質の鏡面、白い花が少し。+0.01m と polygonOffset
 - 沈水植物（クロモ・エビモ）：`lake.flats` の各円を覆う（ガウス減衰の密度、1.2–4m で密）、流れで揺れる帯。UNDERWATER 層
 - 予算：high 1.00 / mid 0.60 / low 0.30
@@ -613,18 +622,21 @@ art-metrics の該当項目が合格。技法の詳細は proposals の該当節
 - 朝霧の板：水面上 0.5–4m の大きなソフトカード（60 / 32 / 16）、風で流す、深度でソフト、カメラに近いと透明、前方散乱で太陽側が光る。core の朝霧と同じ密度場
 - 蛍（初夏の晴れた夜、葦の上、2–4 秒周期の点滅）、光芒の中の塵（森の中、太陽が低いとき）
 - `env.rain`（Object3D）を提供、`env.underwater` で雨を隠す
-- **high の任意機能**：フロクセル（160×90×64、`ngVolEnd` の区間分割、朝霧・森の光芒・灯籠の光暈）。予算に余裕があるときだけ
+- ~~high の任意機能：フロクセル~~ → **Phase 2 に移した**（G0 後）。全マテリアルの媒質（fog チャンク）にフロクセルのサンプラーと `ngVolEnd` の区間分割を入れる
+  core の変更が要る（Phase 1 では `ngVolEnd` は常に 0 で誰も読まない。CORE_API §5）。Phase 1 の朝霧はカードと core の解析の朝霧、光芒は post
 - 予算：high 0.40（雨天 +0.25）/ mid 0.30 / low 0.15
 - 証拠：雨の一人称、雨の夜の灯籠、日の出の朝霧（層として読め、カードの縁が見えない）、22:00 の蛍
 
 ### 6.10 post（露出・AO・光芒・Bloom・グレード・AgX・AA・DRS）→ robust §post、fidelity M9、art §post
 - 露出（§2、adapt の測光は 1/16 縮小の log 平均 → 1×1、`readRenderTargetPixelsAsync` 4Hz）、NaN/Inf の除去
 - GTAO（high、半解像度、2 スライス × 6 ステップ、半径 1.2m）→ **不透明の画素だけ**に合成（最終深度 = 不透明深度のところ）。mid/low は無し
-- 光芒：1/4 解像度、24 / 16 サンプル、太陽が画面の 1.3 倍以内・高度 < 25° のとき。**近景の影マップで遮蔽**（森の木漏れ日）
+- 光芒：1/4 解像度、24 / 16 サンプル、太陽が画面の 1.3 倍以内・高度 < 25° のとき。**近景の影マップで遮蔽**（森の木漏れ日。
+  `ctx.shadows.nearUniforms` + `NG_NEAR_SHADOW_GLSL`、CORE_API §8.4。three の内部の影マップに直接手を伸ばさない）
 - Bloom：pmndrs の mipmap（high 8 段 / mid 5 / low なし）、しきい値なし・エネルギー保存 3.5%（夜と水中 5%）、最初の段は Karis 平均
 - グレード：ホワイトバランス（夜明け +300K、ブルーアワー −800K、夜はプルキニエ風の青と彩度 −35%）、lift/gamma/gain、彩度（時刻で 1.0–1.12）、ビネット 0.12
 - AgX（pmndrs ToneMappingEffect の AGX）→ ±0.5 LSB のブルーノイズディザ → SMAA（mid）/ FXAA（low）→ DRS のアップスケール（+ 軽い CAS）
-- underwater の `createEffect()` を差し込む（null なら無し）。debug 表示の登録 API
+- underwater の `createEffect()` を HDR の鎖の先頭（露出前）に差し込む（null なら無し。`services.underwater` が差し替わるたびに引き直す。手本は core の post スタブ。CORE_API §6.3）。
+  debug 表示の登録表は **core が持つ**（`services.post.registerDebugView` は上書きしない。本編で出すなら `ctx.gfx.debugViews` を読む。CORE_API §6.6）
 - 予算：high 1.00 / mid 0.75 / low 0.50
 - 証拠：AO の有無、露出の遷移（林の陰 → 日向 → 水中）、AgX のチャート（24 パッチ ±4EV）、Bloom（太陽と灯籠）、DRS の追従
 

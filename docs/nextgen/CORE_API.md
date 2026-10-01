@@ -4,7 +4,8 @@
 の **境界の正本**。モジュール担当は **この文書と ARCHITECTURE.md §6 の自分の節だけ** を読めば仕事ができるように書いてある。
 内容は G0 の時点の実際のコード（`git log` の bf2c428 以降）から起こした。
 
-- ARCHITECTURE.md §4 と食い違うときは **この文書が優先**（実装に合わせて凍結した。違いは «§4 からの変更» に印を付けた）
+- ARCHITECTURE.md §4 **と §6（各モジュールの節）** と食い違うときは **この文書が優先**（実装に合わせて凍結した。違いは «§4 からの変更» と «G0 後» に印を付けた。
+  §6 は技法と予算と証拠の正本、口の名前・形・順序・持ち主はこの文書が正本）
 - 凍結：名前・引数・戻り値の形・slot の番号・レイヤー・パス ID・services の項目は Phase 1 の間は変えない。
   変えたいときは `docs/nextgen/core-requests.md` に書く（統合者が Phase の境目でまとめて判断する。§17）
 - 例は全部、動くコードとして `src/gfx/core/examples/exampleModule.js` と `lab/example.html` にある（§15）
@@ -292,10 +293,15 @@ dashed・sprite）と ng のマテリアルが **同じ参照** を `uniform vec
 | 15 | xyz `ngFocus`, w `ngLodScale` | 注視点（m）、LOD 倍率 | core |
 | 16 | x `ngExposure`, y `ngInvExposure`, z `ngEV100` | 露出、1/露出、EV（正午基準の −log2 露出） | post |
 | 17 | x `ngCloudCover`, y `ngCloudBase`, z `ngCloudTop`, w `ngCloudPhase` | 雲の被覆 0..1、雲底 m、雲頂 m、雲の流れの位相 | sky |
-| 18 | x `ngVolEnd`, y `ngLakeRadius`, z `ngNearShadowR` | フロクセルの区間境界（0 = 全区間を解析）、湖の平均汀線半径 m、近景の影の半径 m（段の extent） | core |
+| 18 | x `ngVolEnd`, y `ngLakeRadius`, z `ngNearShadowR` | **予約**：フロクセルの区間境界（Phase 1 は常に 0。`ngApplyMedium` は読まず、書く口も無い。下の注）、湖の平均汀線半径 m、近景の影の半径 m（段の extent） | core |
 | 19 | xyzw `ngWavePhA` | 波 0–3 の位相 mod(water.time·ω_i, 2π)（JS の倍精度で計算） | core |
 | 20 | x `ngWavePhB` | 波 4 の位相（yzw は予備） | core |
 | 21–23 | — | 予備（core の承認で割り当て。要望は core-requests） | reserved |
+
+- **ngVolEnd とフロクセルは Phase 2**（G0 後に決めた）：フロクセルの寄与を全マテリアルの媒質に足すには、fog チャンク（`ngApplyMedium`）に
+  3D テクスチャのサンプラーと «[0, ngVolEnd] はフロクセル・その先は解析» の区間分割を入れる core の変更が要り、全プログラムのサンプラーの上限と
+  medium の JS 双子にも掛かる。Phase 1 の weatherfx はフロクセルを作らない（朝霧はカードと core の解析の朝霧、光芒は post）。
+  Phase 2 で要るなら core-requests に書く（core が `ngApplyMedium` の分割と書く口を足す）
 
 JS から：
 

@@ -47,7 +47,7 @@ export const NG_SLOTS = Object.freeze([
   { slot: 15, id: 'FOCUS', owner: 'core', fields: { xyz: 'ngFocus', w: 'ngLodScale' }, doc: '注視点 xyz, LOD 倍率' },
   { slot: 16, id: 'EXPO', owner: 'post', fields: { x: 'ngExposure', y: 'ngInvExposure', z: 'ngEV100' }, doc: '露出, 1/露出, EV（正午基準の −log2 露出）' },
   { slot: 17, id: 'CLOUDS', owner: 'sky', fields: { x: 'ngCloudCover', y: 'ngCloudBase', z: 'ngCloudTop', w: 'ngCloudPhase' }, doc: '雲の被覆（全体）, 雲底 m, 雲頂 m, 雲の流れの位相' },
-  { slot: 18, id: 'CORE', owner: 'core', fields: { x: 'ngVolEnd', y: 'ngLakeRadius', z: 'ngNearShadowR' }, doc: 'フロクセルの区間境界（0 = 全区間を解析）, 湖の平均汀線半径 m, 近景の影の半径 m' },
+  { slot: 18, id: 'CORE', owner: 'core', fields: { x: 'ngVolEnd', y: 'ngLakeRadius', z: 'ngNearShadowR' }, doc: '予約：フロクセルの区間境界（Phase 1 は常に 0 で誰も読まない。Phase 2 で core が ngApplyMedium の区間分割と書く口を足す）, 湖の平均汀線半径 m, 近景の影の半径 m' },
   { slot: 19, id: 'WAVEPH_A', owner: 'core', fields: { xyzw: 'ngWavePhA' }, doc: '波 0–3 の位相 mod(water.time·ω_i, 2π)（倍精度で求めた値。glsl/wave.glsl.js）' },
   { slot: 20, id: 'WAVEPH_B', owner: 'core', fields: { x: 'ngWavePhB' }, doc: '波 4 の位相（yzw は予備）' },
   { slot: 21, id: 'RES21', owner: 'reserved', fields: {}, doc: '予備' },
