@@ -7,6 +7,8 @@
    - 品質 low（100）→ mid（400）→ high（700）→ mid（1000）
    - 水中カメラの往復 ×4（180 / 480 / 780 / 1080 で «待ち» にして V、90 フレーム後に戻す）
    - 一人称の切り替え（250 / 850）、影の OFF（550）/ ON（650）、リサイズ ×2（300 で 960×540、900 で元へ）
+   - 最初に «ポーズ中のフレーム»（ui.isBlocking = true）を 3 回：モジュールの update / prepare に来る f が
+     dt = 0・paused = true で、realDt だけが実時間（CORE_API §3.4）
    - 合格：ページ例外 0・console のエラー 0・シェーダの失敗 0・game.update の例外 0・
      止まったパス / 無効化したモジュール 0、60 フレームごとの画面の中央の画素が NaN・真っ黒・白飛びでない
      （画面は最後のフレームの直後に readPixels。HDR の sceneColor の中央も有限であること）
@@ -39,6 +41,29 @@ export default async function (h) {
     g.yaw = Math.atan2(g.terrain.dockDir.x, g.terrain.dockDir.z);
     g.pitch = -0.12;
   });
+
+  /* ポーズ中のフレームでモジュールが見る f（CONTRACT §6：時計・波・天候・post の時刻はポーズで止まる） */
+  const pause = await h.eval(async () => {
+    const { getGfx } = await import('/src/gfx/core/index.js');
+    const gfx = getGfx(), g = window.__game;
+    const seen = [];
+    const ms = [...gfx.modules.values()];
+    const orig = ms.map((m) => [m, m.update, m.prepare]);
+    for (const m of ms) {
+      const u = m.update, p = m.prepare;
+      m.update = function (f) { seen.push(['update', f.dt, f.paused, f.realDt]); return u.call(this, f); };
+      m.prepare = function (f) { seen.push(['prepare', f.dt, f.paused, f.realDt]); return p.call(this, f); };
+    }
+    const blk = g.ui.isBlocking;
+    g.ui.isBlocking = () => true;
+    try { for (let i = 0; i < 3; i++) g.update(1 / 30); } finally {
+      g.ui.isBlocking = blk;
+      for (const [m, u, p] of orig) { m.update = u; m.prepare = p; }
+    }
+    const bad = seen.filter(([, dt, paused, realDt]) => dt !== 0 || paused !== true || !(realDt > 0));
+    return { n: seen.length, bad: bad.slice(0, 4) };
+  });
+  console.log(`pause: ${pause.n} 回の update / prepare、ずれ ${pause.bad.length}`);
 
   for (let start = 0; start < FRAMES; start += CHUNK) {
     if (start === 300) await h.page.setViewportSize({ width: Math.round(size.width * 0.75), height: Math.round(size.height * 0.75) });
@@ -144,10 +169,11 @@ export default async function (h) {
   const ngWarn = h.logs.filter((l) => l.startsWith('[warning]') && l.includes('[ng]'));
   const out = {
     frames: FRAMES, console: { errors: c1.errors - c0.errors, warnings: c1.warnings - c0.warnings, pageErrors: c1.pageErrors - c0.pageErrors },
-    ngWarnings: ngWarn.slice(0, 20), ...S,
+    ngWarnings: ngWarn.slice(0, 20), pause, ...S,
   };
   fs.writeFileSync(path.join(h.out, 'smoke-all.json'), JSON.stringify(out, null, 1));
   const bad = [];
+  if (!pause.n || pause.bad.length) bad.push(`ポーズ中の f が dt = 0・paused でない（${pause.n} 回中）：${JSON.stringify(pause.bad)}`);
   if (out.console.errors) bad.push(`console のエラー ${out.console.errors}`);
   if (out.console.pageErrors) bad.push(`ページ例外 ${out.console.pageErrors}`);
   if (S.throws.length) bad.push(`game.update の例外 ${S.throws.length}：${S.throws[0]}`);

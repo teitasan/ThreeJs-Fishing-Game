@@ -123,7 +123,7 @@ export class Gfx {
     this._waterWind = 1;
     /** モジュールの update / prepare に渡す f（毎フレーム書き換える同じオブジェクト） */
     this.f = {
-      dt: 0, sdt: 0, envTime: 0, waterTime: 0, waterWind: 1, hour: 12, camera: null, camPos: this._camPos,
+      dt: 0, realDt: 0, sdt: 0, envTime: 0, waterTime: 0, waterWind: 1, hour: 12, camera: null, camPos: this._camPos,
       focus: this._focus, frameIndex: 0, paused: false, uw: 0, flowDir: this._flow.dir, flowStrength: 0,
       keyDir: this._keyDir, sunDir: this._sunDir, weather: this._weather, tier: this.quality.tier,
     };
@@ -400,7 +400,7 @@ export class Gfx {
     const fi = this.pipeline ? this.pipeline.state.frameIndex : 0;
     const f = this.f;
     Object.assign(f, {
-      dt, sdt: dt, envTime: this._envTime, hour: this._hour, camera: cam, frameIndex: fi, paused: dt === 0,
+      dt, realDt: dt, sdt: dt, envTime: this._envTime, hour: this._hour, camera: cam, frameIndex: fi, paused: dt === 0,
       tier: this.quality.tier,
     });
     this.frame.set(NG.TIME, this._hour, this._waterTime, this._envTime, fi % 1024);
@@ -485,12 +485,14 @@ export class Gfx {
   }
 
   /**
-   * 全モジュールの CPU 更新（Terrain.updateTrees）
+   * 全モジュールの CPU 更新（Terrain.updateTrees）。
+   * game.js はポーズ中も «実時間の» dt を渡してくるので、f.dt には書かない（beginFrame の環境の dt のまま。
+   * ポーズで 0 = CORE_API §3.4）。実時間は f.realDt に置く（ポーズ中も動いてよい LOD の切り替えだけが使う）
    * @param {{dt?:number, camPos?:THREE.Vector3}} o
    */
   updateModules({ dt, camPos } = {}) {
     if (camPos) this._camPos.copy(camPos);
-    if (Number.isFinite(dt)) this.f.dt = dt;
+    this.f.realDt = Number.isFinite(dt) ? Math.max(0, dt) : 0;
     this._each('update', this.f);
   }
 

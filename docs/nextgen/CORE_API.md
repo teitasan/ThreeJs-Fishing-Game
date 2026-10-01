@@ -99,7 +99,8 @@
 - `prepare` / `renderReflection` は同じフレームで何度呼ばれても 1 回だけ働く（冪等）。呼ばれなければ `renderMain` が呼ぶ
 - **`f.waterTime` / `f.waterWind` / `f.sdt` / `f.uw` は 5 で書かれる**。3 の `update(f)` で読むと **1 フレーム前** の値。
   水面の高さや波に合わせる物は **`prepare(f)` で受ける**（G0 で水のスタブの 1 フレーム遅れ ≈1mm を直した。core-requests G-4）
-- ポーズ中は `f.dt = 0`（`f.paused = true`）。時間で進む物は止める。`f.envTime` もポーズで止まる
+- ポーズ中は `f.dt = 0`（`f.paused = true`）。`update` にも `prepare` にも 0 が来る。時間で進む物（揺れ・粒・波紋の減衰・天候）は `f.dt` で進める。`f.envTime` もポーズで止まる。
+  ポーズ中も動いてよいのは LOD の切り替えだけで、そのときは実時間の `f.realDt` を使う（**G0 後の修正**：以前は game.js の実時間の dt が `f.dt` を上書きしていた。smoke-all が検査する）
 
 ### 2.2 パス（P1–P7）
 
@@ -189,6 +190,7 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 | キー | 型・単位 | 中身・書かれる時 |
 | --- | --- | --- |
 | `dt` | s | 環境の dt（beginFrame。ポーズで 0） |
+| `realDt` | s | 実時間の dt（updateModules。**ポーズでも 0 にならない**。LOD の切り替えのような «止めなくてよい» 物だけ） |
 | `sdt` | s | 水の dt（waterUpdate。ゲームの時間の倍率込み） |
 | `envTime` | s | ポーズで止まる累積時間（slot 14.z と同じ） |
 | `waterTime` | s | `water.time`（波の時刻。waterUpdate で更新。slot 14.y） |
