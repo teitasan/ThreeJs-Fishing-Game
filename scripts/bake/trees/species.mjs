@@ -458,19 +458,19 @@ export const GENERATORS = {
   sugi: (vi) => conifer('sugi', vi),
   hinoki: (vi) => conifer('hinoki', vi),
   buna: (vi) => colonized('buna', vi, {
-    split: 0.36, attractors: 1100, D: 0.022, ri: 0.13, rk: 0.03, cards: 1050, cardSize: [0.75, 1.05], leafR: 0.0019,
+    split: 0.36, attractors: 1100, D: 0.022, ri: 0.13, rk: 0.03, cards: 1050, cardSize: [1.15, 1.6], leafR: 0.0019,
     trop: [0, 0.18, 0], jitter: 0.12, crook: 0.005, hollow: 0.35, cardsLod1: 330,
   }),
   mizunara: (vi) => colonized('mizunara', vi, {
-    split: 0.3, attractors: 950, D: 0.024, ri: 0.14, rk: 0.032, cards: 980, cardSize: [0.75, 1.1], leafR: 0.0019,
+    split: 0.3, attractors: 950, D: 0.024, ri: 0.14, rk: 0.032, cards: 980, cardSize: [1.15, 1.65], leafR: 0.0019,
     trop: [0, 0.08, 0], jitter: 0.3, crook: 0.012, hollow: 0.3, cardsLod1: 320,
   }),
   momiji: (vi) => colonized('momiji', vi, {
-    split: 0.2, attractors: 900, D: 0.03, ri: 0.16, rk: 0.035, cards: 900, cardSize: [0.5, 0.75], leafR: 0.0028,
+    split: 0.2, attractors: 900, D: 0.03, ri: 0.16, rk: 0.035, cards: 900, cardSize: [0.8, 1.15], leafR: 0.0028,
     trop: [0, 0.05, 0], jitter: 0.25, crook: 0.014, layers: 4.5, ryMul: 0.8, flatLeaves: true, cardsLod1: 300, flare: 0.35,
   }),
   hannoki: (vi) => colonized('hannoki', vi, {
-    split: 0.4, attractors: 900, D: 0.024, ri: 0.13, rk: 0.03, cards: 950, cardSize: [0.65, 0.95], leafR: 0.0018,
+    split: 0.4, attractors: 900, D: 0.024, ri: 0.13, rk: 0.03, cards: 950, cardSize: [1.0, 1.45], leafR: 0.0018,
     trop: [0, 0.35, 0], jitter: 0.15, crook: 0.006, ryMul: 1.05, cardsLod1: 300,
   }),
   akamatsu: (vi) => colonized('akamatsu', vi, {
