@@ -413,6 +413,24 @@ export default async function (h) {
     ];
   });
 
+  /* 層を重ねる：ngOwn(obj, NO_REFLECT, SHADOW_ONLY) は不透明に描き・影を落とし・反射に写らない */
+  await run('layers-combo', async () => {
+    const { ngOwn, NG_LAYER } = await import('/src/gfx/core/layers.js');
+    const L = window.__lab, g = L.gfx, T = g.THREE, D = L.dock;
+    L.cam('dock-3p'); L.freeze(10);
+    const m = new T.Mesh(new T.BoxGeometry(1, 1, 1), new T.MeshStandardMaterial());
+    m.position.set(D.dockEnd.x, 1.5, D.dockEnd.z);
+    m.castShadow = true;
+    ngOwn(m, NG_LAYER.NO_REFLECT, NG_LAYER.SHADOW_ONLY);
+    const n = { shadow: 0, main: 0, mirror: 0 };
+    m.onBeforeShadow = () => { n.shadow++; };
+    m.onBeforeRender = (r, sc, cam) => { if (cam === g.pipeline._mirror) n.mirror++; else n.main++; };
+    L.scene.add(m);
+    L.tick(5);
+    L.scene.remove(m); m.geometry.dispose(); m.material.dispose();
+    return [['NO_REFLECT + SHADOW_ONLY：影 ○・不透明 ○・反射 ×', n.shadow >= 5 && n.main >= 5 && n.mirror === 0, JSON.stringify(n)]];
+  });
+
   const lost = await h.eval(async () => {
     const L = window.__lab, gl = L.renderer.getContext();
     const ext = gl.getExtension('WEBGL_lose_context');

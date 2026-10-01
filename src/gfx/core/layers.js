@@ -32,14 +32,17 @@ export const NG_MASK = Object.freeze({
 });
 
 /**
- * obj とその子孫を ng の層に置く（layer 0 を外す）
+ * obj とその子孫を ng の層に置く（layer 0 を外す）。層は複数でもよい：パスのマスクと «どれか 1 つでも重なれば» 描かれる。
+ * 例：ngOwn(shrub, NG_LAYER.NO_REFLECT, NG_LAYER.SHADOW_ONLY) = 不透明に描き・近景の影を落とし・反射に写さない（CORE_API §4）
  * @param {import('three').Object3D} obj
  * @param {number} layer NG_LAYER の値
+ * @param {...number} more 足す層
  * @returns {import('three').Object3D} obj
  */
-export function ngOwn(obj, layer) {
+export function ngOwn(obj, layer, ...more) {
   obj.traverse((o) => {
     o.layers.set(layer);
+    for (const l of more) o.layers.enable(l);
     o.userData.ngOwned = true;
   });
   return obj;

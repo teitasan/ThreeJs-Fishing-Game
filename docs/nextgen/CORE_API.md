@@ -229,7 +229,7 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 ## 4. レイヤーとパスのマスク（`src/gfx/core/layers.js`）
 
 ```js
-import { NG_LAYER, NG_MASK, ngOwn } from '../core/layers.js';
+import { NG_LAYER, NG_MASK, ngOwn } from '../core/layers.js';   // ngOwn(obj, layer, ...more)
 NG_LAYER = { DEFAULT: 0, WORLD: 1, NO_REFLECT: 2, UNDERWATER: 3, WATER: 4, LATE_FX: 5, LATE: 6, FAR: 7, SHADOW_ONLY: 8 }
 NG_LAYER_SHADOW_TICK = 31   // core 専用（何も置かない）
 ```
@@ -253,7 +253,10 @@ NG_LAYER_SHADOW_TICK = 31   // core 専用（何も置かない）
 | LATE_FX | × | ×（late） | × | 雨・霧の板・しぶき・粒・蛍 |
 | LATE | × | ×（late） | × | ゲームの半透明（core が自動で付ける。ng の物は使わない） |
 
-- **ng の物は layer 0 を外して自分の層へ**：`ngOwn(obj, NG_LAYER.WORLD)`（子孫すべての `layers.set(layer)` と `userData.ngOwned = true`）。
+- **層は重ねてよい**（three は «カメラのマスクと物体の層のどれかが重なれば描く»）。上の表は 1 つの層だけに置いたときの性質で、重ねると «○» の和になる。
+  よく使う組：**NO_REFLECT + SHADOW_ONLY** = 不透明に描き・近景の影を落とし・反射に写さない（藪の低木・ヨシの近景など。代理の影の板を別に足さない）、
+  UNDERWATER + SHADOW_ONLY = 水中の物が近景の影を落とす。`ngOwn(obj, NG_LAYER.NO_REFLECT, NG_LAYER.SHADOW_ONLY)`（G0 後：2 つ目以降の層を受ける）
+- **ng の物は layer 0 を外して自分の層へ**：`ngOwn(obj, NG_LAYER.WORLD)`（子孫すべての `layers.set(layer)`（+ 足す層の `enable`）と `userData.ngOwned = true`）。
   子を後から足したら `ngOwn` をもう一度。ゲームの物は layer 0 のまま（raycast を変えない）
 - 影を落とす物は `castShadow = true` と SHADOW のマスクに入る層（0/1/7/8）の両方が要る
 - `terrain.underwaterProps.group` は空のダミー（game.js が水上で visible=false にする）。水中の物は UNDERWATER 層に
