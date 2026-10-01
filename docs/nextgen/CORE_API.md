@@ -206,8 +206,9 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 
 ### 3.5 失敗の扱い（safe.js）
 
-- `update` / `prepare` / `beforePass` / `setQuality` / `stats` / `produce` / `waterUpdate` / `renderPost` は `safety.guard` で呼ばれる。
+- `update` / `prepare` / `beforePass` / `setQuality` / `setLodScale` / `stats` / `produce` / `waterUpdate` / `setSize` は `safety.guard` で呼ばれる。
   **3 回投げたらそのモジュールは無効化**（root を隠す）→ **core のスタブで立て直す**（スタブ自身が落ちたら 1 回だけ作り直す）。services も既定値に戻る
+- post の `renderPost` は P7 の `guardPass('post')` の中（60 フレームで 2 回投げたらパスを止め、core の簡易表示に落ちる。post が無効化されてスタブで立て直されるとパスも戻る）
 - services の関数は provide の時点で包まれる：投げたら既定値の関数の結果を返す（ファサードの 25 か所以上から呼ばれる）
 - シェーダのリンクに失敗：`renderer.debug.onShaderError` がシェーダ先頭の印 `// ngmod:<id>:<key>` からモジュールを特定し、
   **次のフレームでそのモジュールの全マテリアルを MeshLambertMaterial に差し替える**（印は ngExtendStandard / ngShaderMaterial が自動で入れる。
