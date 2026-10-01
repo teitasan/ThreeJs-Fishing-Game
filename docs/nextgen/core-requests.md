@@ -169,3 +169,31 @@
 | G-5 | **持ち越し**（担当：Multiplayer / worker の担当。worker/** は描画の範囲外で保護） | `wrangler dev --local` は `POST /api/voice/join`（RealtimeKit の資格情報なし → 503）の後に «Can't read from request stream after response has been sent» で落ちることがある。mp-browser-test は再起動後に合格 |
 | G-6 | **持ち越し**（担当：post モジュール + 統合者、Phase 2） | MSAA の降格の判定（S-1）は実測なので、負荷と大きさで回ごとに変わる（G0 の high 1280×720 で 4× の回と 2× の回）。見た目が起動ごとに変わらないよう、ヒステリシスか «大きさで決める表» を Phase 2 で決める |
 | G-7 | **持ち越し**（担当：Core-A、Phase 2） | game-matrix の水中の視点は、計測の間にゲームの状態機械が «待ち» を外して水上に戻ることがある（行に uw 0 と出る）。game-costs は窓ごとに置き直している。perf-matrix を作るときに同じ置き直しを入れる |
+
+### G0 後のレビュー（3 人の査読、21 件）の判断
+
+core の凍結の後、render・api・contract の 3 つの観点で査読し、全部を実機で再現してから直した。口の形を変えた所は CORE_API に «G0 後» の印を付けた。
+
+| # | 扱い | 内容 |
+| --- | --- | --- |
+| R-1 | **修正**（4604b2f） | ポーズ中にモジュールの `f.dt` へ実時間が入っていた。updateModules は f.dt を上書きせず `f.realDt` に置く（CORE_API §2.1・§3.4） |
+| R-2 | **修正**（bda3ed7・e548a87） | 止まったパスは間を空けて試し直す（以前はセッション中止で不透明パスが固まった）。描画の中の onBeforeRender などは包んで持ち主のモジュールに数える |
+| R-3 | **修正**（e8e51a4） | G0 の «桟橋から見える魚» を決定的にした（g0-gameplay） |
+| R-4 | **修正**（11b423c） | 近景の影の bias を世界の 4cm に（−0.0004 は ≈0.6m で、低い遮蔽物の影が消えていた） |
+| R-5 | **修正**（8c42c3d） | テクセルスナップの格子を注視点の近くの基準点に固定（原点に固定すると太陽の回転で縁がざわついた） |
+| R-6 | **修正**（ddd90f6） | MSAA の降格（high のまま）では古い段のプログラムを手放さない（?msaa=2 の最大プログラム id 48 → 42） |
+| R-7 | **修正**（c46697e） | DRS は粗い段 `NG_DRS_LEVELS` だけを動き、上の段の見積もりが入るときだけ上げる（境目の負荷の模擬で RT の作り直し 38 → 1 回 / 600 秒）。viewport で描く範囲を変える案は、post（pmndrs の EffectPass は uv 0..1 で全体を読む）と sceneColor の mip の縁・ngScreen の意味を全部変えるので採らなかった。作り直しの 1 回 +7ms は残る |
+| R-8 | **一部採用**（57586a2） | late の深度を resolve しない（空のシーンで late 0.8 → 0.6ms / 4× 1.4 → 1.1ms）。sceneColor の mip を 4 段に限る案は TEXTURE_MAX_LEVEL を入れても縮まず（費用は 1 段目）採らない。spikes S-4 に空のシーンの下限（2× で ≈3.7ms + post のスタブ）を書いた。予算表の core の行は 1.5ms のまま（キャラクター・MSAA の費用は別に数える） |
+| R-9 | **修正**（614fb10） | ngCutout は A2C の段でも alphaTest を残す（反射 RT とインポスターの撮影でカードが四角く塗られていた） |
+| R-10 | **修正**（614fb10） | ngExtendStandard の鍵にモジュールと caustics を入れる。同じ «module:key» で違う GLSL なら警告 |
+| R-11 | **修正**（e0f6ec7） | 例のモジュールの update の ReferenceError（止めずに回すと 7.5 秒で無効化） |
+| R-12 | **修正**（e0f6ec7） | example-smoke は止めずに 300 フレーム回し、«健在»（例外・無効化・差し戻し・止まったパス・警告）を検査する。INJECT=prepare で不合格になる |
+| R-13 | **修正**（50e39d9） | post のスタブが `services.underwater.createEffect()` を鎖の先頭（露出前）に差し込む。呼ぶ時・渡す物・持ち主の約束を CORE_API §6.3 に |
+| R-14 | **修正**（f4b522c） | `gfx.setFlow` が Vector3 の z を落としていた。lab も game.js と同じ流れを入れ、`__lab.setFlow` を足した |
+| R-15 | **修正**（cb06222） | 全画面の効果が近景の影を読む口：`ctx.shadows.nearUniforms` + `NG_NEAR_SHADOW_GLSL`（段を替えても同じ {value}）。beforePass(SHADOW) のカメラは描くカメラ |
+| R-16 | **修正**（bf1912e） | lab の ctx.terrain を本編と同じ読むだけの項目を持つ写し（`makeLabTerrain`）にした |
+| R-17 | **持ち越し**（担当：Phase 2 の統合者 + weatherfx。40bf4b9 で文書化） | ngVolEnd とフロクセルは Phase 2。全マテリアルの媒質にフロクセルのサンプラーと区間分割を入れる core の変更が要る。Phase 1 は常に 0 で誰も読まない |
+| R-18 | **修正**（fd9c565） | registerDebugView は core が持つ（`NG_CORE_OWNED`。post は上書きしない。本編で出すなら `ctx.gfx.debugViews`） |
+| R-19 | **修正**（fd9c565） | 減衰体の一覧を core が持つ（addDamper は core の一覧へ・water は `services.water.dampers` を prepare で読む・持ち主が外されたらその分を外す）。«後で init するモジュールの services は prepare で読む» を CORE_API §6 の規則にした |
+| R-20 | **修正**（820ec72） | 層は重ねてよい（NO_REFLECT + SHADOW_ONLY）。`ngOwn(obj, layer, ...more)` |
+| R-21 | **修正**（40bf4b9） | ARCHITECTURE §6 の各節を CORE_API に合わせた（NG_WAVE_GLSL・高さ場影は core・水中の Effect・光芒・藪・debug 表示）。CORE_API は §6 にも優先する |
