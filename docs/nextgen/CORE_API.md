@@ -117,7 +117,11 @@
 - ライトは毎フレーム `layers.enableAll()`（late のマスクで太陽が消えない）
 - late 物体の判定（ゲームの物だけ。`userData.ngOwned` の物は対象外）：`transparent` か `depthTest === false` か `renderOrder >= 5`。
   ng の物で late に描きたい物は自分で WATER / LATE_FX / LATE の層に置く
-- 各パスは `safety.guardPass(id, fn)` で包まれる（60 フレームで 2 回失敗したパスはそのセッション止める）。パイプラインは game へ例外を出さない
+- 各パスは `safety.guardPass(id, fn)` で包まれる（60 フレームで 2 回失敗したパスは止めて、30 フレーム後に試し直す。続けて落ちるたびに待ちを倍に、上限 600 フレーム。
+  **G0 後の修正**：以前はセッション中止で、不透明パスが止まると世界の絵が固まった）。パイプラインは game へ例外を出さない
+- render の «中» で呼ばれる関数（物体の `onBeforeRender` / `onAfterRender` / `onBeforeShadow` / `onAfterShadow`、マテリアルの `onBeforeCompile` / `onBeforeRender`、
+  影の変種のマテリアルも）は core が毎フレームの走査で包む。投げても render は続き（その物体のその回の準備が欠けるだけ）、**持ち主のモジュール**（root `ng-<id>` の子孫）に
+  guard と同じ 1 回が数えられる（3 回でスタブへ）。ゲームの物体なら警告だけ。包んでも `onBeforeCompile` のプログラムの鍵は元の関数のまま
 - WebGL の文脈の喪失：描画を止める。復帰で core の RT が作り直され、**モジュールの `restoreGPU()`** が呼ばれる（自分の焼いた RT を焼き直す。
   喪失前の GL の物は dispose しない）
 
@@ -210,12 +214,14 @@ post の `renderPost(targets, dt)` / `compile()` / `setSize(w, h)`。
 
 - `update` / `prepare` / `beforePass` / `setQuality` / `setLodScale` / `stats` / `produce` / `waterUpdate` / `setSize` は `safety.guard` で呼ばれる。
   **3 回投げたらそのモジュールは無効化**（root を隠す）→ **core のスタブで立て直す**（スタブ自身が落ちたら 1 回だけ作り直す）。services も既定値に戻る
-- post の `renderPost` は P7 の `guardPass('post')` の中（60 フレームで 2 回投げたらパスを止め、core の簡易表示に落ちる。post が無効化されてスタブで立て直されるとパスも戻る）
+- post の `renderPost` は P7 の `guardPass('post')` の中（60 フレームで 2 回投げたらパスを止め、止めている間は core の簡易表示。間を空けて試し直す。post が無効化されてスタブで立て直されるとすぐ戻る）
+- 描画の中の関数（§2.2）が投げた分も、そのモジュールの 3 回に数えられる
 - services の関数は provide の時点で包まれる：投げたら既定値の関数の結果を返す（ファサードの 25 か所以上から呼ばれる）
 - シェーダのリンクに失敗：`renderer.debug.onShaderError` がシェーダ先頭の印 `// ngmod:<id>:<key>` からモジュールを特定し、
   **次のフレームでそのモジュールの全マテリアルを MeshLambertMaterial に差し替える**（印は ngExtendStandard / ngShaderMaterial が自動で入れる。
   自前の RawShaderMaterial を使うときは先頭に `// ngmod:<id>:<key>` を自分で書く）
-- 故障の注入の撮影（`scripts/gfx/scenarios/fault-inject.mjs`）が全モジュールで «フレームの完走・画面の維持・MP の後処理が走る» を確かめる
+- 故障の注入の撮影（`scripts/gfx/scenarios/fault-inject.mjs`）が全モジュールで «フレームの完走・画面の維持・MP の後処理が走る» を確かめ、
+  最後に描画の中の故障（ゲームとモジュールの物体の onBeforeRender / onBeforeCompile）で «パスが止まらない・持ち主だけがスタブへ» を確かめる
 
 ---
 
