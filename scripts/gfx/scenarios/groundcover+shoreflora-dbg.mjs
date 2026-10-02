@@ -22,5 +22,13 @@ export default async function (h) {
     return { c: c.map((o) => ({ name: o.name, alive: o.alive, root: o.root, kinds: o.kinds, hf: o.hf })), far };
   }, { x, z });
   console.log(JSON.stringify(r, null, 1));
+  const a = await h.eval(() => {
+    const L = window.__lab, A = L.programAudit(), g = L.gfx;
+    L.cam({ pos: [36.86, 2.5, -111.02], target: [27.1, 0.9, -111.61] }); L.tick(5);
+    const sf = g.modules.get('shoreflora');
+    return { failed: A.failed, over: A.over, shaderFailed: [...(g.safety.shaderFailed || [])], sfDebug: sf?.debug,
+      vis: ['reedNear', 'reedMid', 'reedLod1', 'reedCard'].map((k) => [k, sf?.[k]?.visible, sf?.[k]?.geometry?.instanceCount, sf?.[k]?.material?.userData?.ngFailed ?? null]) };
+  });
+  console.log('audit', JSON.stringify(a));
   await h.shot('dbg');
 }

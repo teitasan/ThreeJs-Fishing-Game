@@ -31,6 +31,8 @@ import { NG_WAVE_GLSL } from '../core/glsl/wave.glsl.js';
 const ID = 'shoreflora';
 /** 反射の LOD1 の茎を描く距離 m（その先はカード） */
 const SF_REFL_NEAR = 40;
+/** 近景の型板（茎 12 本・葉 5 枚）を使う距離 m（+ 株ごとに 0..6m）。その先の近い株は LOD1 の型板 */
+const SF_MID_D = 26;
 
 export class ShorefloraModule extends NgModule {
   static id = ID;
@@ -67,6 +69,8 @@ export class ShorefloraModule extends NgModule {
     });
     this.nearA0 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
     this.nearA1 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
+    this.midA0 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
+    this.midA1 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
     this.cardA0 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
     this.cardA1 = new T.InstancedBufferAttribute(new Float32Array(n * 4), 4).setUsage(T.DynamicDrawUsage);
     const reedMat = (mode) => {
@@ -97,6 +101,8 @@ export class ShorefloraModule extends NgModule {
     ngAttachDepth(this.reedNear);
     this.reedLod1 = mk(reedTemplate(T, SF_TPL.reedLod1, true), this.nearA0, this.nearA1, reedMat(1), 'ng-sf-reeds-lod1');
     this.reedLod1.visible = false;
+    /* 中景（SF_MID_D より先の近い株）：LOD1 の型板（茎 6 本・葉 2 枚）を主のパスで。LOD1 と同じマテリアル */
+    this.reedMid = mk(reedTemplate(T, SF_TPL.reedLod1, true), this.midA0, this.midA1, this.reedLod1.material, 'ng-sf-reeds-mid');
     this.reedCard = mk(reedCardTemplate(T), this.cardA0, this.cardA1, reedMat(2), 'ng-sf-reed-cards');
     this.reedMats = [this.reedNear.material, this.reedLod1.material, this.reedCard.material];
     /* 減衰体：株の円（init で 1 回。core が一覧を持つ） */
@@ -205,7 +211,8 @@ export class ShorefloraModule extends NgModule {
     this._frustum.setFromProjectionMatrix(this._m4.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const fr = this._frustum, sph = this._sph;
     const A0 = this.rA0, A1 = this.rA1, N0 = this.nearA0.array, N1 = this.nearA1.array, C0 = this.cardA0.array, C1 = this.cardA1.array;
-    let nn = 0, nc = 0, stems = 0;
+    let nn = 0, nm = 0, nc = 0, stems = 0;
+    const M0 = this.midA0.array, M1 = this.midA1.array;
     for (let i = 0; i < this.reedTierN; i++) {
       const o = i * 4, x = A0[o], z = A0[o + 2], h = A0[o + 3];
       const d = Math.hypot(x - p.x, z - p.z);
@@ -215,17 +222,26 @@ export class ShorefloraModule extends NgModule {
         let vis = fr.intersectsSphere(sph);
         if (!vis) { sph.center.y = -h * 0.5; vis = fr.intersectsSphere(sph); }
         if (vis) {
-          N0.set(A0.subarray(o, o + 4), nn * 4); N1.set(A1.subarray(o, o + 4), nn * 4); nn++;
-          stems += sfStemCount(A1[o]);
+          /* 近景の型板は SF_MID_D（株ごとに +0..6m のずれ：輪の線を出さない）まで、その先は LOD1 の型板 */
+          if (d < SF_MID_D + 6 * A1[o + 3]) {
+            N0.set(A0.subarray(o, o + 4), nn * 4); N1.set(A1.subarray(o, o + 4), nn * 4); nn++;
+            stems += sfStemCount(A1[o]);
+          } else {
+            M0.set(A0.subarray(o, o + 4), nm * 4); M1.set(A1.subarray(o, o + 4), nm * 4); nm++;
+            stems += Math.min(6, sfStemCount(A1[o]));
+          }
         }
       }
       if (d > near - q.fadeBand || (d > 15 && A1[o] > 0.35)) { C0.set(A0.subarray(o, o + 4), nc * 4); C1.set(A1.subarray(o, o + 4), nc * 4); nc++; }
     }
     for (const a of [this.nearA0, this.nearA1]) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(nn, 1) * 4); a.needsUpdate = true; }
+    for (const a of [this.midA0, this.midA1]) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(nm, 1) * 4); a.needsUpdate = true; }
     for (const a of [this.cardA0, this.cardA1]) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(nc, 1) * 4); a.needsUpdate = true; }
     this.reedNear.geometry.instanceCount = nn;
     this.reedLod1.geometry.instanceCount = nn;
+    this.reedMid.geometry.instanceCount = nm;
     this.reedCard.geometry.instanceCount = nc;
+    this.debug.reedsMid = nm;
     this.debug.reedsNear = nn; this.debug.reedsCard = nc; this.debug.stemsNear = stems;
   }
 
@@ -309,12 +325,13 @@ void main() {
 
   stats() {
     const nr = this.reedNear?.geometry.instanceCount || 0, nc = this.reedCard?.geometry.instanceCount || 0;
+    const nm = this.reedMid?.geometry.instanceCount || 0;
     const nl = this.lily?.geometry.instanceCount || 0, nw = this.weed?.geometry.instanceCount || 0;
     const tri = (m) => (m?.geometry.index ? m.geometry.index.count / 3 : 0);
-    const draws = (nr ? 1 : 0) + (nc ? 1 : 0) + (nl ? 1 : 0) + (nw ? 1 : 0);
+    const draws = (nr ? 1 : 0) + (nm ? 1 : 0) + (nc ? 1 : 0) + (nl ? 1 : 0) + (nw ? 1 : 0);
     return {
-      draws, tris: nr * tri(this.reedNear) + nc * 2 + nl * tri(this.lily) + nw * tri(this.weed),
-      instances: nr + nc + nl + nw, texBytes: 0, programs: 4,
+      draws, tris: nr * tri(this.reedNear) + nm * tri(this.reedMid) + nc * 2 + nl * tri(this.lily) + nw * tri(this.weed),
+      instances: nr + nm + nc + nl + nw, texBytes: 0, programs: 4,
     };
   }
 
