@@ -26,16 +26,29 @@ varying vec2 vUv;
 void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }
 `;
 const VUV = 'varying vec2 vUv;\n';
+/** CPU へ戻す空：行 0–15 = skyView の mip 3（32×16）、行 16 = 地平の仰角（rig の HZ_Y）の行を 8 テクセルずつ横に平均 */
+export const PROBE_W = 32, PROBE_H = 17;
+const PROBE_FRAG = `
+void ngSkyProbeMain() {
+  vec2 fc = gl_FragCoord.xy;
+  if (fc.y < 16.0) { gl_FragColor = vec4(textureLod(uSkyViewIn, fc / vec2(32.0, 16.0), 3.0).rgb, 1.0); return; }
+  float v = 0.5 + 0.5 * sqrt(atan(0.02) * 0.63661977);
+  vec3 c = vec3(0.0);
+  for (int k = 0; k < 8; k++) c += textureLod(uSkyViewIn, vec2((floor(fc.x) * 8.0 + float(k) + 0.5) / 256.0, v), 0.0).rgb;
+  gl_FragColor = vec4(c / 8.0, 1.0);
+}
+`;
 /* 2 つの LUT を 1 本のプログラムに（uLutMode 0 = 透過、1 = 多重散乱）。プログラムの数を抑える */
 const LUT_FRAG = VUV + 'uniform float uLutMode;\n'
   + TRANS_FRAG.replace('void main() {', 'void ngSkyTransMain() {')
   + MS_FRAG.replace('uniform float uHaze;', '').replace('void main() {', 'void ngSkyMSMain() {')
   + '\nvoid main() { if (uLutMode < 0.5) ngSkyTransMain(); else ngSkyMSMain(); }\n';
-/* skyView の合成と帯の写しを 1 本に（uCopyMode 0 = skyView、1 = 帯 → パノラマ） */
-const UTIL_FRAG = VUV + 'uniform float uCopyMode;\n'
+/* skyView の合成・帯の写し・CPU へ戻す空の縮小を 1 本に（uCopyMode 0 = skyView、1 = 帯 → パノラマ、2 = 32×16 の縮小） */
+const UTIL_FRAG = VUV + 'uniform float uCopyMode;\nuniform sampler2D uSkyViewIn;\n'
   + SKYVIEW_FRAG.replace('void main() {', 'void ngSkyViewMain() {')
   + STRIP_COPY_FRAG.replace('void main() {', 'void ngSkyCopyMain() {')
-  + '\nvoid main() { if (uCopyMode < 0.5) ngSkyViewMain(); else ngSkyCopyMain(); }\n';
+  + PROBE_FRAG
+  + '\nvoid main() { if (uCopyMode < 0.5) ngSkyViewMain(); else if (uCopyMode < 1.5) ngSkyCopyMain(); else ngSkyProbeMain(); }\n';
 
 
 const SKY_W = 256, SKY_H = 128;
@@ -71,7 +84,7 @@ export class SkyModule extends NgModule {
       uNgCoverN: { value: null }, uCoverXf: V4(),
       uNgShape: { value: null }, uNgShape2: { value: null }, uNgDetail: { value: null }, uNgCirrus: { value: null }, uMoonTex: { value: null },
       uPano: V4(), uCloud: V4(), uCloud2: V4(), uWind: V4(), uLight: V4(), uLightE: V3(), uAmbTop: V3(), uAmbBot: V3(),
-      uMode: V4(), uCirrus: V4(), uCirrusW: V4(),
+      uMode: V4(), uCirrus: V4(), uCirrusW: V4(), uSkyViewIn: { value: null },
       uSunDisk: V3(), uMoonDisk: V3(), uCloudSharp: V4(), uNightSky: V4(), uSkyMisc: V4(),
     };
   }
@@ -113,10 +126,19 @@ export class SkyModule extends NgModule {
     this.U.ngSkyTrans.value = this.rtTrans.texture;
     this.U.ngSkyMS.value = this.rtMS.texture;
     this.U.uSkyClear.value = this.rtClear.texture;
+    this.rtProbe = rt(PROBE_W, PROBE_H);
+    this._probeBuf = new Uint16Array(PROBE_W * PROBE_H * 4);
+    this._probeOn = typeof renderer.readRenderTargetPixelsAsync === 'function';
+    this._probePending = false;
+    this._probeT = -1e9;
     progress?.(0.1);
-    await this._bake(progress);
-    /* 薄明の利得の表（CPU ≈20ms を 30ms ごとに譲って） */
+    const lp = this.loadParts = {};
+    let tm = performance.now();
+    const mark = (k) => { const t = performance.now(); lp[k] = +(t - tm).toFixed(1); tm = t; };
+    await this._bake(progress, mark);
+    /* 薄明の利得の表（CPU ≈40ms を 30ms ごとに譲って） */
     for (const _ of this.rig.buildTwilight()) await forge.step();
+    mark('twilight');
     this.rig._last = null;
     this._allocPano();
     /* ドーム */
@@ -143,24 +165,38 @@ export class SkyModule extends NgModule {
     /* 最初の 1 枚を全部描いてプログラムを作っておく */
     this.ready = true;
     this.full = true;
+    mark('setup');
+    /* 自前のパスのプログラムを並列でコンパイル（KHR_parallel_shader_compile。読み込み画面を止めない） */
+    try {
+      const tmp = new T.Scene();
+      for (const m of [this.mLut, this.mClear, this.mPano, this.mUtil]) { const me = new T.Mesh(tri, m); me.frustumCulled = false; tmp.add(me); }
+      if (typeof renderer.compileAsync === 'function') await renderer.compileAsync(tmp, this._passCam);
+    } catch (e) { /* 同期のコンパイルに任せる */ }
+    mark('compile');
     this._gpu(true);
+    mark('firstGpu');
     progress?.(1);
   }
 
   /* 起動時の焼き込み：形 64³・細部 32³・巻雲 512²・月 512² */
-  async _bake(progress) {
+  async _bake(progress, mark = () => {}) {
     const { THREE: T, forge } = this.ctx;
     const old = [this.U.uNgShape.value, this.U.uNgDetail.value, this.U.uNgCirrus.value, this.U.uMoonTex.value];
     this.U.uNgShape.value = forge.bake3D({ w: 64, h: 64, d: 64, frag: SHAPE_FRAG, type: T.UnsignedByteType, wrap: 'repeat' });
+    mark('shape');
     await forge.step(); progress?.(0.4);
     this.U.uNgShape2.value = forge.bake2D({ w: 256, h: 256, frag: SHAPE2_FRAG, uniforms: { uNgShape: { value: this.U.uNgShape.value } }, type: T.UnsignedByteType, format: T.RedFormat, mips: true, wrap: 'repeat' });
     this.U.uNgDetail.value = forge.bake3D({ w: 32, h: 32, d: 32, frag: DETAIL_FRAG, type: T.UnsignedByteType, wrap: 'repeat' });
+    mark('shape2+detail');
     await forge.step(); progress?.(0.6);
     this.U.uNgCirrus.value = forge.bake2D({ w: 512, h: 512, frag: CIRRUS_FRAG, type: T.UnsignedByteType, mips: true, wrap: 'repeat' });
+    mark('cirrus');
     await forge.step(); progress?.(0.75);
     this.U.uMoonTex.value = forge.bake2D({ w: 512, h: 256, frag: MOON_FRAG, type: T.UnsignedByteType, mips: true, wrap: 'clamp' });
     await forge.step();
+    mark('moon');
     this.U.uNgCoverN.value = forge.bake2D({ w: 2048, h: 2048, frag: COVER_FRAG, uniforms: { ngFrame: { value: ngFrameData } }, type: T.UnsignedByteType, format: T.RedFormat, wrap: 'clamp' });
+    mark('cover');
     for (const t of old) if (t && t !== this.U.uNgShape.value) { /* forge の RT は forge が持つ */ }
     progress?.(0.85);
   }
@@ -319,6 +355,33 @@ export class SkyModule extends NgModule {
     if (!this.ready) return;
     this.frame++;
     this._gpu(false);
+    this._probe();
+  }
+
+  /* GPU の空（雲込み）を 32×16 に縮めて非同期で CPU へ戻す（0.25s ごと）。リグは地平の整合・SH・sampleSky に
+     その値を使う（CPU の雲の模型は GPU の雲パノラマと 20% ずれた）。跳びの後に描いた分だけを受け取る */
+  _probe() {
+    if (!this._probeOn || this._probePending) return;
+    const now = performance.now();
+    if (now - this._probeT < 250) return;
+    this._probeT = now;
+    const U = this.U;
+    U.uCopyMode.value = 2;
+    U.uSkyViewIn.value = this.rtView.texture;
+    this._pass(this.mUtil, this.rtProbe);
+    U.uSkyViewIn.value = null;
+    U.uCopyMode.value = 0;
+    const gen = this.rig.jumpGen;
+    this._probePending = true;
+    let p;
+    try { p = this.renderer.readRenderTargetPixelsAsync(this.rtProbe, 0, 0, PROBE_W, PROBE_H, this._probeBuf); } catch (e) { p = Promise.reject(e); }
+    /* three r180 は待つ間 PIXEL_PACK_BUFFER を束ねたままにする（他の同期の readPixels が INVALID_OPERATION になる）。
+       読み戻しの続きは自分で束ね直すので、ここで外す */
+    try { const gl = this.renderer.getContext(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch (e) { /* 無視 */ }
+    Promise.resolve(p).then(() => {
+      this._probePending = false;
+      if (gen === this.rig.jumpGen) this.rig.setGpuSky(this._probeBuf, PROBE_W, PROBE_H);
+    }, () => { this._probePending = false; this._probeOn = false; });
   }
 
   setQuality(tier) {
@@ -339,7 +402,7 @@ export class SkyModule extends NgModule {
   }
 
   dispose() {
-    for (const r of [this.rtTrans, this.rtMS, this.rtClear, this.rtView, this.rtPano, this.rtStrip]) r?.dispose();
+    for (const r of [this.rtTrans, this.rtMS, this.rtClear, this.rtView, this.rtPano, this.rtStrip, this.rtProbe]) r?.dispose();
     for (const m of [this.mLut, this.mClear, this.mPano, this.mUtil, this.dome?.material]) m?.dispose();
     this._passMesh?.geometry.dispose();
     super.dispose();

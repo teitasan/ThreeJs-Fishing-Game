@@ -118,6 +118,9 @@ export class SkyRig {
     this._shT = -1; this._last = null;
     this.canopy = 0;
     this.uwInsc = null; this.uw = 0;
+    /* GPU の空（skyView の縮小、非同期の読み戻し）。跳びのたびに jumpGen が増え、古い読み戻しは捨てる */
+    this.jumpGen = 0;
+    this.gpuSky = null; this.gpuW = 0; this.gpuH = 0; this.gpuAge = 1e9;
     this.p = { eS0: 0, eS: [0, 0, 0], eM: [0, 0, 0], ambTop: [0, 0, 0], ambBot: [0, 0, 0], deckL: [0, 0, 0], lightE: [0, 0, 0], light: [0, 1, 0], useMoonLight: false };
     this.out = {
       keyDir: [0, 1, 0], keyE: [0, 0, 0], keyColor: [1, 1, 1], keyIntensity: 0,
@@ -228,6 +231,8 @@ export class SkyRig {
     const wp = weatherParams(cloud, rain, h);
     const L0 = this._last;
     const jumped = !L0 || Math.abs(angDiff(h, L0.h)) > 0.05 || Math.abs(cloud - L0.cloud) > 0.02 || Math.abs(rain - L0.rain) > 0.02;
+    if (jumped) { this.jumpGen++; this.gpuSky = null; }
+    this.gpuAge += dt;
     this._last = { h, cloud, rain };
     /* 大気の表（haze） */
     if (this._haze2(wp.haze, jumped)) this.rr = 0;
@@ -277,8 +282,9 @@ export class SkyRig {
       this.rr = (this.rr + 1) % n;
     }
     this._filled = true;
-    /* 雲を見かけの模型で重ねる（SH・地平・ファサード） */
+    /* 雲を見かけの模型で重ねる（SH・地平・ファサード）。GPU の空が戻っていれば上半球はその値（雲パノラマそのもの） */
     for (let i = 0; i < n; i++) this._cloudy(i, wp, Tcl, D);
+    if (this.gpuSky && this.gpuAge < 2) this._fromGpu();
     /* SH（0.25s ごと・跳びで即）と空の照度 */
     const t = fin(input.envTime, 0);
     if (jumped || this._shT < 0 || t - this._shT >= 0.25 || t < this._shT) {
@@ -340,6 +346,49 @@ export class SkyRig {
     out.milky = NIGHT_FLOOR[1] * 1.4 * (1 - smooth(0.3, 0.75, cloud)) * 0.5;
     out.night = night;
     return out;
+  }
+
+  /**
+   * GPU の空の縮小（RGBA16F の半精度、ngSkyViewUV の写像、w×h）を受け取る
+   * @param {Uint16Array} buf
+   */
+  setGpuSky(buf, w, h) {
+    const n = w * h;
+    if (!this.gpuSky || this.gpuSky.length !== n * 3) this.gpuSky = new Float32Array(n * 3);
+    const g = this.gpuSky;
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < 3; k++) {
+        const v = half(buf[i * 4 + k]);
+        g[i * 3 + k] = Number.isFinite(v) && v >= 0 ? Math.min(v, 6e4) : 0;
+      }
+    }
+    this.gpuW = w; this.gpuH = h; this.gpuAge = 0;
+  }
+
+  /* 上半球の方向の Lsky を GPU の空で置き換える（双一次。u は方位で周期） */
+  _fromGpu() {
+    const g = this.gpuSky, W = this.gpuW, H = Math.min(this.gpuH, 16), n = this.dirs.length;
+    for (let i = 0; i < n; i++) {
+      const d = this.dirs[i];
+      if (d[1] <= 0) continue;
+      if (i >= SH_N && this.gpuH > 16) {
+        /* 地平の 8 方位：17 行目（地平の仰角そのままの行） */
+        const x = (Math.atan2(d[2], d[0]) / (2 * Math.PI) + 0.5) * W - 0.5;
+        const x0 = Math.floor(x), fx = x - x0, xa = ((x0 % W) + W) % W, xb = (xa + 1) % W, o = 16 * W;
+        for (let k = 0; k < 3; k++) this.Lsky[i * 3 + k] = g[(o + xa) * 3 + k] * (1 - fx) + g[(o + xb) * 3 + k] * fx;
+        continue;
+      }
+      const u = Math.atan2(d[2], d[0]) / (2 * Math.PI) + 0.5;
+      const el = Math.asin(Math.min(1, d[1]));
+      const v = 0.5 + 0.5 * Math.sqrt(el / (Math.PI / 2));
+      const x = u * W - 0.5, y = Math.min(Math.max(v * H - 0.5, 0), H - 1);
+      const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+      const xa = ((x0 % W) + W) % W, xb = (xa + 1) % W, y1 = Math.min(y0 + 1, H - 1);
+      for (let k = 0; k < 3; k++) {
+        const a = g[(y0 * W + xa) * 3 + k], b = g[(y0 * W + xb) * 3 + k], c = g[(y1 * W + xa) * 3 + k], e = g[(y1 * W + xb) * 3 + k];
+        this.Lsky[i * 3 + k] = (a + (b - a) * fx) + ((c + (e - c) * fx) - (a + (b - a) * fx)) * fy;
+      }
+    }
   }
 
   /* 大気の表の入れ替え（2 つの AtmosphereCPU を交互に） */
@@ -440,6 +489,11 @@ export class SkyRig {
 }
 
 function fin(v, d) { return Number.isFinite(v) ? v : d; }
+/** IEEE の半精度 → 数 */
+function half(u) {
+  const s = (u & 0x8000) ? -1 : 1, e = (u >> 10) & 31, f = u & 1023;
+  return e === 0 ? s * f * 5.960464477539063e-8 : e === 31 ? (f ? NaN : s * Infinity) : s * (1 + f / 1024) * Math.pow(2, e - 15);
+}
 function norm3(x, y, z) { const l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; }
 function set4(F, slot, x, y, z, w) {
   F[slot * 4] = fin(x, 0); F[slot * 4 + 1] = fin(y, 0); F[slot * 4 + 2] = fin(z, 0); F[slot * 4 + 3] = fin(w, 0);
