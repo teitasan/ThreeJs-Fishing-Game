@@ -5,12 +5,14 @@
      560〜1100m で lake.heightAt の山の続きから «3 本の山並み»（1000 / 1650 / 2450m を中心に蛇行）へ移る。
      遠い山並みほど高く、手前の稜線の上に頭を出す → 空気遠近（core の媒質）で日本の青い層の山並み
    - 高さは CPU で 1 回（シードだけで決まる。Math.random なし）。法線は格子の中心差分
-   - 地平の角（8 方位）を頂点に焼き、太陽が低いと山の陰が谷に落ちる（夕方の稜線の層を立たせる）
+   - 地平の角（8 方位）は起動時に GPU で焼く（RIDGE_HORIZON_BAKE、seg × rows の RGBA16F × 2。CPU では 300ms かかった）。
+     頂点が texelFetch で読み、太陽が低いと山の陰が谷に落ちる（夕方の稜線の層を立たせる）
    - 素材：植林の暗い帯・広葉樹の明るい斑・尾根のアカマツ・急斜面の露岩。樹冠の凹凸は法線だけ
    純粋な JS の部分（ridgeHeight・buildRidgeArrays）は Node でテストできる
    =========================================================== */
 import { hash01 } from '../../world/rng.js';
 import { NG_NOISE_GLSL } from '../core/glsl/noise.glsl.js';
+import { NG_HEIGHTFIELD_GLSL } from '../core/glsl/heightfield.glsl.js';
 
 export const RIDGE_R0 = 496;          // 地形の下へ潜り込ませる最初の列（地形は 508m で切れる）
 export const RIDGE_CLIP = 508;
@@ -76,9 +78,27 @@ export function ridgeHeight(seed, r, th, base) {
  * 帯の格子（列の半径・高さ・法線・地平の角）を作る
  * @param {{seed:number, baseAt:(x:number,z:number)=>number, innerAt:(x:number,z:number)=>number, seg?:number, rows?:number}} o
  *   baseAt = lake.heightAt（山の続き）、innerAt = heightfield.heightAt（地形と同じ補間。r ≤ 508）
- * @returns {{radii:Float32Array, pos:Float32Array, nrm:Float32Array, hor0:Float32Array, hor1:Float32Array, index:Uint32Array, seg:number, rows:number}}
+ * @returns {{radii:Float32Array, H:Float32Array, pos:Float32Array, nrm:Float32Array, ij:Float32Array, index:Uint32Array, seg:number, rows:number}}
+ *   H = 高さ（rows × seg、行 = 半径）。地平の角は GPU で（RIDGE_HORIZON_BAKE）
  */
 export function buildRidgeArrays(o) {
+  const g = ridgeGen(o);
+  let r = g.next();
+  while (!r.done) r = g.next();
+  return r.value;
+}
+/**
+ * 同じ物を 1 回 ≤ ~20ms に刻んで作る（読み込み画面を止めない。yieldFn は forge.step）
+ * @param {object} o buildRidgeArrays と同じ
+ * @param {() => Promise<void>} yieldFn
+ */
+export async function buildRidgeArraysAsync(o, yieldFn) {
+  const g = ridgeGen(o);
+  let r = g.next();
+  while (!r.done) { await yieldFn(); r = g.next(); }
+  return r.value;
+}
+function* ridgeGen(o) {
   const seg = o.seg || RIDGE_SEG;
   const radii = [RIDGE_R0, RIDGE_CLIP];
   let r = RIDGE_CLIP;
@@ -100,6 +120,7 @@ export function buildRidgeArrays(o) {
       }
       H[j * seg + i] = h;
     }
+    if ((j & 7) === 7) yield;
   }
   const pos = new Float32Array(rows * W * 3), nrm = new Float32Array(rows * W * 3);
   const at = (j, i) => H[Math.min(rows - 1, Math.max(0, j)) * seg + (((i % seg) + seg) % seg)];
@@ -118,47 +139,9 @@ export function buildRidgeArrays(o) {
       nrm[v * 3] = -gx / l; nrm[v * 3 + 1] = 1 / l; nrm[v * 3 + 2] = -gz / l;
     }
   }
-  /* 地平の角（tan）：8 方位（+x から反時計回り 45° ずつ）へ、極座標の格子を引きながら進む */
-  const hor0 = new Float32Array(rows * W * 4), hor1 = new Float32Array(rows * W * 4);
-  const lookup = (x, z) => {
-    const rr = Math.hypot(x, z);
-    if (rr < RIDGE_CLIP) return o.innerAt(x, z);
-    if (rr >= RIDGE_R1) return -1e4;
-    let j = 1;
-    while (j < rows - 1 && radii[j + 1] < rr) j++;
-    const t = (rr - radii[j]) / Math.max(radii[j + 1] - radii[j], 1e-3);
-    let a = Math.atan2(z, x); if (a < 0) a += Math.PI * 2;
-    const fi = (a / (Math.PI * 2)) * seg, i0 = Math.floor(fi), fu = fi - i0;
-    const h0 = at(j, i0) + (at(j, i0 + 1) - at(j, i0)) * fu, h1 = at(j + 1, i0) + (at(j + 1, i0 + 1) - at(j + 1, i0)) * fu;
-    return h0 + (h1 - h0) * Math.min(1, Math.max(0, t));
-  };
-  const STEPS = 18;
-  for (let j = 1; j < rows; j++) {
-    for (let i = 0; i < seg; i++) {
-      const v = j * W + i;
-      const x0 = pos[v * 3], y0 = pos[v * 3 + 1], z0 = pos[v * 3 + 2];
-      for (let d = 0; d < RIDGE_HORIZON_DIRS; d++) {
-        const a = (d / RIDGE_HORIZON_DIRS) * Math.PI * 2, dx = Math.cos(a), dz = Math.sin(a);
-        let best = -0.3, step = 12;
-        let tt = 0;
-        for (let k = 0; k < STEPS; k++) {
-          tt += step; step *= 1.32;
-          const hh = lookup(x0 + dx * tt, z0 + dz * tt);
-          const tn = (hh - y0) / tt;
-          if (tn > best) best = tn;
-        }
-        (d < 4 ? hor0 : hor1)[v * 4 + (d & 3)] = best;
-      }
-    }
-  }
-  for (let j = 0; j < rows; j++) {               // 一周の継ぎ目（i = seg は i = 0 と同じ）と内側の列
-    for (let k = 0; k < 4; k++) {
-      hor0[(j * W + seg) * 4 + k] = hor0[(j * W) * 4 + k];
-      hor1[(j * W + seg) * 4 + k] = hor1[(j * W) * 4 + k];
-      if (j === 0) { hor0[k] = hor0[(W) * 4 + k]; hor1[k] = hor1[(W) * 4 + k]; }
-    }
-  }
-  for (let i = 1; i <= seg; i++) for (let k = 0; k < 4; k++) { hor0[i * 4 + k] = hor0[(W + i) * 4 + k]; hor1[i * 4 + k] = hor1[(W + i) * 4 + k]; }
+  /* 格子の番号（地平の角のテクスチャの texelFetch。i = seg は 0 と同じ列） */
+  const ij = new Float32Array(rows * W * 2);
+  for (let j = 0; j < rows; j++) for (let i = 0; i <= seg; i++) { const v = j * W + i; ij[v * 2] = i % seg; ij[v * 2 + 1] = j; }
   const index = new Uint32Array((rows - 1) * seg * 6);
   let n = 0;
   for (let j = 0; j < rows - 1; j++) {
@@ -169,17 +152,66 @@ export function buildRidgeArrays(o) {
       index[n++] = b; index[n++] = c; index[n++] = d;
     }
   }
-  return { radii: Float32Array.from(radii), pos, nrm, hor0, hor1, index, seg, rows };
+  return { radii: Float32Array.from(radii), H, pos, nrm, ij, index, seg, rows };
 }
 
 /* 素材：樹冠のまだら・露岩・地平の角による山の陰 */
+export const RIDGE_MAX_ROWS = 48;
+/** 地平の角の焼き込み（forge.bake2D、幅 seg × 高さ rows）。ngRidgeDirSet = 0 で方位 0–3、1 で 4–7（+x から反時計回り 45° ずつ） */
+export const RIDGE_HORIZON_BAKE = NG_HEIGHTFIELD_GLSL + /* glsl */ `
+precision highp sampler2D;
+uniform sampler2D ngRidgeH;           // 高さ（R32F、seg × rows、Nearest）
+uniform float ngRidgeRadii[${RIDGE_MAX_ROWS}];
+uniform vec3 ngRidgeDims;             // seg, rows, 方位の組（0 / 1）
+float ngRgAt(int j, int i, int seg) { return texelFetch(ngRidgeH, ivec2(((i % seg) + seg) % seg, j), 0).r; }
+float ngRgLookup(vec2 xz, int seg, int rows) {
+  float rr = length(xz);
+  if (rr < ${RIDGE_CLIP.toFixed(1)}) return ngTerrainH(xz);
+  if (rr >= ngRidgeRadii[rows - 1]) return -1e4;
+  int lo = 1, hi = rows - 1;
+  for (int k = 0; k < 6; k++) { if (hi - lo <= 1) break; int mid = (lo + hi) / 2; if (ngRidgeRadii[mid] < rr) lo = mid; else hi = mid; }
+  float t = clamp((rr - ngRidgeRadii[lo]) / max(ngRidgeRadii[lo + 1] - ngRidgeRadii[lo], 1e-3), 0.0, 1.0);
+  float a = atan(xz.y, xz.x);
+  if (a < 0.0) a += 6.2831853;
+  float fi = a / 6.2831853 * float(seg);
+  int i0 = int(floor(fi));
+  float fu = fi - float(i0);
+  float h0 = mix(ngRgAt(lo, i0, seg), ngRgAt(lo, i0 + 1, seg), fu);
+  float h1 = mix(ngRgAt(lo + 1, i0, seg), ngRgAt(lo + 1, i0 + 1, seg), fu);
+  return mix(h0, h1, t);
+}
+void main() {
+  int seg = int(ngRidgeDims.x + 0.5), rows = int(ngRidgeDims.y + 0.5);
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  float th = float(p.x) / float(seg) * 6.2831853, r = ngRidgeRadii[p.y];
+  vec3 P0 = vec3(cos(th) * r, ngRgAt(p.y, p.x, seg), sin(th) * r);
+  vec4 o = vec4(-0.3);
+  for (int d = 0; d < 4; d++) {
+    float a = (ngRidgeDims.z * 4.0 + float(d)) * 0.78539816;
+    vec2 dir = vec2(cos(a), sin(a));
+    float best = -0.3, stp = 12.0, tt = 0.0;
+    for (int k = 0; k < 18; k++) {
+      tt += stp; stp *= 1.32;
+      best = max(best, (ngRgLookup(P0.xz + dir * tt, seg, rows) - P0.y) / tt);
+    }
+    o[d] = best;
+  }
+  gl_FragColor = o;
+}
+`;
+
+/* 素材：樹冠のまだら・露岩・地平の角による山の陰 */
 export const RIDGE_VERT_PARS = /* glsl */ `
-attribute vec4 aNgHor0;
-attribute vec4 aNgHor1;
+precision highp sampler2D;
+attribute vec2 aNgRidgeIJ;
+uniform sampler2D ngRidgeHor0;
+uniform sampler2D ngRidgeHor1;
 varying float ngRidgeSun;
 `;
 export const RIDGE_VERT_BEGIN = /* glsl */ `
 {
+  ivec2 ngIJ = ivec2(aNgRidgeIJ + 0.5);
+  vec4 aNgHor0 = texelFetch(ngRidgeHor0, ngIJ, 0), aNgHor1 = texelFetch(ngRidgeHor1, ngIJ, 0);
   /* key の方位で 8 方位の地平の角を補間し、key の高度と比べる（半影 ≈ 2.5°） */
   vec3 kd = ngKeyDir;
   float az = atan(kd.z, kd.x);

@@ -14,15 +14,29 @@
 
 export const CDLOD_ROOT = Object.freeze({ origin: -512, size: 1024 });
 export const CDLOD_LEAF = 16;
-export const CDLOD_LEVELS = 7;          // 段 0（16m）… 段 6（1024m = 根）
+export const CDLOD_LEVELS = 7;          // 段 0（16m）… 段 6（1024m = 根）。セル 32 のとき
+/** 段の数の上限（セル 16 = 葉 8m で 8 段）。ジオモーフの表（vec4 × 8）と同じ */
+export const CDLOD_MAX_LEVELS = 8;
 export const CDLOD_MAX_INST = 1536;
+/** 段 0 の範囲の下限 m：歩ける帯（足元から 24m）は段の倍率に依らず 0.5m の格子（描画の高さ = heightAt ± 2cm） */
+export const CDLOD_WALK_R = 26;
+
+/**
+ * パッチのセル数から葉の大きさと段の数。段 0 の格子は常に 0.5m（= heightfield の near の格子）
+ * @param {number} cells 16 | 32
+ * @returns {{leaf:number, levels:number}}
+ */
+export function cdlodConfig(cells = 32) {
+  const leaf = Math.max(4, cells * 0.5);
+  return { leaf, levels: Math.round(Math.log2(CDLOD_ROOT.size / leaf)) + 1 };
+}
 /** ジオモーフの区間の割合（範囲の最後の 30%。隣の段の制約で短くなることがある） */
 export const CDLOD_MORPH = 0.3;
 const SQRT2 = Math.SQRT2;
 const EPS = 0.5;
 
 /** 段 l の区画の一辺 m */
-export const nodeSize = (l) => CDLOD_LEAF * (1 << l);
+export const nodeSize = (l, leaf = CDLOD_LEAF) => leaf * (1 << l);
 
 /**
  * 各段の範囲（ρ_l）とジオモーフの区間を求める
@@ -31,21 +45,23 @@ export const nodeSize = (l) => CDLOD_LEAF * (1 << l);
  * @param {Float32Array} rho 長さ CDLOD_LEVELS（出力。最後は Infinity 相当）
  * @param {Float32Array} morph 長さ 4·8（出力。vec4 の配列：x = a, y = b, z = 1/(b−a)）
  */
-export function cdlodRanges(r0, dy, rho, morph) {
+export function cdlodRanges(r0, dy, rho, morph, cells = 32, walkR = 0) {
+  const { leaf, levels } = cdlodConfig(cells);
   const d2 = Math.max(0, dy) ** 2;
-  for (let l = 0; l < CDLOD_LEVELS; l++) {
-    if (l === CDLOD_LEVELS - 1) { rho[l] = 1e9; break; }
-    const r = r0 * (1 << l);
+  for (let l = 0; l < CDLOD_MAX_LEVELS; l++) {
+    if (l >= levels - 1) { rho[l] = 1e9; continue; }
+    /* 段 0 は歩ける帯の下限（ジオモーフが始まる 0.7ρ が足元から walkR より外） */
+    const r = l === 0 ? Math.max(r0, walkR / (1 - CDLOD_MORPH)) : r0 * (1 << l);
     let p = Math.sqrt(Math.max(r * r - d2, 0));
-    if (l > 0) p = Math.max(p, rho[l - 1] + SQRT2 * nodeSize(l - 1) + EPS + 0.18 * nodeSize(l));
+    if (l > 0) p = Math.max(p, rho[l - 1] + SQRT2 * nodeSize(l - 1, leaf) + EPS + 0.18 * nodeSize(l, leaf));
     rho[l] = p;
   }
   for (let l = 0; l < 8; l++) {
     const o = l * 4;
-    if (l >= CDLOD_LEVELS - 1) { morph[o] = 1e9; morph[o + 1] = 1e9 + 1; morph[o + 2] = 0; morph[o + 3] = 0; continue; }
+    if (l >= levels - 1) { morph[o] = 1e9; morph[o + 1] = 1e9 + 1; morph[o + 2] = 0; morph[o + 3] = 0; continue; }
     const b = rho[l];
     let a = b * (1 - CDLOD_MORPH);
-    if (l > 0) a = Math.max(a, rho[l - 1] + SQRT2 * nodeSize(l - 1) + EPS);
+    if (l > 0) a = Math.max(a, rho[l - 1] + SQRT2 * nodeSize(l - 1, leaf) + EPS);
     if (b <= 0) { morph[o] = -2; morph[o + 1] = -1; morph[o + 2] = 1; morph[o + 3] = 0; continue; }   // 段 0 が無い（カメラが高い）
     a = Math.min(a, b - 0.05);
     morph[o] = a; morph[o + 1] = b; morph[o + 2] = 1 / Math.max(b - a, 1e-3); morph[o + 3] = 0;
@@ -110,11 +126,12 @@ export class CdlodList {
  */
 export function cdlodSelect(cx, cz, rho, out, cells = 32) {
   out.clear();
-  selectNode(CDLOD_ROOT.origin, CDLOD_ROOT.origin, CDLOD_LEVELS - 1, cx, cz, rho, out, cells);
+  const { leaf, levels } = cdlodConfig(cells);
+  selectNode(CDLOD_ROOT.origin, CDLOD_ROOT.origin, levels - 1, cx, cz, rho, out, cells, leaf);
 }
 
-function selectNode(x0, z0, l, cx, cz, rho, out, cells) {
-  const s = nodeSize(l);
+function selectNode(x0, z0, l, cx, cz, rho, out, cells, leaf) {
+  const s = nodeSize(l, leaf);
   if (l === 0 || nodeDist(x0, z0, s, cx, cz) >= rho[l - 1]) {
     out.push(x0, z0, s, s / cells, l, nodeDist(x0, z0, s, cx, cz));
     return;
@@ -123,7 +140,7 @@ function selectNode(x0, z0, l, cx, cz, rho, out, cells) {
   for (let k = 0; k < 4; k++) {
     const qx = x0 + (k & 1) * h, qz = z0 + (k >> 1) * h;
     const d = nodeDist(qx, qz, h, cx, cz);
-    if (d < rc) selectNode(qx, qz, l - 1, cx, cz, rho, out, cells);
+    if (d < rc) selectNode(qx, qz, l - 1, cx, cz, rho, out, cells, leaf);
     else out.push(qx, qz, h, h / cells, l, d);   // 子の大きさを親の細かさで（VS が 2 格子ごとに丸める）
   }
 }
@@ -160,7 +177,7 @@ export function filterInto(src, dst, keep) {
  */
 export function cdlodVertex(gi, gj, inst, cx, cz, morph, cells = 32) {
   const [x0, z0, cR, L] = inst;
-  const cL = nodeSize(L) / cells;             // 段 L の本来の格子の間隔
+  const cL = 0.5 * (1 << L);                  // 段 L の本来の格子の間隔（= nodeSize(L, leaf) / cells。段 0 は 0.5m）
   const g = Math.max(1, Math.round(cL / cR)); // 1（普通）か 2（親の 1/4）
   const pi = Math.floor(gi / g + 1e-4) * g, pj = Math.floor(gj / g + 1e-4) * g;
   const wx = x0 + pi * cR, wz = z0 + pj * cR;
@@ -231,6 +248,7 @@ export function heightPyramid(far) {
  * @param {number[]} out [min, max]
  */
 export function nodeHeightRange(pyr, x0, z0, s, out) {
+  /* ピラミッドは 16m の葉から。8m の区画（セル 16）はそれを含む 16m の葉の範囲（安全側） */
   const l = Math.max(0, Math.min(CDLOD_LEVELS - 1, Math.round(Math.log2(s / CDLOD_LEAF))));
   const nn = (CDLOD_ROOT.size / CDLOD_LEAF) >> l;
   const i = Math.min(nn - 1, Math.max(0, Math.floor((x0 - CDLOD_ROOT.origin) / nodeSize(l))));

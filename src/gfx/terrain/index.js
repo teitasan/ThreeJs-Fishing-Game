@@ -14,7 +14,7 @@ import { NgModule } from '../core/module.js';
 import { NG_LAYER, ngOwn } from '../core/layers.js';
 import { NG_PASS } from '../core/frame.js';
 import { ngExtendStandard, ngAttachDepth } from '../core/extend.js';
-import { CdlodList, cdlodRanges, cdlodSelect, heightPyramid, nodeHeightRange, CDLOD_MAX_INST, CDLOD_LEVELS } from './cdlod.js';
+import { CdlodList, cdlodRanges, cdlodSelect, heightPyramid, nodeHeightRange, CDLOD_MAX_INST, CDLOD_MAX_LEVELS, CDLOD_WALK_R } from './cdlod.js';
 import { TERRAIN_R0, terrainTier } from './quality.js';
 import { TERRAIN_BAKE_A, TERRAIN_BAKE_B, TERRAIN_BAKE_MACRO, TERRAIN_TILE_M, TERRAIN_RELIEF_M } from './layers.glsl.js';
 import {
@@ -23,7 +23,7 @@ import {
 } from './terrain.glsl.js';
 import { FAR_BAKE, FAR_SIZE, buildCanopyColor } from './farAlbedo.js';
 import {
-  buildRidgeArrays, RIDGE_CLIP, RIDGE_VERT_PARS, RIDGE_VERT_BEGIN, RIDGE_FRAG_PARS, RIDGE_FRAG_SURFACE, RIDGE_FRAG_NORMAL, RIDGE_FRAG_LIGHTS,
+  buildRidgeArraysAsync, RIDGE_HORIZON_BAKE, RIDGE_MAX_ROWS, RIDGE_CLIP, RIDGE_VERT_PARS, RIDGE_VERT_BEGIN, RIDGE_FRAG_PARS, RIDGE_FRAG_SURFACE, RIDGE_FRAG_NORMAL, RIDGE_FRAG_LIGHTS,
 } from './ridges.js';
 
 const MACRO_SIZE = 512;
@@ -39,8 +39,8 @@ export class TerrainModule extends NgModule {
     this._debug = 0;
     this.list = new CdlodList();
     this.reflList = new CdlodList();
-    this._rho = new Float32Array(CDLOD_LEVELS);
-    this._rhoR = new Float32Array(CDLOD_LEVELS);
+    this._rho = new Float32Array(CDLOD_MAX_LEVELS);
+    this._rhoR = new Float32Array(CDLOD_MAX_LEVELS);
     this._morphMain = new Float32Array(32);
     this._morphRefl = new Float32Array(32);
     this._hr = [0, 0];
@@ -86,13 +86,20 @@ export class TerrainModule extends NgModule {
     };
 
     /* 1. 素材の配列とマクロ、farAlbedo（forge） */
+    const P = (this._loadParts = {});
+    let tp = performance.now();
+    const lap = (k) => { const n = performance.now(); P[k] = +(n - tp).toFixed(1); tp = n; };
     this._canopyCol = buildCanopyColor(T, ctx.placement, (lake?.seed ?? 1) >>> 0);
+    lap('canopyCPU');
     await this._bakeLayers(this.q.texSize, true);
+    lap('layers');
     progress?.(0.45);
     this._bakeMacro();
     await ctx.forge.step();
+    lap('macro');
     this._bakeFar();
     await ctx.forge.step();
+    lap('far');
     progress?.(0.6);
 
     /* 2. 地形の素材とメッシュ */
@@ -119,12 +126,14 @@ export class TerrainModule extends NgModule {
     this.root.add(mesh);
     ngOwn(this.root, NG_LAYER.WORLD);
     await ctx.forge.step();
+    lap('mesh');
     progress?.(0.75);
 
     /* 3. 遠景の稜線 */
-    this.ridges = this._buildRidges();
+    this.ridges = await this._buildRidges();
     ngOwn(this.ridges, NG_LAYER.FAR);
     this.root.add(this.ridges);
+    lap('ridges');
     progress?.(0.95);
 
     /* 4. services */
@@ -138,20 +147,39 @@ export class TerrainModule extends NgModule {
   }
 
   /* ---------- 焼き込み ---------- */
+  /* 8 層 × 2 配列。層ごとに焼き、init では層ごとに GPU を待って譲る（1024² の 1 層 ≈ 20–40ms の GPU。
+     まとめて投げると後の最初の同期の呼び出しで 250ms 止まっていた） */
   async _bakeLayers(size, yieldBetween) {
-    const { THREE: T, forge } = this.ctx;
-    const A = forge.bakeArray({ w: size, h: size, layers: 8, frag: TERRAIN_BAKE_A, type: T.UnsignedByteType, mips: true, wrap: 'repeat' });
-    A.anisotropy = 8;
-    if (yieldBetween) await forge.step();
-    const B = forge.bakeArray({
-      w: size, h: size, layers: 8, frag: TERRAIN_BAKE_B, type: T.UnsignedByteType, mips: true, wrap: 'repeat',
-      uniforms: { ngSrcA: { value: A }, ngTileM: { value: [...TERRAIN_TILE_M] }, ngReliefM: { value: [...TERRAIN_RELIEF_M] } },
-    });
-    B.anisotropy = 8;
-    this.u.ngTerrA.value = A;
-    this.u.ngTerrB.value = B;
+    const { THREE: T, forge, renderer } = this.ctx;
+    const mk = (name) => {
+      const rt = new T.WebGLArrayRenderTarget(size, size, 8, { depthBuffer: false });
+      const t = rt.texture;
+      t.type = T.UnsignedByteType; t.format = T.RGBAFormat;
+      t.magFilter = T.LinearFilter; t.minFilter = T.LinearMipmapLinearFilter;
+      t.wrapS = t.wrapT = t.wrapR = T.RepeatWrapping;
+      t.anisotropy = 8; t.name = name;
+      /* mip の全段を確保させてから自動生成を止める（generateMipmaps = false で確保すると 1 段しか作られない） */
+      t.generateMipmaps = true;
+      renderer.initRenderTarget(rt);
+      t.generateMipmaps = false;
+      return rt;
+    };
+    const A = mk('ng-terrain-layersA'), B = mk('ng-terrain-layersB');
+    const gl = renderer.getContext();
+    const uB = { ngSrcA: { value: A.texture }, ngTileM: { value: [...TERRAIN_TILE_M] }, ngReliefM: { value: [...TERRAIN_RELIEF_M] } };
+    for (const [rt, frag, uni] of [[A, TERRAIN_BAKE_A, {}], [B, TERRAIN_BAKE_B, uB]]) {
+      for (let l = 0; l < 8; l++) {
+        rt.texture.generateMipmaps = l === 7;     // mip は最後の層の後に 1 回（three が render の後に作る）
+        forge.run(rt, frag, uni, l);
+        if (yieldBetween) { gl.finish(); await forge.step(); }
+      }
+    }
+    const oldA = this._rtA, oldB = this._rtB;
+    this._rtA = A; this._rtB = B;
+    this.u.ngTerrA.value = A.texture;
+    this.u.ngTerrB.value = B.texture;
+    oldA?.dispose(); oldB?.dispose();
     this._texSize = size;
-    if (yieldBetween) await forge.step();
   }
 
   _bakeMacro() {
@@ -171,23 +199,30 @@ export class TerrainModule extends NgModule {
     this.u.ngTerrFar.value = tex;
   }
 
-  _buildRidges() {
+  async _buildRidges() {
     const { THREE: T, heightfield: hf, lake } = this.ctx;
     const seed = ((lake?.seed ?? 1) ^ 0x5bd1e995) >>> 0;
-    const R = buildRidgeArrays({
+    const R = await buildRidgeArraysAsync({
       seed,
       baseAt: (x, z) => { const h = lake?.heightAt?.(x, z); return Number.isFinite(h) ? h : 150; },
       innerAt: (x, z) => hf.heightAt(x, z),
-    });
+    }, () => this.ctx.forge.step());
     const g = new T.BufferGeometry();
     g.setAttribute('position', new T.BufferAttribute(R.pos, 3));
     g.setAttribute('normal', new T.BufferAttribute(R.nrm, 3));
-    g.setAttribute('aNgHor0', new T.BufferAttribute(R.hor0, 4));
-    g.setAttribute('aNgHor1', new T.BufferAttribute(R.hor1, 4));
+    g.setAttribute('aNgRidgeIJ', new T.BufferAttribute(R.ij, 2));
     g.setIndex(new T.BufferAttribute(R.index, 1));
     g.computeBoundingSphere();
+    /* 地平の角を GPU で焼く（高さの R32F → 8 方位 × 18 歩） */
+    const Ht = new T.DataTexture(R.H, R.seg, R.rows, T.RedFormat, T.FloatType);
+    Ht.magFilter = Ht.minFilter = T.NearestFilter;
+    Ht.needsUpdate = true;
+    this._ridgeH = Ht;
+    this._ridgeDims = { seg: R.seg, rows: R.rows, radii: R.radii };
+    this.uRidge = { ngRidgeHor0: { value: null }, ngRidgeHor1: { value: null } };
+    this._bakeHorizons();
     const mat = ngExtendStandard(new T.MeshStandardMaterial({ roughness: 0.92, metalness: 0 }), {
-      key: 'terrain-ridges', module: 'terrain',
+      key: 'terrain-ridges', module: 'terrain', uniforms: this.uRidge,
       vertex: { pars: RIDGE_VERT_PARS, begin: RIDGE_VERT_BEGIN },
       fragment: { pars: RIDGE_FRAG_PARS, surface: RIDGE_FRAG_SURFACE, normal: RIDGE_FRAG_NORMAL, lights: RIDGE_FRAG_LIGHTS },
     });
@@ -199,6 +234,18 @@ export class TerrainModule extends NgModule {
     m.receiveShadow = false;
     this._ridgeTris = R.index.length / 3;
     return m;
+  }
+
+  _bakeHorizons() {
+    const { THREE: T, forge, heightfield: hf } = this.ctx, D = this._ridgeDims;
+    const radii = new Float32Array(RIDGE_MAX_ROWS).fill(1e9);
+    radii.set(D.radii.subarray(0, Math.min(D.radii.length, RIDGE_MAX_ROWS)));
+    for (let k = 0; k < 2; k++) {
+      this.uRidge[k ? 'ngRidgeHor1' : 'ngRidgeHor0'].value = forge.bake2D({
+        w: D.seg, h: D.rows, frag: RIDGE_HORIZON_BAKE, type: T.HalfFloatType, filter: 'nearest', wrap: 'clamp',
+        uniforms: { ...hf.uniforms, ngRidgeH: { value: this._ridgeH }, ngRidgeRadii: { value: Array.from(radii) }, ngRidgeDims: { value: new T.Vector3(D.seg, D.rows, k) } },
+      });
+    }
   }
 
   /* ---------- 毎フレーム ---------- */
@@ -215,9 +262,9 @@ export class TerrainModule extends NgModule {
     const gh = this.ctx.heightfield.heightAt(c.x, c.z);
     const dy = Math.max(0, c.y - (Number.isFinite(gh) ? gh : 0));
     const r0 = TERRAIN_R0 * this.q.rangeK * this._lodK;
-    cdlodRanges(r0, dy, this._rho, this._morphMain);
+    cdlodRanges(r0, dy, this._rho, this._morphMain, this._cells, CDLOD_WALK_R);
     cdlodSelect(c.x, c.z, this._rho, this.list, this._cells);
-    cdlodRanges(r0 * this.q.reflBias, dy, this._rhoR, this._morphRefl);
+    cdlodRanges(r0 * this.q.reflBias, dy, this._rhoR, this._morphRefl, this._cells, 0);
     cdlodSelect(c.x, c.z, this._rhoR, this.reflList, this._cells);
     this._eye.x = c.x; this._eye.y = c.y; this._eye.z = c.z;
     u.ngTerrEye.value.set(c.x, c.y, c.z, this._cells);
@@ -311,6 +358,7 @@ export class TerrainModule extends NgModule {
     this._bakeLayers(this._texSize || this.q.texSize, false);
     this._bakeMacro();
     this._bakeFar();
+    if (this._ridgeH) { this._ridgeH.needsUpdate = true; this._bakeHorizons(); }
     this._canopyCol.needsUpdate = true;
     this.ctx.services.provide('terrain', {
       coverRules: terrainCoverRules(this._dock.start, this._dock.inland),
@@ -330,7 +378,7 @@ export class TerrainModule extends NgModule {
       programs: 3,
       passes: { ...this._passCounts },
       selected: this.list.count, overflow: this.list.overflow,
-      loadMs: this.loadMs,
+      loadMs: this.loadMs, loadParts: this._loadParts,
     };
   }
 
@@ -340,6 +388,8 @@ export class TerrainModule extends NgModule {
     this.material?.userData?.ngDistance?.dispose();
     this.ridgeMaterial?.dispose();
     this._canopyCol?.dispose();
+    this._ridgeH?.dispose();
+    this._rtA?.dispose(); this._rtB?.dispose();
     super.dispose();
   }
 }

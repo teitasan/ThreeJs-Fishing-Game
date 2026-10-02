@@ -20,8 +20,8 @@ const Q = await imp('src/gfx/terrain/quality.js');
 /* ---------- 1・2 ---------- */
 function runCase(cx, cz, dy, tierKey) {
   const q = Q.terrainTier(tierKey);
-  const rho = new Float32Array(C.CDLOD_LEVELS), morph = new Float32Array(32);
-  C.cdlodRanges(Q.TERRAIN_R0 * q.rangeK, dy, rho, morph);
+  const rho = new Float32Array(C.CDLOD_MAX_LEVELS), morph = new Float32Array(32);
+  C.cdlodRanges(Q.TERRAIN_R0 * q.rangeK, dy, rho, morph, q.cells, C.CDLOD_WALK_R);
   const list = new C.CdlodList();
   C.cdlodSelect(cx, cz, rho, list, q.cells);
   check(list.overflow === 0, `溢れ 0（${list.overflow}）`);
@@ -33,16 +33,16 @@ function runCase(cx, cz, dy, tierKey) {
     area += list.size[i] ** 2;
   }
   check(Math.abs(area - 1024 * 1024) < 1, `面積の和 ${area}`);
-  /* 葉の格子（16m）で «どの区画か» の表 */
-  const N = 64, owner = new Int32Array(N * N).fill(-1);
+  /* 葉の格子で «どの区画か» の表 */
+  const LEAF = C.cdlodConfig(q.cells).leaf, N = 1024 / LEAF, owner = new Int32Array(N * N).fill(-1);
   let overlap = 0;
   nodes.forEach((n, k) => {
-    const i0 = Math.round((n.x0 + 512) / 16), j0 = Math.round((n.z0 + 512) / 16), w = Math.round(n.s / 16);
+    const i0 = Math.round((n.x0 + 512) / LEAF), j0 = Math.round((n.z0 + 512) / LEAF), w = Math.round(n.s / LEAF);
     for (let j = j0; j < j0 + w; j++) for (let i = i0; i < i0 + w; i++) { if (owner[j * N + i] >= 0) overlap++; owner[j * N + i] = k; }
   });
   check(overlap === 0, `重なり ${overlap}`);
   /* 共有の辺 */
-  const key = (x, z) => `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+  const key = (x, z) => `${Math.round(x * 100)},${Math.round(z * 100)}`;   // 1cm（float32 の丸めの差は除く）
   const edgePts = (n, side) => {
     const pts = new Set(), c = q.cells;
     for (let t = 0; t <= c; t++) {
@@ -59,9 +59,9 @@ function runCase(cx, cz, dy, tierKey) {
     /* 右（+x）と上（+z）の隣：辺の 16m ごとに隣の区画を引く */
     for (const side of [1, 2]) {
       const seen = new Set();
-      for (let t = 0; t < n.s; t += 16) {
-        const px = side === 1 ? n.x0 + n.s + 8 : n.x0 + t + 8, pz = side === 1 ? n.z0 + t + 8 : n.z0 + n.s + 8;
-        const i = Math.floor((px + 512) / 16), j = Math.floor((pz + 512) / 16);
+      for (let t = 0; t < n.s; t += LEAF) {
+        const px = side === 1 ? n.x0 + n.s + LEAF / 2 : n.x0 + t + LEAF / 2, pz = side === 1 ? n.z0 + t + LEAF / 2 : n.z0 + n.s + LEAF / 2;
+        const i = Math.floor((px + 512) / LEAF), j = Math.floor((pz + 512) / LEAF);
         if (i < 0 || j < 0 || i >= N || j >= N) continue;
         const m = owner[j * N + i];
         if (m < 0 || seen.has(m)) continue;
@@ -71,7 +71,7 @@ function runCase(cx, cz, dy, tierKey) {
         /* 共有の区間 */
         const a0 = side === 1 ? Math.max(n.z0, o.z0) : Math.max(n.x0, o.x0);
         const a1 = side === 1 ? Math.min(n.z0 + n.s, o.z0 + o.s) : Math.min(n.x0 + n.s, o.x0 + o.s);
-        const inSeg = (s) => { const [x, z] = s.split(',').map((v) => Number(v) / 1000); const a = side === 1 ? z : x; return a >= a0 - 1e-3 && a <= a1 + 1e-3; };
+        const inSeg = (s) => { const [x, z] = s.split(",").map((v) => Number(v) / 100); const a = side === 1 ? z : x; return a >= a0 - 1e-3 && a <= a1 + 1e-3; };
         const A = [...edgePts(n, side)].filter(inSeg).sort();
         const B = [...edgePts(o, side === 1 ? 3 : 0)].filter(inSeg).sort();
         pairs++;
@@ -96,8 +96,17 @@ check(tot > 500, `辺の組の数 ${tot}`);
 check(totBad === 0, `T 字の隙間のある辺 ${totBad}/${tot}`);
 check(maxDL <= 2, `隣の区画の大きさの差 ${maxDL} 段（親の 1/4 を親の細かさで描く区画を含む）`);
 
-/* 段 0 の格子 = near の格子（0.5m）：葉 16m を 32 セル */
-check(C.nodeSize(0) / 32 === 0.5, '段 0 の格子は 0.5m（heightfield の near と同じ点）');
+/* 段 0 の格子 = near の格子（0.5m）：全段で（low は葉 8m × 16 セル） */
+for (const cells of [16, 32]) {
+  const { leaf, levels } = C.cdlodConfig(cells);
+  check(leaf / cells === 0.5 && leaf * 2 ** (levels - 1) === 1024, `セル ${cells}：葉 ${leaf}m・${levels} 段`);
+}
+/* 歩ける帯：段 0 のジオモーフは足元から CDLOD_WALK_R より外（全段） */
+for (const tier of ['low', 'mid', 'high']) {
+  const q = Q.terrainTier(tier), rho = new Float32Array(8), morph = new Float32Array(32);
+  C.cdlodRanges(Q.TERRAIN_R0 * q.rangeK, 1.7, rho, morph, q.cells, C.CDLOD_WALK_R);
+  check(morph[0] >= C.CDLOD_WALK_R - 0.1, `${tier}：段 0 のジオモーフの始め ${morph[0].toFixed(1)}m ≥ ${C.CDLOD_WALK_R}m`);
+}
 
 /* ---------- 3. GLSL の静的な検査 ---------- */
 const TG = await imp('src/gfx/terrain/terrain.glsl.js');
@@ -148,7 +157,7 @@ const glsl = {
   'terrain frag': TG.TERRAIN_FRAG_PARS,
   'coverRules': TG.terrainCoverRules({ x: 1, z: 2 }, { x: 0, z: 1 }),
   'bake A': LG.TERRAIN_BAKE_A, 'bake B': LG.TERRAIN_BAKE_B, 'macro': LG.TERRAIN_BAKE_MACRO,
-  'ridge frag': RG.RIDGE_FRAG_PARS, 'farAlbedo': FG.FAR_BAKE,
+  'ridge frag': RG.RIDGE_FRAG_PARS, 'ridge vert': RG.RIDGE_VERT_PARS + RG.RIDGE_VERT_BEGIN, 'horizon': RG.RIDGE_HORIZON_BAKE, 'farAlbedo': FG.FAR_BAKE,
 };
 for (const [k, s] of Object.entries(glsl)) {
   const u = useBeforeDecl(s);
@@ -170,8 +179,8 @@ const a = RG.buildRidgeArrays({ seed: 7, baseAt: flat, innerAt: flat, seg: 128 }
 const b = RG.buildRidgeArrays({ seed: 7, baseAt: flat, innerAt: flat, seg: 128 });
 check(a.pos.every((v, i) => v === b.pos[i]), '稜線は決定的');
 let finite = true;
-for (const arr of [a.pos, a.nrm, a.hor0, a.hor1]) for (const v of arr) if (!Number.isFinite(v)) finite = false;
-check(finite, '稜線の頂点・法線・地平の角が有限');
+for (const arr of [a.pos, a.nrm, a.H, a.ij]) for (const v of arr) if (!Number.isFinite(v)) finite = false;
+check(finite, '稜線の頂点・法線・高さが有限');
 const W = a.seg + 1;
 let edgeErr = 0;
 for (let i = 0; i < a.seg; i++) { const x = a.pos[(W + i) * 3], z = a.pos[(W + i) * 3 + 2]; edgeErr = Math.max(edgeErr, Math.abs(a.pos[(W + i) * 3 + 1] - flat(x, z))); }
@@ -180,5 +189,6 @@ const far = a.rows - 1;
 let peak = 0;
 for (let i = 0; i < a.seg; i++) peak = Math.max(peak, a.pos[((far - 4) * W + i) * 3 + 1]);
 check(peak > 300, `奥の山並みが立つ（${peak.toFixed(0)}m）`);
+check(a.rows <= RG.RIDGE_MAX_ROWS, `稜線の列 ${a.rows} ≤ ${RG.RIDGE_MAX_ROWS}（地平の角の焼き込みの uniform 配列）`);
 
 done('terrain-cdlod');

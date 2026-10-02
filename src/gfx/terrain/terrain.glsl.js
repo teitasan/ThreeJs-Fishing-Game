@@ -30,8 +30,7 @@ uniform vec4 ngTerrEye;          // LOD の中心（描くカメラ）xyz、w = 
 uniform float ngTerrClipR;       // 遠景の尾根へ渡す半径 m
 varying vec3 ngTerrVInfo;        // x = 段 + ジオモーフ、yz = パッチの格子（線の表示）
 vec2 ngTerrVertXZ(vec3 pos, out float lodK) {
-  float cells = ngTerrEye.w;
-  float cL = 16.0 * exp2(aNgInst.w) / cells;
+  float cL = 0.5 * exp2(aNgInst.w);              // 段の本来の格子の間隔（段 0 = 0.5m。葉 = セル数 × 0.5m）
   float g = max(1.0, floor(cL / aNgInst.z + 0.5));
   vec2 gi = floor(pos.xz / g + 1e-4) * g;
   vec2 w0 = aNgInst.xy + gi * aNgInst.z;
