@@ -84,13 +84,20 @@ export default async function (h) {
             gfx.budget.reset();
             for (let i = 0; i < 40; i++) { g.state.clock = 12.5; g.update(1 / 60); }
             const mm = gfx.budget.mean().gpuMin;
-            return Object.values(mm).reduce((s, x) => s + (x || 0), 0);
+            /* capture / composer は派生（capture = prep + hfShadow + shadow、composer = opaque + copy + late + post）なので数えない */
+            const o = { total: 0 };
+            for (const [k, x] of Object.entries(mm)) if (k !== 'capture' && k !== 'composer') { o[k] = x || 0; o.total += x || 0; }
+            return o;
           } finally { m.root.visible = was; }
         };
         const runs = [];
-        for (let r = 0; r < 3; r++) runs.push(measure(false) - measure(true));
-        runs.sort((a, b) => a - b);
-        res[v] = +runs[1].toFixed(2);
+        for (let r = 0; r < 3; r++) {
+          const a = measure(false), b = measure(true);
+          runs.push(Object.fromEntries(Object.keys(a).map((k) => [k, a[k] - (b[k] || 0)])));
+        }
+        runs.sort((a, b) => a.total - b.total);
+        const m = runs[1];
+        res[v] = Object.fromEntries(Object.entries(m).filter(([k, x]) => k === 'total' || Math.abs(x) >= 0.05).map(([k, x]) => [k, +x.toFixed(2)]));
       }
       return res;
     });
