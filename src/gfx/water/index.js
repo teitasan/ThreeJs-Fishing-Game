@@ -129,10 +129,10 @@ vec4 ngDebug(vec2 uv) {
   _rebuild(tier) {
     const T = this.ctx.THREE;
     const q = waterTier(tier);
-    const key = `${q.gridN}:${q.rings}`;
+    const key = `${q.gridN}:${q.cell}:${q.rings}`;
     if (key === this._gridKey && this.mesh) return;
     this._gridKey = key;
-    this._cell = 32 / q.gridN;
+    this._cell = q.cell || 32 / q.gridN;
     const g = buildRings(T, q.gridN, this._cell, q.rings);
     if (this.mesh) { this.mesh.geometry.dispose(); this.mesh.geometry = g; return; }
     this.mesh = new T.Mesh(g, this.material);

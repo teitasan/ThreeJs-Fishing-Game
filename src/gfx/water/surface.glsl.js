@@ -224,6 +224,8 @@ vec2 ngToScreen(vec3 P) {
 }
 
 void main() {
+  /* 計測：x = 3 は読み戻し（r = 描いた水面の y、g/b = カメラからの x/z。half でも mm が残る）、x = 2 は一色 */
+  if (uDbg.x > 2.5) { gl_FragColor = vec4(vWorld.y, vWorld.x - cameraPosition.x, vWorld.z - cameraPosition.z, 0.25); return; }
   if (uDbg.x > 1.5) { gl_FragColor = vec4(0.05, 0.08, 0.1, 1.0); return; }
   vec2 p = vWorld.xz;
   vec3 Vv = cameraPosition - vWorld;
