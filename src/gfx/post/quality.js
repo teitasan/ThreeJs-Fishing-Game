@@ -11,7 +11,7 @@
 /** @type {Readonly<Record<'low'|'mid'|'high', {gtao:boolean, aoSteps:number, aoRadius:number, shaft:number, bloom:number, cas:number}>>} */
 export const POST_TIERS = Object.freeze({
   low: Object.freeze({ gtao: false, aoSteps: 0, aoRadius: 1.2, shaft: 0, bloom: 0, cas: 0.6 }),
-  mid: Object.freeze({ gtao: false, aoSteps: 0, aoRadius: 1.2, shaft: 16, bloom: 5, cas: 0.5 }),
+  mid: Object.freeze({ gtao: false, aoSteps: 0, aoRadius: 1.2, shaft: 12, bloom: 4, cas: 0.5 }),   // r2：SMAA の分 0.05–0.15ms 超えたので Bloom 5→4 段・光芒 16→12
   high: Object.freeze({ gtao: true, aoSteps: 6, aoRadius: 1.2, shaft: 24, bloom: 8, cas: 0.45 }),
 });
 
