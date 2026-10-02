@@ -47,15 +47,23 @@ export default async function (h) {
       const b = await h.eval((cam) => {
         const L = window.__lab;
         L.cam(cam); L.setHour(12); L.setWeather('clear', { instant: true }); L.view(null); L.freeze(10); L.tick(10);
-        const res = [];
         const dbg = (window.__waterDbg || [0, 0, 0, 0]);
         L.gfx.modules.get('water').uniforms.uDbg?.value.fromArray(dbg);
-        for (let i = 0; i < 3; i++) {
-          const a = L.bench({ frames: 40, passes: true }), b = L.bench({ frames: 40, passes: true, hide: ['water'] });
-          res.push({ full: a.frameMsMin, hidden: b.frameMsMin, cost: a.frameMsMin - b.frameMsMin, late: a.passMin?.late, lateH: b.passMin?.late, prep: a.passMin?.prepare, prepH: b.passMin?.prepare, size: a.size, msaa: a.msaa });
+        const R = +(window.__benchRounds || 7);
+        const A = { late: [], prep: [], frame: [], refl: [], main: [] }, B = { late: [], prep: [], frame: [], refl: [], main: [] };
+        let passes = null;
+        for (let i = 0; i < R; i++) {
+          const a = L.bench({ frames: 30, warm: 8, windows: 3, passes: true }), b = L.bench({ frames: 30, warm: 8, windows: 3, passes: true, hide: ['water'] });
+          passes = passes || Object.keys(a.passMin || {});
+          for (const [o, r] of [[A, a], [B, b]]) {
+            o.late.push(r.passMin?.late ?? NaN); o.prep.push(r.passMin?.prep ?? NaN); o.frame.push(r.frameMsMin);
+            o.refl.push(r.passMin?.reflection ?? NaN); o.main.push(r.passMin?.opaque ?? r.passMin?.main ?? NaN);
+          }
         }
-        res.sort((x, y) => x.cost - y.cost);
-        return { med: res[1], all: res.map((r) => +r.cost.toFixed(2)) };
+        const mn = (v) => +Math.min(...v.filter(Number.isFinite)).toFixed(2);
+        const md = (v) => { const w = v.filter(Number.isFinite).sort((x, y) => x - y); return w.length ? +w[w.length >> 1].toFixed(2) : null; };
+        return { passes, lateMin: [mn(A.late), mn(B.late)], lateMed: [md(A.late), md(B.late)], prepMin: [mn(A.prep), mn(B.prep)], prepMed: [md(A.prep), md(B.prep)],
+          frameMin: [mn(A.frame), mn(B.frame)], frameMed: [md(A.frame), md(B.frame)], size: [innerWidth, innerHeight], msaa: L.gfx.msaa?.samples };
       }, cam);
       console.log('bench', cam, dbg, JSON.stringify(b));
     }

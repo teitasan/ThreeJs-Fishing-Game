@@ -13,7 +13,7 @@ import { NG_LAYER, ngOwn } from '../core/layers.js';
 import { ngShaderMaterial } from '../core/extend.js';
 import { NG_NOISE_GLSL } from '../core/glsl/noise.glsl.js';
 import { WATER_VS, WATER_FS, RIPPLES } from './surface.glsl.js';
-import { buildRings } from './mesh.js';
+import { buildRings, ringPlan } from './mesh.js';
 import { WaterFFT } from './fft.js';
 import { WaterRipples } from './ripples.js';
 import { WaterSplashes } from './splash.js';
@@ -46,7 +46,7 @@ export class WaterModule extends NgModule {
     one.needsUpdate = true;
     this._blank = one;
     this.uniforms = {
-      uSnap: { value: new T.Vector2() }, uTime: { value: 0 }, uWind: { value: 1 },
+      uSnap: { value: new T.Vector2() }, uFade: { value: new T.Vector2(45, 90) }, uTime: { value: 0 }, uWind: { value: 1 },
       uRipple: { value: Array.from({ length: RIPPLES }, () => new T.Vector4()) }, uRippleDur: { value: new Array(RIPPLES).fill(1) },
       uRippleN: { value: 0 },
       uFft0: { value: one }, uFft1: { value: one }, uFftL: { value: new T.Vector2(WATER_CASCADES[0].L, WATER_CASCADES[1].L) },
@@ -129,11 +129,16 @@ vec4 ngDebug(vec2 uv) {
   _rebuild(tier) {
     const T = this.ctx.THREE;
     const q = waterTier(tier);
-    const key = `${q.gridN}:${q.cell}:${q.rings}`;
+    const key = `${q.gridN}:${q.cell}:${q.fine}`;
     if (key === this._gridKey && this.mesh) return;
     this._gridKey = key;
-    this._cell = q.cell || 32 / q.gridN;
-    const g = buildRings(T, q.gridN, this._cell, q.rings);
+    this._cell = q.cell;
+    const plan = ringPlan(q.gridN, q.cell, { fine: q.fine, nMin: q.gridN / 4, reach: 512 });
+    this._plan = plan;
+    /* 縦の変位を畳む距離：fine のリングの半幅 × 1.4 から 2 倍まで（その外のセルは短い波を表せない） */
+    const r0 = plan[Math.min(q.fine, plan.length - 1)].E * 1.4;
+    this.uniforms.uFade.value.set(r0, r0 * 2);
+    const g = buildRings(T, plan);
     if (this.mesh) { this.mesh.geometry.dispose(); this.mesh.geometry = g; return; }
     this.mesh = new T.Mesh(g, this.material);
     this.mesh.frustumCulled = false;

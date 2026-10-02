@@ -31,32 +31,51 @@ const f5 = (v) => v.toFixed(6);
 /* ゲームの 5 本の波の勾配を «1 本ずつ» 画素の大きさで LEAN する（ngWaveD と同じ式・同じ core の倍精度の位相）。
    画素の足跡（視線方向に 1/V.y で伸びる楕円）を波の進む向きへ射影し、波長の 0.25–0.6 倍を越えた波は
    平均の勾配から抜いて分散 (A·k)²/2 へ移す → 遠くの湖面で解けない波が «鏡のざわつき» ではなく正しい粗さになる */
-const WAVE_LEAN_GLSL = (() => {
-  let body = '';
+const WAVE_LEAN = (() => {
+  let prep = '', slope = '';
+  const fc = ['fA.x', 'fA.y', 'fA.z', 'fA.w', 'fB.x'];
   WAVES.forEach((w, i) => {
     if (i >= PHF.length) return;
     const lam = (2 * Math.PI) / w.k;
-    body += `  {
-    float ph = (${f5(w.dx)} * p.x + ${f5(w.dz)} * p.y) * ${f5(w.k)} - (${PHF[i]} + (t - ngWaterTime) * ${f5(w.om)}) + phase * ${f5(PHASE_W[i])};
-    float c = cos(ph) * ${f5(w.amp)};
+    /* 頂点：画素の足跡を波の向きへ射影して «平均から抜く割合» と分散（足跡は滑らかなので頂点で足りる） */
+    prep += `  {
     vec2 dir = vec2(${f5(w.dx)}, ${f5(w.dz)});
     float fpa = dot(dir, vh) * fpAlong, fpc = dot(dir, vp) * fpAcross;
     float fade = smoothstep(${f5(0.22 * lam)}, ${f5(0.6 * lam)}, sqrt(fpa * fpa + fpc * fpc));
-    d += vec2(${f5(w.k * w.dx)} + ${f5(PHASE_W[i])} * pg.x, ${f5(w.k * w.dz)} + ${f5(PHASE_W[i])} * pg.y) * (c * (1.0 - fade));
-    var += fade * ${f5(0.5 * (w.amp * w.k) ** 2)};
+    ${fc[i]} = fade;
+    fB.y += fade * ${f5(0.5 * (w.amp * w.k) ** 2)};
+  }
+`;
+    /* 断片：位相は ngWaveD と同じ式・同じ core の倍精度の位相。低周波の位相のずらし（phg）は頂点から */
+    slope += `  {
+    float ph = (${f5(w.dx)} * p.x + ${f5(w.dz)} * p.y) * ${f5(w.k)} - (${PHF[i]} + (t - ngWaterTime) * ${f5(w.om)}) + phg.x * ${f5(PHASE_W[i])};
+    float c = cos(ph) * ${f5(w.amp)} * (1.0 - ${fc[i]});
+    d += vec2(${f5(w.k * w.dx)} + ${f5(PHASE_W[i])} * phg.y, ${f5(w.k * w.dz)} + ${f5(PHASE_W[i])} * phg.z) * c;
   }
 `;
   });
-  return /* glsl */ `
-vec2 ngWaterWaveLean(vec2 p, float t, vec2 vh, float fpAlong, float fpAcross, out float var) {
-  float phase = ngWavePhase(p);
-  vec2 pg = ngWavePhaseGrad(p);
+  const vs = /* glsl */ `
+/* ゲームの 5 本の波を «1 本ずつ» 画素の大きさで LEAN する：足跡が波長の 0.22–0.6 倍を越えた波は
+   平均の勾配から抜いて分散 (A·k)²/2 へ（遠くで解けない波を鏡のざわつきではなく正しい粗さに） */
+void ngWaterWavePrep(vec2 p, vec3 P, float pxAng, out vec3 phg, out vec4 fA, out vec2 fB) {
+  vec3 Vv = cameraPosition - P;
+  float dist = max(length(Vv), 1e-3);
+  float fpAcross = dist * pxAng;
+  float fpAlong = fpAcross / max(Vv.y / dist, 0.03);
+  vec2 vh = normalize(-Vv.xz + vec2(1e-5, 0.0));
   vec2 vp = vec2(-vh.y, vh.x);
+  phg = vec3(ngWavePhase(p), ngWavePhaseGrad(p));
+  fA = vec4(0.0);
+  fB = vec2(0.0);
+${prep}}
+`;
+  const fs = /* glsl */ `
+vec2 ngWaterWaveSlope(vec2 p, float t, vec3 phg, vec4 fA, vec2 fB) {
   vec2 d = vec2(0.0);
-  var = 0.0;
-${body}  return d;
+${slope}  return d;
 }
 `;
+  return { vs, fs };
 })();
 
 /* 風速 → 細波の振幅（基準の風 3.5m/s のスペクトルに掛ける）。毛管の細波は «風が閾値を越えた所» にだけ立つ
@@ -81,6 +100,8 @@ float ngWaterCoarseAmp(float U, float Ug, float rain) {
 `;
 
 export const WATER_VS = NG_HEIGHTFIELD_GLSL + NG_WIND_GLSL + NG_WAVE_GLSL + NG_MEDIUM_GLSL + /* glsl */ `
+uniform vec4 uTierW;
+` + WAVE_LEAN.vs + /* glsl */ `
 #include <common>
 #include <shadowmap_pars_vertex>
 #include <fog_pars_vertex>
@@ -89,30 +110,48 @@ uniform float uTime;
 uniform float uWind;
 uniform vec4 uDbg;
 uniform vec4 uLakeBox;        // 湖を囲む箱（min x, min z, max x, max z）。外の頂点は縁へ寄せて三角形を潰す（遠くの陸の上の細かい三角形を描かない）
-in vec3 aEdge;
+uniform vec2 uFade;          // 縦の変位を畳む距離（m、カメラの xz から）
+in vec3 aEdge;                // 外縁の頂点：(辺の向き x, z, 外側のリングの頂点の間隔 S)
 out vec3 vWorld;
 out float vViewZ;
 out vec4 vWnd;
 out float vShoal;
 out vec3 vSegT;
 out vec3 vSegL;
+out vec3 vPhg;
+out vec4 vWfA;
+out vec2 vWfB;
 float ngWaterAt(vec2 p) {
   float d = ngDepth(p);
-  return d <= 0.0 ? 0.0 : ngWaveH(p, uTime) * uWind * ngShoalGain(d);
+  float fade = 1.0 - smoothstep(uFade.x, uFade.y, length(p - cameraPosition.xz));
+  return d <= 0.0 || fade <= 0.0 ? 0.0 : ngWaveH(p, uTime) * uWind * ngShoalGain(d) * fade;
 }
 void main() {
   vec2 p = clamp(position.xz + uSnap, uLakeBox.xy, uLakeBox.zw);
   if (uDbg.z > 2.5) {
-    vWorld = vec3(p.x, 0.0, p.y); vShoal = 1.0; vWnd = vec4(1.0, 0.0, 1.0, 0.5); vSegT = vec3(1.0); vSegL = vec3(0.0);
+    vWorld = vec3(p.x, 0.0, p.y); vShoal = 1.0; vWnd = vec4(1.0, 0.0, 1.0, 0.5); vSegT = vec3(1.0); vSegL = vec3(0.0); vPhg = vec3(0.0); vWfA = vec4(1.0); vWfB = vec2(1.0, 0.0);
     vec4 mvP = viewMatrix * vec4(vWorld, 1.0); vViewZ = -mvP.z; gl_Position = projectionMatrix * mvP; vNgWorld = vWorld; vNgCloud = 1.0;
     return;
   }
-  float h = aEdge.z > 0.5 ? 0.5 * (ngWaterAt(p - aEdge.xy) + ngWaterAt(p + aEdge.xy)) : ngWaterAt(p);
+  float h;
+  if (aEdge.z > 0.0) {
+    /* 外側のリングの辺の上へ：両端の頂点（局所の座標で S の倍数）の高さを直線補間 */
+    vec2 e = aEdge.xy;
+    float u = dot(position.xz, e);
+    float u0 = floor(u / aEdge.z) * aEdge.z;
+    float t = (u - u0) / aEdge.z;
+    vec2 q0 = position.xz + e * (u0 - u);
+    vec2 q1 = q0 + e * aEdge.z;
+    h = mix(ngWaterAt(clamp(q0 + uSnap, uLakeBox.xy, uLakeBox.zw)), ngWaterAt(clamp(q1 + uSnap, uLakeBox.xy, uLakeBox.zw)), t);
+  } else {
+    h = ngWaterAt(p);
+  }
   vec4 worldPosition = vec4(p.x, h, p.y, 1.0);
   vWorld = worldPosition.xyz;
   float d = ngDepth(p);
   vShoal = d <= 0.0 ? 0.0 : ngShoalGain(d);
   vWnd = ngWindAt(p);
+  ngWaterWavePrep(p, worldPosition.xyz, uTierW.w, vPhg, vWfA, vWfB);
   /* カメラ → 水面の区間（表：空気、裏：水）。点ごとに 1 回だけ（§3.4） */
   if (ngUwStrength > 0.5) ngWaterSegment(cameraPosition, worldPosition.xyz, vSegT, vSegL);
   else ngAirSegment(cameraPosition, worldPosition.xyz, vSegT, vSegL);
@@ -125,7 +164,7 @@ void main() {
 }
 `;
 
-export const WATER_FS = NG_SKYSPEC_GLSL + NG_WAVE_GLSL + WAVE_LEAN_GLSL + AMP_GLSL + /* glsl */ `
+export const WATER_FS = NG_SKYSPEC_GLSL + NG_WAVE_GLSL + WAVE_LEAN.fs + AMP_GLSL + /* glsl */ `
 #include <common>
 #include <packing>
 #include <lights_pars_begin>
@@ -160,6 +199,9 @@ in vec4 vWnd;
 in float vShoal;
 in vec3 vSegT;
 in vec3 vSegL;
+in vec3 vPhg;
+in vec4 vWfA;
+in vec2 vWfB;
 
 #define NG_F0 ${NG_WATER_F0.toFixed(3)}
 
@@ -261,8 +303,8 @@ vec2 ngToScreen(vec3 P) {
 
 void main() {
   /* 計測：x = 3 は読み戻し（r = 描いた水面の y、g/b = カメラからの x/z。half でも mm が残る）、x = 2 は一色 */
-  if (uDbg.x > 2.5) { gl_FragColor = vec4(vWorld.y, vWorld.x - cameraPosition.x, vWorld.z - cameraPosition.z, 0.25); return; }
-  if (uDbg.x > 1.5) { gl_FragColor = vec4(0.05, 0.08, 0.1, 1.0); return; }
+  if (uDbg.x > 2.5 && uDbg.x < 3.5) { gl_FragColor = vec4(vWorld.y, vWorld.x - cameraPosition.x, vWorld.z - cameraPosition.z, 0.25); return; }
+  if (uDbg.x > 1.5 && uDbg.x < 2.5) { gl_FragColor = vec4(0.05, 0.08, 0.1, 1.0); return; }
   vec2 p = vWorld.xz;
   vec3 Vv = cameraPosition - vWorld;
   float dist = max(length(Vv), 1e-3);
@@ -276,12 +318,9 @@ void main() {
   /* 画素の足跡（m）：縦の画角の 1 画素の角 × 距離、視線方向は 1/V.y で伸びる */
   float pxAng = uTierW.w;
   float fpX = dist * pxAng;
-  float fpL = fpX / max(V.y, 0.03);
-  vec2 vh = normalize(-Vv.xz + vec2(1e-5, 0.0));
   float waveS = uWind * vShoal * mix(0.2, 1.0, smoothstep(1.5, 5.0, ngWindSpeed));
-  float varW = 0.0;
-  vec2 sl = uDbg.y > 1.5 ? vec2(0.0) : ngWaterWaveLean(p, uTime, vh, fpL, fpX, varW) * waveS;
-  varW *= waveS * waveS;
+  vec2 sl = uDbg.y > 1.5 ? vec2(0.0) : ngWaterWaveSlope(p, uTime, vPhg, vWfA, vWfB) * waveS;
+  float varW = vWfB.y * waveS * waveS;
   vec2 wd = normalize(ngWindDir + vec2(1e-5, 0.0));
   vec2 wp = vec2(-wd.y, wd.x);
   vec2 q = vec2(dot(p, wd), dot(p, wp));
@@ -289,7 +328,7 @@ void main() {
   float a0 = ngWaterFineAmp(wnd.z, ngWindSpeed, rain) * shallow;
   float a1 = ngWaterCoarseAmp(wnd.z, ngWindSpeed, rain) * shallow;
   vec4 f0 = vec4(0.0), f1 = vec4(0.0);
-  if (uDbg.x < 0.5) {
+  if (uDbg.x < 0.5 || uDbg.x > 3.5) {
   f0 = texture(uFft0, q / uFftL.x);
   f1 = texture(uFft1, q / uFftL.y + vec2(0.37, 0.61));
   }
@@ -314,6 +353,7 @@ void main() {
   float alpha = sqrt(a2r);
   vec3 N = normalize(vec3(-sl.x, 1.0, -sl.y));
   vec3 col;
+  if (uDbg.x > 3.5) { gl_FragColor = vec4(N * 0.01 + alpha * 0.01, 1.0); return; }
 
   if (gl_FrontFacing) {
     float NoV = max(dot(N, V), 1e-4);
@@ -390,7 +430,7 @@ void main() {
       if (s > 1e-4) {
         float nearW = ngNearToFar(vWorld);
         /* 近景の影マップには地形が入らない（地形は影を落とさず高さ場影だけ）ので、高さ場影は近くでも掛ける */
-        vis = min(ngSunVisibilityC(vWorld, nearW < 1.0 ? getShadowMask() : 1.0, vNgCloud), ngHfShadow(vWorld) * vNgCloud);
+        vis = min(mix(nearW < 1.0 ? getShadowMask() : 1.0, 1.0, nearW), ngHfShadow(vWorld)) * vNgCloud;
         spec = ngKeyRad * (s * vis * soft);
       } else {
         vis = vNgCloud;

@@ -10,8 +10,9 @@
  * @property {number} gridN       水面のリングの一辺のセル数（中心 gridN² @ cell m、2 倍ずつ）
  * @property {number} cell        中心のリングのセルの一辺 m（頂点の間の直線補間の誤差 ≈ Σ A·k²·cell²/8：
  *                                0.125m で雨の風 1.9 でも ≈0.6mm。読み戻しの深場 < 1mm の条件。3 段で同じ）
- *                                範囲は ±(gridN·cell/2)·2^rings ≥ 512m（岸の奥 72m から対岸まで ≈420m）
- * @property {number} rings       粗いリングの数（中心の外側。±(gridN·cell/2)·2^rings m まで）
+ *                                範囲は ±512m まで（岸の奥 72m から対岸まで ≈420m）。mesh.js の ringPlan
+ * @property {number} fine        セルを 2 倍ずつ育てるリングの数（その先は 4 倍ずつ：低い視点の遠くで三角形が 1px を割らない）。
+ *                                縦の変位は «fine のリングの半幅 × 1.4» から 2 倍の距離までで 0 へ畳む（CPU と一致するのはその内側）
  * @property {number} fftN        細波の周期 FFT の一辺（2 の冪。16·Q）
  * @property {number} cascades    FFT のカスケードの数（1..2）
  * @property {number} glints      微細なきらめき（3 つ目のスケール）の重み 0..1
@@ -24,9 +25,9 @@
 
 /** @type {Record<'low'|'mid'|'high', WaterTier>} */
 export const WATER_TIERS = Object.freeze({
-  low: Object.freeze({ gridN: 64, cell: 0.125, rings: 7, fftN: 128, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 256, aniso: 2 }),
-  mid: Object.freeze({ gridN: 96, cell: 0.125, rings: 7, fftN: 256, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 512, aniso: 4 }),
-  high: Object.freeze({ gridN: 128, cell: 0.125, rings: 6, fftN: 256, cascades: 2, glints: 1, sim: true, simN: 512, simTexel: 0.05, splashes: 1024, aniso: 4 }),
+  low: Object.freeze({ gridN: 64, cell: 0.125, fine: 3, fftN: 128, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 256, aniso: 2 }),
+  mid: Object.freeze({ gridN: 96, cell: 0.125, fine: 3, fftN: 256, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 512, aniso: 4 }),
+  high: Object.freeze({ gridN: 128, cell: 0.125, fine: 2, fftN: 256, cascades: 2, glints: 1, sim: true, simN: 512, simTexel: 0.05, splashes: 1024, aniso: 4 }),
 });
 
 /** 段のキーを丸める（未知の段は mid） */
