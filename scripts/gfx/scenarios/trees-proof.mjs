@@ -46,7 +46,7 @@ export default async function (h) {
   for (const tier of tiers) {
     const c0 = h.counts();
     const log0 = h.logs.length;
-    await h.open(`lab/trees.html?capture=1&tier=${tier}${process.env.Q || ''}`);
+    await h.open(`lab/${process.env.LAB || 'trees'}.html?capture=1&tier=${tier}${process.env.Q || ''}`);
     await h.waitFor(() => window.__gfxReady === true, undefined, 240);
     const R = (out.tiers[tier] = { shots: {} });
     R.boot = await h.eval((id) => {
@@ -71,20 +71,25 @@ export default async function (h) {
         if (n > bestN) { bestN = n; best = k; }
       }
       const bx = P.x[best] + 2.2, bz = P.z[best] + 1.7, by = hAt(bx, bz) + 1.6;
-      /* スギ：mustDraw のスギで、西（夕日の側）が開けている木 */
-      const sunA = ((17.6 - 6) / 24) * Math.PI * 2;
+      /* スギ（無ければヒノキ）：太陽の側（17.3 時の西）が湖で開けた汀の木。カメラは木の陸側から太陽へ向く（逆光） */
+      const sunA = ((17.3 - 6) / 24) * Math.PI * 2;
       const sdx = Math.cos(sunA), sdz = 0.34;
       const sl = Math.hypot(sdx, sdz);
-      let sugi = -1, sBest = -1;
+      const ux = sdx / sl, uz = sdz / sl;
+      let sugi = -1, sBest = -1e9;
       for (let k = 0; k < P.count; k++) {
-        if (P.species[k] !== 0 || !P.mustDraw[k] || P.h[k] < 16) continue;
-        const cx = P.x[k] - (sdx / sl) * 26, cz = P.z[k] - (sdz / sl) * 26;
+        if (P.species[k] > 1 || P.h[k] < 12) continue;
+        let open = 0;
+        for (let d = 12; d <= 72; d += 10) if (hAt(P.x[k] + ux * d, P.z[k] + uz * d) < 0) open++;
+        if (open < 5) continue;
+        const cx = P.x[k] - ux * 24, cz = P.z[k] - uz * 24;
         if (hAt(cx, cz) < 0.5) continue;
-        const score = P.h[k] - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k]));
+        const score = P.h[k] + open * 2 - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k])) * 2 + (P.species[k] === 0 ? 6 : 0);
         if (score > sBest) { sBest = score; sugi = k; }
       }
+      if (sugi < 0) sugi = P.species.findIndex((s, k) => s === 0 && P.mustDraw[k]);
       const sx = P.x[sugi], sz = P.z[sugi], sy = hAt(sx, sz);
-      const scx = sx - (sdx / sl) * 26, scz = sz - (sdz / sl) * 26;
+      const scx = sx - ux * 24, scz = sz - uz * 24;
       /* 林縁への寄り：桟橋の付け根から内陸へ */
       const inland = [-dir.x, -dir.z];
       const base = [L.dock.dockStart.x, L.dock.dockStart.z];
@@ -130,7 +135,8 @@ export default async function (h) {
     const hi = set === 'hi';
     await shoot('lookup-13', cams.lookup, 13);
     await shoot('interior-13', cams.interiorDense, 13);
-    await shoot('backlit-sugi-17.6', cams.sugi, 17.6);
+    await shoot('backlit-sugi-17.3', cams.sugi, 17.3);
+    await shoot('backlit-sugi-18.0', cams.sugi, 18.0);
     await shoot('shell-far-ridge-12', 'far-ridge', 12);
     await shoot('shell-aerial-12', cams.aerialHigh, 12);
     await shoot('weather-noon-shore', 'noon-shore', 13);
@@ -166,7 +172,7 @@ export default async function (h) {
           if (Math.hypot(P.x[j] - P.x[k], P.z[j] - P.z[k]) > 25) continue;
           const y = L.lake.heightAt(P.x[j], P.z[j]) + 1.3;
           ring(P.x[j], y, P.z[j], P.r[j], 0xff2020);
-          ring(P.x[j], y + 0.02, P.z[j], window.__treesVisR?.(j) ?? 0, 0x20ff40);
+          ring(P.x[j], y + 0.02, P.z[j], (L.gfx.modules.get('trees').visualTrunkR?.(j) ?? 0) * 1.15, 0x20ff40);
         }
         L.scene.add(g);
       }, cams.collide.k);

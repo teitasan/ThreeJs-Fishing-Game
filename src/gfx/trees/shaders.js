@@ -36,11 +36,20 @@ vec3 ngTreeTransmit(vec3 albedo, vec3 Nw, vec3 Vw, float thin, float vis, float 
   vec3 tcol = albedo * vec3(1.15, 1.45, 0.45);
   return tcol * ngKeyRad * vis * thin * (diffT + fwd) * (1.0 - 0.7 * depth);
 }
+/* 樹冠の漏れ光：上の葉の影の中の葉にも、上の葉を通った緑の光が届く（1 枚の透過 ≈ 10%）。
+   影の中（1 − nearVis）だけに足す。見上げた樹冠が真っ黒にならない。vis0 = 雲 × 山の影 */
+vec3 ngTreeLeak(vec3 albedo, vec3 Vw, float thin, float vis0, float nearVis, float depth) {
+  float mu = max(dot(Vw, -ngKeyDir), 0.0);
+  float up = smoothstep(-0.1, 0.6, ngKeyDir.y);
+  vec3 tint = albedo * vec3(0.95, 1.35, 0.42);
+  return tint * ngKeyRad * vis0 * (1.0 - nearVis) * up * (0.018 + 0.07 * thin * pow(mu, 3.0)) * (1.0 - 0.6 * depth);
+}
 /* 森の中の空の見え（隣の木の樹冠で空の光が減り、葉を通った緑の光になる）。
    canopy = 樹冠の地図の rgba、below = 樹冠の天井からの下がり具合 0..1 */
 vec3 ngCanopyAmbient(vec4 canopy, float below) {
+  /* 樹冠の下の空の見え：密な森の幹の根元で 0.4 前後（緑に偏る）。以前の 0.2 は林縁の幹まで黒くした */
   float occ = clamp(canopy.r * below, 0.0, 1.0);
-  return mix(vec3(1.0), vec3(0.20, 0.27, 0.13), occ * 0.85);
+  return mix(vec3(1.0), vec3(0.32, 0.40, 0.22), occ * 0.8);
 }
 uniform sampler2D ngCanopyMap;
 /* 調べ物の表示（ngTreeMisc.w）：1 直接の鏡面なし・2 空の鏡面なし・3 透過なし・4 間接の拡散だけ・5 直接の鏡面だけ・6 空の鏡面だけ・7 透過だけ・8 直接の拡散だけ */
@@ -77,9 +86,35 @@ vec3 ngTreeSkySpec(vec3 R, float nv, float rough, float f0, float dens) {
 #endif
 `;
 
+/* 樹冠の高さでの key の見え（地形だけ。index.js の _bakeSunMap が ±512m を 256² に焼く）。
+   core の高さ場影は «地面が受け手»（樹冠は遮蔽物）なので、森の中では樹冠の上面まで影になる（r2 で分かった：
+   遠景の森・LOD1・シェルが昼でも直接光 0 だった）。木の 3 つのマテリアルは hfShadow を使わずに、これを頂点で読む */
+const SUN_VS = /* glsl */ `
+#ifndef NG_TREES_SUNVS
+#define NG_TREES_SUNVS
+uniform sampler2D ngTreeSun;
+float ngTreeSunAt(vec2 xz) { return texture2D(ngTreeSun, clamp((xz + 512.0) / 1024.0, 0.0, 1.0)).r; }
+#endif
+`;
+/* 断片：近景の影（three の影マップ。山の影も入る）の外だけ山の影を掛ける倍率。core の解析の代わり（0.7–1）を割り戻す */
+const SUN_FS = /* glsl */ `
+#ifndef NG_TREES_SUNFS
+#define NG_TREES_SUNFS
+float ngTreeFarW(vec3 P) {
+  float R = max(ngNearShadowR, 1.0);
+  return smoothstep(0.8 * R, R, length(P.xz - ngFocus.xz));
+}
+float ngTreeMt(vec3 P, float sunV) {
+  float far = ngTreeFarW(P);
+  float ana = mix(0.7, 1.0, smoothstep(0.02, 0.16, ngKeyDir.y));
+  return mix(1.0, sunV, far) / ana;
+}
+#endif
+`;
+
 /* ---------------------------------------------------------------- 1. 木 */
 
-const TREE_VS_PARS = NG_HASH_GLSL + NG_WIND_GLSL + /* glsl */ `
+const TREE_VS_PARS = NG_HASH_GLSL + NG_WIND_GLSL + SUN_VS + /* glsl */ `
 #define NG_POS_RANGE ${f(POS_RANGE)}
 attribute vec2 ngNrm;
 attribute vec2 ngUv;
@@ -93,6 +128,7 @@ varying vec2 vNgTUv;
 varying vec4 vNgTInfo;      // x = 葉 1 / 樹皮 0、y = 層、z = AO、w = 樹冠の深さ
 varying vec4 vNgTInst;      // x = 残す割合（LOD のディザ）、y = 個体の乱数、z = 樹高 m、w = 正規化の高さ
 varying vec3 vNgTNW;        // 世界の法線（苔の向き）
+varying float vNgTSun;      // 樹冠の高さでの key の見え（地形の山の影）
 vec3 ngTreeOct(vec2 e) {
   vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
   float t = max(-n.z, 0.0);
@@ -190,10 +226,11 @@ const TREE_VS_BEGIN = /* glsl */ `
   vNgTInfo = vec4(ngLeaf, ngFl - ngLeaf * 128.0, ngExtra.x, ngExtra.z);
   vNgTInst = vec4(ngKeep, ngRnd, ngH, ngYn);
   vNgTNW = normalize(ngM3 * ngNl);
+  vNgTSun = ngTreeSunAt(ngRoot.xz);
 }
 `;
 
-const TREE_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + /* glsl */ `
+const TREE_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + SUN_FS + /* glsl */ `
 #define NG_UV_U ${f(UV_U_RANGE)}
 #define NG_UV_V ${f(UV_V_RANGE)}
 uniform highp sampler2DArray ngBarkAlb;
@@ -205,6 +242,7 @@ varying vec2 vNgTUv;
 varying vec4 vNgTInfo;
 varying vec4 vNgTInst;
 varying vec3 vNgTNW;
+varying float vNgTSun;
 vec2 ngLeafUV(vec2 uv, float layer) {
   vec2 grid = vec2(${f(LEAF_GRID[0])}, ${f(LEAF_GRID[1])});
   vec2 cell = vec2(mod(layer, grid.x), floor(layer / grid.x));
@@ -322,7 +360,11 @@ vec3 ngTr = vec3(0.0);
 {
   vec3 Vw = normalize(cameraPosition - vNgWorld);
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
-  float vis = ngKeyVis * ngNearVis;
+  /* 山の影（近景の影の外）。直接光は core が ngKeyVis（雲 × 解析）を掛けてあるので倍率だけ */
+  float ngMt = ngTreeMt(vNgWorld, vNgTSun);
+  reflectedLight.directDiffuse *= ngMt;
+  reflectedLight.directSpecular *= ngMt;
+  float vis = ngKeyVis * ngNearVis * ngMt;
   float dep = vNgTInfo.w;
   /* 樹冠の天井（この木の梢 ≈ 周りの樹冠）からの下がり：梢 0 → 樹冠の下端と幹 1 */
   float below = 1.0 - smoothstep(0.45, 1.0, vNgTInst.w);
@@ -330,10 +372,11 @@ vec3 ngTr = vec3(0.0);
   ngCanAmb = ngCanopyAmbient(ngCan, below);
   if (ngTLeaf > 0.5) {
     /* 近景の影の外（LOD1）では樹冠の自己陰影を AO で代える */
-    float self = mix(1.0, mix(0.35, 1.0, vNgTInfo.z), ngNearToFar(vNgWorld) * 0.85 + 0.15);
+    float self = mix(1.0, mix(0.35, 1.0, vNgTInfo.z), ngTreeFarW(vNgWorld) * 0.85 + 0.15);
     reflectedLight.directDiffuse *= self;
     reflectedLight.directSpecular *= self * 0.35;
-    ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, vis * self, dep);
+    ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, vis * self, dep)
+         + ngTreeLeak(material.diffuseColor, Vw, ngTN.b, ngKeyVis * ngMt, ngNearVis, dep);
     reflectedLight.directDiffuse += ngTr;
   }
   /* 空の鏡面（葉の蝋・濡れた樹皮）。three の間接の鏡面は envMap が無いと 0 */
@@ -342,7 +385,9 @@ vec3 ngTr = vec3(0.0);
   float occ = vNgTInfo.z * (ngTLeaf > 0.5 ? (1.0 - 0.8 * dep) : ngTN.b);
   /* 葉は樹冠の外側でも周りの葉が鏡面を遮る（dens ≥ 0.5）。幹は樹冠の下（below）ほど */
   float sd = ngTLeaf > 0.5 ? max(ngCan.r, 0.5 + 0.5 * dep) : ngCan.r * below;
-  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, sd) * occ * (ngTLeaf > 0.5 ? 0.35 + 0.65 * ngWet : 1.0) * ngCanAmb;
+  /* 樹冠の下では上向きの反射も樹冠に当たる（空が見えるのは隙間だけ） */
+  float under = 1.0 - 0.9 * clamp(ngCan.r * below, 0.0, 1.0);
+  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, sd) * occ * under * (ngTLeaf > 0.5 ? 0.35 + 0.65 * ngWet : 1.0);
 }
 `;
 
@@ -385,7 +430,7 @@ void ngImpBasis(vec3 d, out vec3 r, out vec3 u) {
 `;
 export const IMP_OCT_GLSL = IMP_COMMON;
 
-const IMP_VS_PARS = NG_HASH_GLSL + IMP_COMMON + /* glsl */ `
+const IMP_VS_PARS = NG_HASH_GLSL + IMP_COMMON + SUN_VS + /* glsl */ `
 #define NG_IMP_N ${N}
 attribute vec4 ngIPos;     // x, y（根元）, z, 樹高 h
 attribute vec4 ngIRot;     // x = rotation.y, y = 層, z = 乱数, w = 傾き
@@ -398,6 +443,7 @@ varying vec4 vNgIF;            // xy = フレーム 0 の格子、zw = 1
 varying vec2 vNgIF2;           // フレーム 2 の格子
 varying vec4 vNgIInfo;         // x = 層、y = 残す割合、z = 乱数、w = rotation.y
 varying vec2 vNgIH;            // 根元の y、樹高
+varying float vNgISun;         // 樹冠の高さでの key の見え
 vec3 ngRotY(vec3 v, float a) { float c = cos(a), s = sin(a); return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
 vec2 ngImpUV(vec2 cell, vec3 Pl, float R) {
   vec3 d = ngHemiDec(cell / (NG_IMP_N - 1.0) * 2.0 - 1.0);
@@ -444,11 +490,12 @@ const IMP_VS_BEGIN = /* glsl */ `
   vNgIF2 = c2;
   vNgIInfo = vec4(ngIRot.y, keep, ngIRot.z, rot);
   vNgIH = vec2(ngIPos.y, h);
+  vNgISun = ngTreeSunAt(ngIPos.xz);
   transformed = keep < 0.003 ? vec3(0.0) : P;
 }
 `;
 
-const IMP_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + IMP_COMMON + /* glsl */ `
+const IMP_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + SUN_FS + IMP_COMMON + /* glsl */ `
 #define NG_IMP_N ${N}
 uniform highp sampler2DArray ngImpAlb;
 uniform highp sampler2DArray ngImpNrm;
@@ -458,6 +505,7 @@ varying vec4 vNgIF;
 varying vec2 vNgIF2;
 varying vec4 vNgIInfo;
 varying vec2 vNgIH;
+varying float vNgISun;
 vec3 ngImpAt(vec2 cell, vec2 uv) { return vec3((cell + clamp(uv, 0.004, 0.996)) / NG_IMP_N, vNgIInfo.x); }
 vec4 ngImpSample(highp sampler2DArray t) {
   return texture(t, ngImpAt(vNgIF.xy, vNgI0.xy)) * vNgI0.z + texture(t, ngImpAt(vNgIF.zw, vNgI1.xy)) * vNgI1.z
@@ -520,9 +568,10 @@ const IMP_FS_LIGHTS = /* glsl */ `
   float below = 1.0 - smoothstep(0.45, 1.0, (vNgWorld.y - vNgIH.x) / max(vNgIH.y, 1.0));
   vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
   vec3 can = ngCanopyAmbient(ngCan, below);
-  reflectedLight.directDiffuse *= self;
-  reflectedLight.directSpecular *= self * 0.35;
-  vec3 ngTr = ngTreeTransmit(material.diffuseColor, ngINw, Vw, thin, ngKeyVis * ngNearVis * self, 1.0 - ao);
+  float ngMt = ngTreeMt(vNgWorld, vNgISun);
+  reflectedLight.directDiffuse *= self * ngMt;
+  reflectedLight.directSpecular *= self * 0.35 * ngMt;
+  vec3 ngTr = ngTreeTransmit(material.diffuseColor, ngINw, Vw, thin, ngKeyVis * ngNearVis * self * ngMt, 1.0 - ao);
   reflectedLight.directDiffuse += ngTr;
   vec3 R = reflect(-Vw, ngINw);
   float nv = clamp(dot(ngINw, Vw), 0.0, 1.0);
@@ -625,13 +674,48 @@ void main() {
 }
 `;
 
+/* ---------------------------------------------------------------- 樹冠の高さの key の見え（ngShaderMaterial、key が動いたら焼き直す） */
+
+export const SUNMAP_VS = /* glsl */ `
+varying vec2 vNgUv;
+void main() { vNgUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+export const SUNMAP_FS = NG_HEIGHTFIELD_GLSL + /* glsl */ `
+uniform sampler2D ngCanopyMap;
+uniform vec3 ngSunKey;
+varying vec2 vNgUv;
+void main() {
+  vec2 xz = (vNgUv * 2.0 - 1.0) * 512.0;
+  vec3 L = ngSunKey;
+  if (L.y <= 0.002) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  /* 受け手 = 樹冠の上の方（地面 + 平均樹高 × 0.75）。遮蔽物 = 地形だけ（樹冠どうしは近景の影と AO が持つ） */
+  float can = texture2D(ngCanopyMap, vNgUv).g * 40.0;
+  float h0 = max(ngTerrainH(xz), 0.0) + can * 0.75 + 0.5;
+  float horiz = length(L.xz);
+  vec2 dir = L.xz / max(horiz, 1e-4);
+  float rise = L.y / max(horiz, 1e-4);
+  float vis = 1.0;
+  float d = 6.0;
+  for (int i = 0; i < 30; i++) {
+    vec2 p = xz + dir * d;
+    if (abs(p.x) > 512.0 || abs(p.y) > 512.0) break;
+    float occ = max(ngTerrainH(p), 0.0);
+    vis = min(vis, clamp(0.5 + 24.0 * (h0 + d * rise - occ) / d, 0.0, 1.0));
+    if (vis <= 0.0) break;
+    d *= 1.2;
+  }
+  gl_FragColor = vec4(vis, vis, vis, 1.0);
+}
+`;
+
 /* ---------------------------------------------------------------- 3. 樹冠シェル */
 
-const SHELL_VS_PARS = NG_HEIGHTFIELD_GLSL + /* glsl */ `
+const SHELL_VS_PARS = NG_HEIGHTFIELD_GLSL + SUN_VS + /* glsl */ `
 uniform sampler2D ngCanopyMap;   // r = 密度、g = 平均樹高 / 40m、b = 針葉の割合、a = 色むら（±512m）
 uniform vec4 ngTreeEye;
 uniform vec4 ngShellLod;          // x = 出始め、y = 幅
 varying vec4 vNgSh;               // x = 密度、y = 針葉、z = 残す割合、w = 色むら
+varying float vNgShSun;
 `;
 
 const SHELL_VS_BEGIN = /* glsl */ `
@@ -645,12 +729,14 @@ const SHELL_VS_BEGIN = /* glsl */ `
   float ngD = length(xz - ngTreeEye.xz) / max(ngTreeEye.w, 1e-3);
   float keep = smoothstep(ngShellLod.x, ngShellLod.x + ngShellLod.y, ngD);
   vNgSh = vec4(dens, cm.b, keep, cm.a);
+  vNgShSun = ngTreeSunAt(xz);
 }
 `;
 
-const SHELL_FS_PARS = NG_NOISE_GLSL + SHARED_FRAG + /* glsl */ `
+const SHELL_FS_PARS = NG_NOISE_GLSL + SHARED_FRAG + SUN_FS + /* glsl */ `
 uniform vec4 ngTreeMisc;
 varying vec4 vNgSh;
+varying float vNgShSun;
 float ngShellH(vec2 p) {
   /* 樹冠の凹凸：6m と 2.5m のドーム（値ノイズ） */
   return ngVNoise2(p / 6.0) * 0.7 + ngVNoise2(p / 2.5 + 3.1) * 0.3;
@@ -693,8 +779,10 @@ const SHELL_FS_LIGHTS = /* glsl */ `
   vec3 Vw = normalize(cameraPosition - vNgWorld);
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
   float self = mix(0.4, 1.0, ngShB);
-  reflectedLight.directDiffuse *= self;
-  vec3 ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, 0.7, ngKeyVis * ngNearVis * self, 0.5);
+  float ngMt = ngTreeMt(vNgWorld, vNgShSun);
+  reflectedLight.directDiffuse *= self * ngMt;
+  reflectedLight.directSpecular *= ngMt;
+  vec3 ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, 0.7, ngKeyVis * ngNearVis * self * ngMt, 0.5);
   reflectedLight.directDiffuse += ngTr;
   reflectedLight.indirectDiffuse *= mix(0.5, 1.0, ngShB);
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);

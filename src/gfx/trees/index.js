@@ -12,13 +12,13 @@
    =========================================================== */
 import { NgModule } from '../core/module.js';
 import { NG_LAYER, ngOwn } from '../core/layers.js';
-import { ngExtendStandard, ngAttachDepth, ngCutout } from '../core/extend.js';
+import { ngExtendStandard, ngAttachDepth, ngCutout, ngShaderMaterial } from '../core/extend.js';
 import { SPECIES, SPECIES_IDS } from '../../world/species.js';
 import { TIER_DENSITY } from '../../world/placement.js';
 import { readLod, expandLod, POS_RANGE } from './format.js';
 import { bakeTreeTextures } from './textures.js';
 import { bakeImpostors } from './impostor.js';
-import { TREE_HOOKS, IMP_HOOKS, SHELL_HOOKS } from './shaders.js';
+import { TREE_HOOKS, IMP_HOOKS, SHELL_HOOKS, SUNMAP_VS, SUNMAP_FS } from './shaders.js';
 import { treesQuality, IMP_GRID } from './quality.js';
 import { trunkProfileOf, trunkWiden, visualTrunkR } from './fit.js';
 
@@ -105,16 +105,19 @@ export class TreesModule extends NgModule {
       ngSkyViewTex: { value: ctx.services.sky.skyViewTex },
       ngSkyViewMips: { value: ctx.services.sky.skyViewMips || 0 },
       ngCanopyMap: { value: this.canopyTex },
+      ngTreeSun: { value: null },
     };
     const U = this.U;
+    this._initSunMap();
+    U.ngTreeSun.value = this.sunRT.texture;
     this.treeMat = ngExtendStandard(new T.MeshStandardMaterial({ roughness: 0.7, metalness: 0, side: T.DoubleSide }), {
       key: 'trees-tree', module: 'trees',
       uniforms: {
         ngBarkAlb: { value: this.tex.barkAlb }, ngBarkNrm: { value: this.tex.barkNrm }, ngLeafAlb: { value: this.tex.leafAlb }, ngLeafNrm: { value: this.tex.leafNrm }, ngLeafSize: { value: this.tex.leafSize },
         ngTreeEye: U.ngTreeEye, ngTreeLod: U.ngTreeLod, ngTreeWindK: U.ngTreeWindK, ngTreeMisc: U.ngTreeMisc, ngTreePass: U.ngTreePass,
-        ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap,
+        ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap, ngTreeSun: U.ngTreeSun,
       },
-      vertex: TREE_HOOKS.vertex, fragment: TREE_HOOKS.fragment, depth: true, hfShadow: true,
+      vertex: TREE_HOOKS.vertex, fragment: TREE_HOOKS.fragment, depth: true, hfShadow: false,
     });
     /* ---- 5. BatchedMesh（LOD0・LOD1） */
     this.batches = [0, 1].map((k) => {
@@ -176,8 +179,9 @@ export class TreesModule extends NgModule {
       uniforms: {
         ngImpAlb: { value: this.imp.alb.texture }, ngImpNrm: { value: this.imp.nrm.texture }, ngImpMeta: { value: this.impMeta },
         ngImpLod: U.ngImpLod, ngTreePass: U.ngTreePass, ngTreeEye: U.ngTreeEye, ngTreeMisc: U.ngTreeMisc, ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap,
+        ngTreeSun: U.ngTreeSun,
       },
-      vertex: IMP_HOOKS.vertex, fragment: IMP_HOOKS.fragment, hfShadow: true,
+      vertex: IMP_HOOKS.vertex, fragment: IMP_HOOKS.fragment, hfShadow: false,
     });
     this.impGeo = new T.InstancedBufferGeometry();
     this.impGeo.setAttribute('position', new T.BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
@@ -192,8 +196,8 @@ export class TreesModule extends NgModule {
     sg.rotateX(-Math.PI / 2);
     this.shellMat = ngExtendStandard(new T.MeshStandardMaterial({ roughness: 0.75, metalness: 0 }), {
       key: 'trees-shell', module: 'trees',
-      uniforms: { ...ctx.heightfield.uniforms, ngCanopyMap: U.ngCanopyMap, ngTreeEye: U.ngTreeEye, ngShellLod: U.ngShellLod, ngTreeMisc: U.ngTreeMisc },
-      vertex: SHELL_HOOKS.vertex, fragment: SHELL_HOOKS.fragment, hfShadow: true,
+      uniforms: { ...ctx.heightfield.uniforms, ngCanopyMap: U.ngCanopyMap, ngTreeEye: U.ngTreeEye, ngShellLod: U.ngShellLod, ngTreeMisc: U.ngTreeMisc, ngTreeSun: U.ngTreeSun },
+      vertex: SHELL_HOOKS.vertex, fragment: SHELL_HOOKS.fragment, hfShadow: false,
     });
     this.shell = new T.Mesh(sg, this.shellMat);
     this.shell.name = 'trees-shell';
@@ -212,12 +216,48 @@ export class TreesModule extends NgModule {
     progress?.(1);
   }
 
+  /** 樹冠の高さでの key の見え（地形の山の影）の地図：256²、±512m。key が 0.35° 動くか 3 秒ごとに prepare で焼き直す */
+  _initSunMap() {
+    const T = this.ctx.THREE;
+    this.sunRT = new T.WebGLRenderTarget(256, 256, { type: T.UnsignedByteType, depthBuffer: false, magFilter: T.LinearFilter, minFilter: T.LinearFilter, generateMipmaps: false });
+    this.sunRT.texture.wrapS = this.sunRT.texture.wrapT = T.ClampToEdgeWrapping;
+    this.sunKey = new T.Vector3(0, 1, 0);
+    this.sunMat = ngShaderMaterial({
+      key: 'trees-sunvis', module: 'trees', lights: false, fog: false,
+      uniforms: { ...this.ctx.heightfield.uniforms, ngCanopyMap: this.U.ngCanopyMap, ngSunKey: { value: this.sunKey } },
+      vertexShader: SUNMAP_VS, fragmentShader: SUNMAP_FS, depthTest: false, depthWrite: false,
+    });
+    this.sunScene = new T.Scene();
+    const q = new T.Mesh(new T.PlaneGeometry(2, 2), this.sunMat);
+    q.frustumCulled = false;
+    this.sunScene.add(q);
+    this.sunCam = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.sunLast = { x: 0, y: -2, z: 0, t: -1e9 };
+    this.texBytes += 256 * 256 * 4;
+    this._bakeSunMap(this.ctx.gfx?.f?.keyDir || { x: 0.3, y: 0.8, z: 0.3 }, 0, true);
+  }
+
+  _bakeSunMap(k, t, force = false) {
+    if (!k || !Number.isFinite(k.x) || !Number.isFinite(k.y) || !Number.isFinite(k.z)) return;
+    const L = this.sunLast;
+    const dot = k.x * L.x + k.y * L.y + k.z * L.z;
+    if (!force && dot > Math.cos((0.35 * Math.PI) / 180) && t - L.t < 3) return;
+    if (!force && dot > 0.99999) return;
+    this.sunKey.set(k.x, k.y, k.z).normalize();
+    const r = this.ctx.renderer, prev = r.getRenderTarget();
+    try {
+      r.setRenderTarget(this.sunRT);
+      r.render(this.sunScene, this.sunCam);
+    } finally { r.setRenderTarget(prev); }
+    L.x = this.sunKey.x; L.y = this.sunKey.y; L.z = this.sunKey.z; L.t = t;
+  }
+
   /** lab の view(name)：葉のアトラス・樹皮の配列・インポスターの層・樹冠の地図 */
   _registerDebug() {
     const reg = this.ctx.services.post.registerDebugView;
     const u = {
       ngDbgLeaf: { value: this.tex.leafAlb }, ngDbgLeafN: { value: this.tex.leafNrm }, ngDbgBark: { value: this.tex.barkAlb },
-      ngDbgImp: { value: this.imp.alb.texture }, ngDbgImpN: { value: this.imp.nrm.texture }, ngDbgCan: { value: this.canopyTex },
+      ngDbgImp: { value: this.imp.alb.texture }, ngDbgImpN: { value: this.imp.nrm.texture }, ngDbgCan: { value: this.canopyTex }, ngDbgSun: { value: this.sunRT.texture },
     };
     const chk = 'float ngChk(vec2 uv) { vec2 c = floor(uv * 64.0); return mod(c.x + c.y, 2.0) * 0.1 + 0.2; }\n';
     reg('trees-atlas', `uniform sampler2D ngDbgLeaf;\n${chk}vec4 ngDebug(vec2 uv) { vec4 a = texture(ngDbgLeaf, uv); return vec4(mix(vec3(ngChk(uv)), clamp(a.rgb * 5.0, 0.0, 1.0), a.a), 1.0); }`, u);
@@ -225,6 +265,7 @@ export class TreesModule extends NgModule {
     reg('trees-bark', `uniform highp sampler2DArray ngDbgBark;\nvec4 ngDebug(vec2 uv) { vec2 g = uv * 3.0; float l = floor(g.x) + floor(g.y) * 3.0; return vec4(clamp(texture(ngDbgBark, vec3(fract(g), l)).rgb * 2.0, 0.0, 1.0), 1.0); }`, u);
     reg('trees-imp', `uniform highp sampler2DArray ngDbgImp;\nvec4 ngDebug(vec2 uv) { vec2 g = uv * 4.0; float l = floor(g.x) + floor(g.y) * 4.0; vec4 a = texture(ngDbgImp, vec3(fract(g), l)); return vec4(mix(vec3(0.25), a.rgb / max(a.a, 0.01) * 1.6, a.a), 1.0); }`, u);
     reg('trees-imp-n', `uniform highp sampler2DArray ngDbgImpN;\nvec4 ngDebug(vec2 uv) { vec2 g = uv * 4.0; float l = floor(g.x) + floor(g.y) * 4.0; return vec4(texture(ngDbgImpN, vec3(fract(g), l)).rgb, 1.0); }`, u);
+    reg('trees-sun', `uniform sampler2D ngDbgSun;\nvec4 ngDebug(vec2 uv) { return vec4(vec3(texture(ngDbgSun, uv).r), 1.0); }`, u);
     reg('trees-canopy', `uniform sampler2D ngDbgCan;\nvec4 ngDebug(vec2 uv) { vec4 c = texture(ngDbgCan, uv); return vec4(c.r, c.g, c.b, 1.0); }`, u);
   }
 
@@ -504,7 +545,9 @@ export class TreesModule extends NgModule {
     }
   }
 
-  prepare() {
+  prepare(f) {
+    /* 樹冠の高さの山の影：key（昼は太陽・夜は月）が動いたら焼き直す */
+    if (this.sunRT && f) this._bakeSunMap(f.keyDir, this.clock);
     /* 空の鏡面：sky の提供は作り直しで差し替わるので毎フレーム引き直す */
     const sky = this.ctx.services.sky;
     if (this.U) {
@@ -541,6 +584,7 @@ export class TreesModule extends NgModule {
   }
 
   restoreGPU() {
+    if (this.sunRT) this.sunLast.t = -1e9, this.sunLast.y = -2;
     /* 焼いたテクスチャ・インポスターは文脈の喪失で消える。Phase 1 は作り直さない（core-requests へ）：
        幾何・placement は残るので、次の起動で戻る。ここでは割り当てだけやり直す */
     this.forceBuild = true;
@@ -567,6 +611,7 @@ export class TreesModule extends NgModule {
     for (const b of this.batches || []) b.bm.dispose();
     this.imp?.alb.dispose(); this.imp?.nrm.dispose();
     this.canopyTex?.dispose();
+    this.sunRT?.dispose(); this.sunMat?.dispose();
   }
 }
 
