@@ -291,6 +291,34 @@ export class GroundcoverModule extends NgModule {
     this.debug.shrubs = total;
   }
 
+  /**
+   * 検査用：計算パスの表を読み、領域ごとの «生きている株の数» と種類の内訳・根元の色の平均を返す（同期の読み戻し。lab 専用）
+   * @returns {Array<{name:string, alive:number, kinds:Record<number, number>, root:number[]}>}
+   */
+  debugCounts() {
+    const { renderer } = this.ctx;
+    if (!this.rt) return [];
+    const W = this.rt.width, H = this.rt.height;
+    const buf = new Float32Array(W * H * 4);
+    renderer.readRenderTargetPixels(this.rt, 0, 0, W, H, buf);
+    return this.layout.regions.map((r, i) => {
+      const kinds = {}, root = [0, 0, 0], samples = {};
+      let alive = 0;
+      const n = (this.draws[i]?.mesh.geometry.instanceCount) || 0;
+      for (let k = 0; k < n; k++) {
+        const row = r.row0 + Math.floor(k / GC_TEX_W), col = k % GC_TEX_W;
+        const a = (row * W + col) * 4, b = (row * W + col + GC_TEX_W) * 4;
+        if (!(buf[a + 3] > 0.0005)) continue;
+        alive++;
+        const kind = Math.floor(buf[b + 3] + 0.01);
+        kinds[kind] = (kinds[kind] || 0) + 1;
+        if (!samples[kind]) samples[kind] = [+buf[a].toFixed(2), +buf[a + 1].toFixed(2), +buf[a + 2].toFixed(2), +buf[a + 3].toFixed(3)];
+        root[0] += buf[b]; root[1] += buf[b + 1]; root[2] += buf[b + 2];
+      }
+      return { name: this.draws[i]?.name || r.name, alive, kinds, samples, root: root.map((v) => +(v / Math.max(alive, 1)).toFixed(4)) };
+    });
+  }
+
   setQuality(tier, profile) { this._applyTier(tier, profile); }
 
   setLodScale(k) { if (Number.isFinite(k) && k > 0) { this.lod = Math.min(2, Math.max(0.25, k)); this._shrubAt = null; } }

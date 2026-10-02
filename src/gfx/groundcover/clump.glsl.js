@@ -155,7 +155,7 @@ void ngGcMain(ivec2 px) {
   bool land = y > 0.05 && sd > 0.25;
   if (sys < 0.5) {
     /* 草（スゲ・イネ科）：草地が主。林床・苔・浜には疎らに。汀線の 0.25m までは無し */
-    float g = wA.z + (wA.x * 0.20 + wA.y * 0.22) * open01 + wA.w * 0.22 + wB.x * 0.16 + wB.y * 0.35 + wB.w * 0.10;
+    float g = wA.z + (wA.x * 0.20 + wA.y * 0.22) * open01 + (wA.x + wA.y) * 0.07 + wA.w * 0.22 + wB.x * 0.16 + wB.y * 0.35 + wB.w * 0.10;
     g *= mix(0.55, 1.18, nPatch) * (1.0 - smoothstep(0.7, 1.2, slope));
     if (!land || u >= g) { ngGcCull(); return; }
     kind = 0.0;
@@ -163,11 +163,11 @@ void ngGcMain(ivec2 px) {
     H = mix(0.12, 0.50, clamp(tall, 0.0, 1.0)) * mix(1.0, 0.45, wB.w) * mix(0.8, 1.15, hj.x);
   } else if (sys < 1.5) {
     /* クマザサ（林床の群落・汀から 6m より奥）とシダ（沢筋・水辺・苔の上） */
-    float colony = smoothstep(0.40, 0.60, ngVNoise2(xz * (1.0 / 11.0) + 1.3) + 0.15 * (nPatch - 0.5));
+    float colony = smoothstep(0.30, 0.50, ngVNoise2(xz * (1.0 / 11.0) + 1.3) + 0.15 * (nPatch - 0.5));
     float sasa = wA.x * colony * mix(0.55, 1.0, smoothstep(0.1, 0.5, cn.x)) * smoothstep(5.0, 12.0, sd) * (1.0 - smoothstep(0.75, 1.1, slope));
     float wet = 1.0 - smoothstep(3.0, 18.0, sd);
-    float fernPatch = smoothstep(0.38, 0.62, ngVNoise2(xz * (1.0 / 6.5) + 9.1));
-    float fern = (wA.y * 0.85 + wA.x * 0.30 * mix(0.35, 1.0, wet) + wA.z * 0.22 * wet) * fernPatch;
+    float fernPatch = smoothstep(0.30, 0.58, ngVNoise2(xz * (1.0 / 6.5) + 9.1));
+    float fern = (wA.y * 0.9 + wA.x * 0.45 * mix(0.35, 1.0, wet) + wA.z * 0.22 * wet) * fernPatch;
     if (!land || tierCut >= R3.y) { ngGcCull(); return; }
     if (u < sasa * 0.95) { kind = 1.0; H = mix(0.42, 0.85, colony) * mix(0.85, 1.15, hj.y); }
     else if (u < sasa * 0.95 + fern * 0.8) { kind = 2.0; H = mix(0.32, 0.72, max(wet, wA.y)) * mix(0.8, 1.2, hj.x); }
@@ -177,7 +177,7 @@ void ngGcMain(ivec2 px) {
     float peb = wA.w * 0.95 + wB.z * 0.45 + wB.x * 0.22 + wB.y * 0.06;
     float twig = wA.x * 0.08;
     float lit = wA.x * mix(0.18, 0.42, cn.x);
-    float moss = wA.y * 0.45 + wA.x * 0.04;
+    float moss = wA.y * 0.40 + wA.x * 0.012;
     if (y < -0.18 || tierCut >= R3.y) { ngGcCull(); return; }
     if (u < peb) { kind = 3.0; H = mix(0.035, 0.13, pow(hj.y, 1.8)) * mix(0.8, 1.25, wA.w); }
     else if (u < peb + twig && land) { kind = 4.0; H = mix(0.18, 0.62, hj.y); }

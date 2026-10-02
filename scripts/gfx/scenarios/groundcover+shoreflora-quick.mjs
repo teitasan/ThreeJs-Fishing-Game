@@ -24,6 +24,9 @@ export default async function (h) {
     }));
   }, IDS) };
   console.log('boot', JSON.stringify(out.boot));
+  if (process.env.HIDE) {
+    await h.eval((names) => { for (const n of names) { const o = window.__lab.scene.getObjectByName(n); if (o) o.visible = false; } }, process.env.HIDE.split(','));
+  }
   out.views = [];
   for (const v of list(process.env.VIEWS, ['forest-floor@13', 'shore-low@13', 'dock-fp@17.6'])) {
     const [cam, hour, weather = 'clear', view = ''] = v.split('@');
@@ -47,7 +50,8 @@ export default async function (h) {
         }
       }
       const s = L.stats();
-      return { nan, cost, draws: s.draws, tris: s.tris, mods: Object.fromEntries(ids.map((id) => [id, s.modules?.[id]])),
+      const gcc = L.gfx.modules.get('groundcover')?.debugCounts?.() ?? null;
+      return { nan, cost, gcc, draws: s.draws, tris: s.tris, mods: Object.fromEntries(ids.map((id) => [id, s.modules?.[id]])),
         dbg: Object.fromEntries(ids.map((id) => [id, L.gfx.modules.get(id)?.debug ?? null])) };
     }, { cam, hour, weather, view, bench: process.env.BENCH === '1', ids: IDS });
     await h.shot(name);

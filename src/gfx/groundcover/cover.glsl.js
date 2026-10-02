@@ -85,28 +85,42 @@ export const GC_VS_NORMAL = /* glsl */ `
     /* ---- 笹（クマザサ）とシダ：葉 = 太さの変わるリボン ---- */
     float nl = 16.0;
     if (kind < 1.5) {
-      /* クマザサ：稈 4 本 × 葉 4 枚。葉は稈の先から水平〜やや垂れて、広い披針形 */
-      float culm = floor(bi / 4.0), li = mod(bi, 4.0);
-      float ca = culm * 1.618 * 3.88 + hc * 6.2831;
-      vec2 cd = vec2(cos(ca), sin(ca)) * (0.05 + 0.12 * ngHash12(base.xz + culm * 9.7));
-      float ch = H * mix(0.62, 1.0, ngHash12(base.xz * 2.1 + culm * 3.3));
-      float la = ca + li * 1.75 + (hb - 0.5) * 0.9;
-      vec2 ld = vec2(cos(la), sin(la));
-      float L = clamp(0.20 * H / 0.6, 0.13, 0.27) * mix(0.8, 1.15, hb);
-      vec3 p0 = base + vec3(cd.x, ch - li * 0.045 * H, cd.y);
+      /* クマザサ：稈 3 本 × (稈 1 + 葉 4 枚)。稈は細い茎、葉は稈の先に掌状に広がる広い披針形（長さ 20–25cm、幅 4–5cm） */
+      float culm = floor(bi / 5.0), li = mod(bi, 5.0);
+      if (culm > 2.5) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+      float ca = culm * 2.39996 + hc * 6.2831;
+      vec2 cd = vec2(cos(ca), sin(ca)) * (0.04 + 0.16 * ngHash12(base.xz + culm * 9.7));
+      float ch = H * mix(0.7, 1.0, ngHash12(base.xz * 2.1 + culm * 3.3));
+      vec3 cb = base + vec3(cd.x, -0.02, cd.y);
       vec2 bw = bend * 0.35;
-      vec3 ctl = p0 + vec3(ld.x * L * 0.55 + bw.x * L, L * (0.22 - 0.08 * li), ld.y * L * 0.55 + bw.y * L);
-      vec3 tip = p0 + vec3(ld.x * L + bw.x * 2.0 * L, -L * (0.18 + 0.25 * hb2), ld.y * L + bw.y * 2.0 * L);
-      vec3 Pc = ngGcBez3(p0, ctl, tip, t);
-      vec3 T = normalize(ngGcBezD(p0, ctl, tip, max(t, 0.02)));
-      vec3 sv = normalize(cross(T, vec3(0.0, 1.0, 0.0)) + vec3(0.0, (hb2 - 0.5) * 0.5, 0.0));
-      float wd = L * 0.105 * sin(3.14159 * pow(clamp(t, 0.0, 1.0), 0.62)) * shrink;
-      P = Pc + sv * wd * sd;
-      N = normalize(cross(sv, T));
-      if (N.y < 0.0) N = -N;
-      N = normalize(N + sv * sd * 0.25);
-      /* 稈は描かない代わりに葉の根元を稈の色へ寄せる（vGcA.x の t） */
-      dry = smoothstep(0.82, 1.0, abs(sd)) * 0.6;
+      vec3 ctop = cb + vec3(bw.x * ch * 0.6 + cd.x * 0.3, ch, bw.y * ch * 0.6 + cd.y * 0.3);
+      if (li < 0.5) {
+        /* 稈：細いリボン（カメラへ向けない。2 枚の葉の間の向き） */
+        vec3 Pc = mix(cb, ctop, t);
+        vec3 T = normalize(ctop - cb);
+        vec3 sv = normalize(cross(T, vec3(cos(ca + 1.57), 0.0, sin(ca + 1.57))) + vec3(1e-4, 0.0, 0.0));
+        P = Pc + sv * 0.0035 * sd * shrink;
+        N = normalize(cross(sv, T) + sv * sd * 0.6);
+        dry = 1.0;
+      } else {
+        float k = li - 1.0;
+        float la = ca + k * 1.5708 + (hb - 0.5) * 0.9;
+        vec2 ld = vec2(cos(la), sin(la));
+        float L = clamp(0.24 * H / 0.65, 0.15, 0.28) * mix(0.82, 1.12, hb);
+        vec3 p0 = ctop - vec3(0.0, k * 0.025, 0.0);
+        vec3 ctl = p0 + vec3(ld.x * L * 0.5 + bw.x * L, L * (0.16 - 0.05 * k), ld.y * L * 0.5 + bw.y * L);
+        vec3 tip = p0 + vec3(ld.x * L * 0.95 + bw.x * 2.0 * L, -L * (0.12 + 0.3 * hb2), ld.y * L * 0.95 + bw.y * 2.0 * L);
+        vec3 Pc = ngGcBez3(p0, ctl, tip, t);
+        vec3 T = normalize(ngGcBezD(p0, ctl, tip, max(t, 0.02)));
+        vec3 sv = normalize(cross(T, vec3(0.0, 1.0, 0.0)) + vec3(0.0, (hb2 - 0.5) * 0.4, 0.0));
+        float wd = L * 0.11 * sin(3.14159 * pow(clamp(t, 0.0, 1.0), 0.55)) * shrink;
+        /* 葉は中肋で少し V 字に折れる */
+        P = Pc + sv * wd * sd + vec3(0.0, abs(sd) * wd * 0.25, 0.0);
+        N = normalize(cross(sv, T));
+        if (N.y < 0.0) N = -N;
+        N = normalize(N - sv * sd * 0.35);
+        dry = smoothstep(0.82, 1.0, abs(sd)) * 0.6;
+      }
     } else {
       /* シダ：葉（frond）8 枚 + 内側の若い葉 8 枚。中軸は弧を描いて外へ垂れる。小葉は断片のアルファ */
       float inner = step(8.0, bi);
@@ -214,8 +228,9 @@ vec3 ngGcAlb;
     ngGcPorous = 0.25;
   } else if (ngGcK < 1.5) {
     /* クマザサ：濃い緑、ろう質。縁がわずかに淡い */
-    vec3 c = mix(vec3(0.040, 0.085, 0.024), vec3(0.055, 0.105, 0.030), ngGcH) * mix(0.85, 1.1, ngPch2);
-    c = mix(c, vec3(0.13, 0.13, 0.07), smoothstep(0.86, 1.0, abs(vGcA.y)) * 0.55);
+    vec3 c = mix(vec3(0.040, 0.085, 0.024), vec3(0.058, 0.108, 0.030), ngGcH) * mix(0.85, 1.1, ngPch2);
+    c = mix(c, vec3(0.15, 0.14, 0.08), smoothstep(0.86, 1.0, abs(vGcA.y)) * 0.55 * step(vGcB.w, 0.9));
+    if (vGcB.w > 0.9) c = vec3(0.075, 0.08, 0.04);
     ngGcAlb = mix(vec3(0.07, 0.08, 0.035), c, smoothstep(0.0, 0.12, ngGcT));
     ngGcPorous = 0.1;
   } else if (ngGcK < 2.5) {
