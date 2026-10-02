@@ -34,8 +34,8 @@ import {
 
 /** 灯籠の点光源（ng 単位の光度。真下の床 2m で ≈0.3 ng = 月の 25 倍） */
 const LAMP_I = 1.25;
-/** 和紙の発光の放射輝度（露出前。夜の露出 ≈22 で ≈5 = AgX で白に近い暖色） */
-const LAMP_EMIT = 0.24;
+/** 和紙の発光の放射輝度（露出前。夜の露出 ≈23 で ≈4 = AgX で明るい暖色。0.24 は接写で赤が 0.6% 飽和した → −0.5EV） */
+const LAMP_EMIT = 0.17;
 const ROPE_N = 22, ROPE_SEGS = 6, ROPE_R = 0.011;
 
 export class HardscapeModule extends NgModule {
