@@ -43,7 +43,37 @@ vec3 ngCanopyAmbient(vec4 canopy, float below) {
   return mix(vec3(1.0), vec3(0.20, 0.27, 0.13), occ * 0.85);
 }
 uniform sampler2D ngCanopyMap;
+/* 調べ物の表示（ngTreeMisc.w）：1 直接の鏡面なし・2 空の鏡面なし・3 透過なし・4 間接の拡散だけ・5 直接の鏡面だけ・6 空の鏡面だけ・7 透過だけ・8 直接の拡散だけ */
+void ngTreeDbg(inout ReflectedLight rl, vec3 tr, float mode) {
+  int m = int(mode + 0.5);
+  if (m == 1) rl.directSpecular = vec3(0.0);
+  else if (m == 2) rl.indirectSpecular = vec3(0.0);
+  else if (m == 3) rl.directDiffuse -= tr;
+  else if (m == 4) { rl.directDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
+  else if (m == 5) { rl.directDiffuse = vec3(0.0); rl.indirectDiffuse = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
+  else if (m == 6) { rl.directDiffuse = vec3(0.0); rl.indirectDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); }
+  else if (m == 7) { rl.directDiffuse = tr; rl.indirectDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
+  else if (m == 8) { rl.directDiffuse -= tr; rl.indirectDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
+}
 vec4 ngCanopyAt2(vec2 xz) { return texture2D(ngCanopyMap, (xz + 512.0) / 1024.0); }
+#endif
+`;
+
+/* 葉・樹皮の空の鏡面（NG_SKYSPEC_GLSL の後に置く）。夕方に森が «霜を被ったように» 白く光った原因（r2 で直した）：
+   - 空の明るさを «平均の空の 4 倍» で頭打ち（skyView の太陽の近くを拾わない。太陽の鏡面は直接光が持つ）
+   - 樹冠の中の鏡面の遮蔽：水平に近い反射は森では隣の木の葉に当たる（地平の明るい夕空を写さない）。dens = 周りの樹冠の密度
+   - 粗さを考えた Fresnel（Fdez-Agüera 2019：grazing の 1 を max(1 − rough, F0) に）。葉の F0 = 0.03（クチクラ n ≈ 1.45） */
+const TREE_SKYSPEC = /* glsl */ `
+#ifndef NG_TREES_SKYSPEC
+#define NG_TREES_SKYSPEC
+vec3 ngTreeSkySpec(vec3 R, float nv, float rough, float f0, float dens) {
+  vec3 s = ngSkySpecular(R, rough);
+  float cap = 4.0 * max(ngLuminance(ngSkyIrr), 1e-4);
+  s *= min(1.0, cap / max(ngLuminance(s), 1e-6));
+  float F = f0 + (max(1.0 - rough, f0) - f0) * pow(1.0 - clamp(nv, 0.0, 1.0), 5.0);
+  float horizon = mix(1.0, smoothstep(-0.05, 0.8, R.y), clamp(dens, 0.0, 1.0));
+  return s * F * horizon;
+}
 #endif
 `;
 
@@ -151,7 +181,7 @@ const TREE_VS_BEGIN = /* glsl */ `
 }
 `;
 
-const TREE_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + SHARED_FRAG + /* glsl */ `
+const TREE_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + /* glsl */ `
 #define NG_UV_U ${f(UV_U_RANGE)}
 #define NG_UV_V ${f(UV_V_RANGE)}
 uniform highp sampler2DArray ngBarkAlb;
@@ -276,6 +306,7 @@ const TREE_FS_NORMAL = /* glsl */ `
 
 const TREE_FS_LIGHTS = /* glsl */ `
 vec3 ngCanAmb;
+vec3 ngTr = vec3(0.0);
 {
   vec3 Vw = normalize(cameraPosition - vNgWorld);
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
@@ -283,20 +314,23 @@ vec3 ngCanAmb;
   float dep = vNgTInfo.w;
   /* 樹冠の天井（この木の梢 ≈ 周りの樹冠）からの下がり：梢 0 → 樹冠の下端と幹 1 */
   float below = 1.0 - smoothstep(0.45, 1.0, vNgTInst.w);
-  ngCanAmb = ngCanopyAmbient(ngCanopyAt2(vNgWorld.xz), below);
+  vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
+  ngCanAmb = ngCanopyAmbient(ngCan, below);
   if (ngTLeaf > 0.5) {
     /* 近景の影の外（LOD1）では樹冠の自己陰影を AO で代える */
     float self = mix(1.0, mix(0.35, 1.0, vNgTInfo.z), ngNearToFar(vNgWorld) * 0.85 + 0.15);
     reflectedLight.directDiffuse *= self;
     reflectedLight.directSpecular *= self * 0.35;
-    reflectedLight.directDiffuse += ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, vis * self, dep);
+    ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, vis * self, dep);
+    reflectedLight.directDiffuse += ngTr;
   }
   /* 空の鏡面（葉の蝋・濡れた樹皮）。three の間接の鏡面は envMap が無いと 0 */
   vec3 R = reflect(-Vw, Nw);
-  float nv = clamp(dot(Nw, Vw), 0.0, 1.0);
-  float F = 0.03 + 0.5 * pow(1.0 - nv, 5.0);
+  float nv = abs(dot(Nw, Vw));
   float occ = vNgTInfo.z * (ngTLeaf > 0.5 ? (1.0 - 0.8 * dep) : ngTN.b);
-  reflectedLight.indirectSpecular += ngSkySpecular(R, roughnessFactor) * F * occ * (1.0 - roughnessFactor * 0.7) * (0.25 + 0.6 * ngWet) * ngCanAmb;
+  /* 葉は樹冠の外側でも周りの葉が鏡面を遮る（dens ≥ 0.5）。幹は樹冠の下（below）ほど */
+  float sd = ngTLeaf > 0.5 ? max(ngCan.r, 0.5 + 0.5 * dep) : ngCan.r * below;
+  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, sd) * occ * (ngTLeaf > 0.5 ? 0.35 + 0.65 * ngWet : 1.0) * ngCanAmb;
 }
 `;
 
@@ -304,6 +338,7 @@ const TREE_FS_AO = /* glsl */ `
 {
   float occ = vNgTInfo.z * (ngTLeaf > 0.5 ? (1.0 - 0.55 * vNgTInfo.w) : ngTN.b);
   reflectedLight.indirectDiffuse *= occ * ngCanAmb;
+  if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
 }
 `;
 
@@ -401,7 +436,7 @@ const IMP_VS_BEGIN = /* glsl */ `
 }
 `;
 
-const IMP_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + SHARED_FRAG + IMP_COMMON + /* glsl */ `
+const IMP_FS_PARS = NG_HASH_GLSL + NG_SKYSPEC_GLSL + TREE_SKYSPEC + SHARED_FRAG + IMP_COMMON + /* glsl */ `
 #define NG_IMP_N ${N}
 uniform highp sampler2DArray ngImpAlb;
 uniform highp sampler2DArray ngImpNrm;
@@ -471,14 +506,17 @@ const IMP_FS_LIGHTS = /* glsl */ `
   float ao = clamp(ngIN.w / max(ngIA.a, 0.02), 0.0, 1.0);
   float self = mix(0.35, 1.0, ao);
   float below = 1.0 - smoothstep(0.45, 1.0, (vNgWorld.y - vNgIH.x) / max(vNgIH.y, 1.0));
-  vec3 can = ngCanopyAmbient(ngCanopyAt2(vNgWorld.xz), below);
+  vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
+  vec3 can = ngCanopyAmbient(ngCan, below);
   reflectedLight.directDiffuse *= self;
   reflectedLight.directSpecular *= self * 0.35;
-  reflectedLight.directDiffuse += ngTreeTransmit(material.diffuseColor, ngINw, Vw, thin, ngKeyVis * ngNearVis * self, 1.0 - ao);
+  vec3 ngTr = ngTreeTransmit(material.diffuseColor, ngINw, Vw, thin, ngKeyVis * ngNearVis * self, 1.0 - ao);
+  reflectedLight.directDiffuse += ngTr;
   vec3 R = reflect(-Vw, ngINw);
   float nv = clamp(dot(ngINw, Vw), 0.0, 1.0);
-  reflectedLight.indirectSpecular += ngSkySpecular(R, 0.6) * (0.03 + 0.5 * pow(1.0 - nv, 5.0)) * ao * (0.2 + 0.5 * ngWet) * can;
+  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, max(ngCan.r, 0.6)) * ao * (0.35 + 0.65 * ngWet) * can;
   reflectedLight.indirectDiffuse *= mix(0.45, 1.0, ao) * can;
+  if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
 }
 `;
 
@@ -644,8 +682,10 @@ const SHELL_FS_LIGHTS = /* glsl */ `
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
   float self = mix(0.4, 1.0, ngShB);
   reflectedLight.directDiffuse *= self;
-  reflectedLight.directDiffuse += ngTreeTransmit(material.diffuseColor, Nw, Vw, 0.7, ngKeyVis * ngNearVis * self, 0.5);
+  vec3 ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, 0.7, ngKeyVis * ngNearVis * self, 0.5);
+  reflectedLight.directDiffuse += ngTr;
   reflectedLight.indirectDiffuse *= mix(0.5, 1.0, ngShB);
+  if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
 }
 `;
 

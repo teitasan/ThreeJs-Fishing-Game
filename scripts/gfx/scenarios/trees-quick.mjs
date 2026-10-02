@@ -13,7 +13,7 @@ const list = (v, def) => (v ? v.split(';').map((s) => s.trim()).filter(Boolean) 
 export default async function (h) {
   const tier = process.env.TIER || 'high';
   const extra = process.env.Q || '';
-  await h.open(`lab/trees.html?capture=1&tier=${tier}${extra}`);
+  await h.open(`lab/${process.env.LAB || 'trees'}.html?capture=1&tier=${tier}${extra}`);
   await h.waitFor(() => window.__gfxReady === true, undefined, 240);
   const out = { tier, boot: await h.eval(() => {
     const L = window.__lab, m = L.gfx.modules.get('trees');
