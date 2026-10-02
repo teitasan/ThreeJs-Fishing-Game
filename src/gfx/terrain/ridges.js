@@ -248,6 +248,10 @@ vec3 ngRidgeAlbedo(vec3 P, vec3 Nw) {
   float rock = smoothstep(1.05, 1.45, slope + 0.35 * (c - 0.5));
   col = mix(col, vec3(0.095, 0.098, 0.088) * (0.8 + 0.3 * b), clamp(rock, 0.0, 0.55));
   ngRidgeCanopy = 1.0 - clamp(rock, 0.0, 0.55);
+  /* 2km より先の樹冠は画素の中で幹・枝・影が混ざって緑が褪せる（彩度を最大 35% 落とす）。
+     r4：鏡面を消した後、2–2.9km の帯の b/g が 1.3–2km の帯より 0.03 低かった（青い層が逆転） */
+  float ngFade = 0.35 * smoothstep(1600.0, 2600.0, distance(P.xz, cameraPosition.xz));
+  col = mix(col, vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), ngFade);
   return col;
 }
 vec3 ngRidgeBump(vec3 P, vec3 Nw, float footprint) {
