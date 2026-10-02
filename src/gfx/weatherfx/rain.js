@@ -102,7 +102,8 @@ void main() {
   vec3 pos = P + ax * (position.y - 0.5) * len + side * position.x * wW;
   vQ = position.xy;
   vec4 mvPosition = viewMatrix * vec4(pos, 1.0);
-  gl_Position = keep > 0.5 ? projectionMatrix * mvPosition : vec4(2.0, 2.0, 2.0, 1.0);
+  /* 0.5m より近い粒は描かない（α ≈ 0 なのに画面を大きく覆って塗りの重さだけ食う） */
+  gl_Position = keep > 0.5 && dist > 0.5 ? projectionMatrix * mvPosition : vec4(2.0, 2.0, 2.0, 1.0);
   /* 近すぎる粒（レンズの前を横切る）と円柱の上下の縁は薄く */
   float near = smoothstep(0.35, 1.4, dist);
   float edge = smoothstep(0.0, 1.5, P.y - (c.y - BELOW)) * (1.0 - smoothstep(H - 3.0, H, P.y - (c.y - BELOW))) * (1.0 - smoothstep(0.8 * Ri, Ri, rh));
@@ -244,6 +245,11 @@ in float vH;
 void main() {
   float rain = ngRnA.y;
   if (rain < 0.01) discard;
+  /* 先に深度（地形・木に隠れた画素は 2 回のノイズの取得の前に捨てる） */
+  float zs = texture(ngSceneDepth, gl_FragCoord.xy * ngScreen.zw).r;
+  float zf = gl_FragCoord.z / gl_FragCoord.w;
+  float soft = smoothstep(0.0, 18.0, zs - zf);
+  if (soft < 1e-3) discard;
   float az = atan(vDir.z, vDir.x) / 6.2831853;
   vec2 wd = ngWindDir * ngWindSpeed;
   /* 縦に流れる筋（下へ 9m/s、風で横へ）。2 つの尺度 */
@@ -252,11 +258,8 @@ void main() {
   float n = texture(ngRnNoise, uv).r * 0.65 + texture(ngRnNoise, uv * vec2(2.3, 1.7) + 0.37).g * 0.35;
   /* 幕は一様にしない：大きな尺度（90m × 80m）の濃淡で «雨の帯» が流れて来ては去る（一様だと遠景が櫛の模様） */
   float m = smoothstep(0.25, 0.8, texture(ngRnNoise, vec2(az * ngRnRadius / 90.0 + ngRnA.x * 0.004, vH / 80.0 + 0.31)).r);
-  float a = rain * (0.05 + (0.04 + 0.08 * n) * m) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(30.0, 55.0, vH));
-  /* 地形に刺さる縁を消す（不透明の深度との差でソフト） */
-  float zs = texture(ngSceneDepth, gl_FragCoord.xy * ngScreen.zw).r;
-  float zf = gl_FragCoord.z / gl_FragCoord.w;
-  a *= smoothstep(0.0, 18.0, zs - zf);
+  float a = 1.3 * rain * (0.05 + (0.04 + 0.08 * n) * m) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(22.0, 36.0, vH));
+  a *= soft;   // 地形に刺さる縁を消す（不透明の深度との差でソフト）
   if (a < 1e-3) discard;
   vec3 L = ngSkyIrr * 1.1 + ngKeyRad * ngRnHG(dot(vDir, ngKeyDir), 0.75) * 0.25 + ngInscatterAmb * 0.4;
   gl_FragColor = vec4(L, 1.0);
@@ -313,7 +316,7 @@ export class Rain {
     /* 幕：開いた円筒（半径 1、高さ 0..60m）を 2 枚 */
     this.noise = { value: null };
     this.haze = [];
-    const cyl = new T.CylinderGeometry(1, 1, 60, 64, 1, true).translate(0, 30, 0);
+    const cyl = new T.CylinderGeometry(1, 1, 36, 64, 1, true).translate(0, 18, 0);   // 高さ 36m（上は α が消える。塗りを減らす）
     for (const r of [55, 110]) {
       const mat = ngShaderMaterial({
         key: 'weatherfx-haze', module: 'weatherfx', lights: false, fog: true,

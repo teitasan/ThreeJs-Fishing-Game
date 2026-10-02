@@ -53,10 +53,11 @@ float ngUwFocus(vec3 P, float depth) {
   float layers = float(textureSize(uCaustTex, 0).z);
   if (layers < 1.5 || ngUwCs.y <= 0.0) return 1.0;
   vec2 q = P.xz + ngUwLw.xz / max(ngUwLw.y, 0.2) * depth;
-  float f = fract(ngUwCs.w / ${CAUSTICS_LOOP_SEC.toFixed(1)}) * layers;
-  float l0 = floor(f), l1 = l0 + 1.0 >= layers ? 0.0 : l0 + 1.0;
+  /* 時刻のフレームは最寄りの 1 層だけ（光柱は視線の積分とぼかしで滑らか。2 層の補間は 1 ステップ 1 回の取得の無駄だった） */
+  float l0 = floor(fract(ngUwCs.w / ${CAUSTICS_LOOP_SEC.toFixed(1)}) * layers + 0.5);
+  l0 = l0 >= layers ? 0.0 : l0;
   vec2 uv = q * ngUwCs.x + vec2(0.0061, 0.0023) * ngUwCs.w;
-  vec3 H = (mix(texture(uCaustTex, vec3(uv, l0), 3.0).rgb, texture(uCaustTex, vec3(uv, l1), 3.0).rgb, f - l0) * 2.0 - 1.0) * ngUwCs.y;
+  vec3 H = (texture(uCaustTex, vec3(uv, l0), 3.0).rgb * 2.0 - 1.0) * ngUwCs.y;
   /* 太い光の筋（1–3m）：mip 3 の長めの波だけを、焦点を 3 倍に寄せて読む（細い網目は視線の積分で消える） */
   float D = depth / max(ngUwLw.y, 0.2) * 0.75;
   float det = (1.0 + D * H.x) * (1.0 + D * H.y) - D * D * H.z * H.z;
@@ -198,7 +199,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     float r = uP.y * (1.0 - exp(-min(z, 200.0) * 0.045));
     if (r > 0.6) {
       vec3 sum = col; float wsum = 1.0;
-      for (int i = 0; i < 8; i++) {
+      /* 6 タップ（8 では 1440p の合成が ≈ 0.95ms で予算を超えた。PD の先頭 6 つで円盤はほぼ埋まる） */
+      for (int i = 0; i < 6; i++) {
         vec2 o = uv + PD[i] * r * texelSize;
         float zt = texture(tLin, o).r;
         float w = smoothstep(0.55, 0.85, zt / max(z, 1e-3));
@@ -340,7 +342,8 @@ export class UnderwaterFx {
    */
   setFrame(f, q, st) {
     const u = this.u;
-    this.active = st.uw > 0.5 || st.menOn;
+    /* __ngUwFxOff：開発用（ベンチが合成の重さを «有効 − 無効» で測る口） */
+    this.active = !globalThis.__ngUwFxOff && (st.uw > 0.5 || st.menOn);
     u.uP.value.set(this.active ? 1 : 0, q.blurPx, st.uw > 0.5 && this._fails <= 2 ? 1 : 0, 0.22);
     u.uMen.value.set(st.menOn ? 1 : 0, st.uw > 0.5 ? 1 : 0, q.menBand, f.envTime || 0);
     u.uMenD.value.copy(st.menD);

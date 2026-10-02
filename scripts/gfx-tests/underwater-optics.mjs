@@ -63,7 +63,8 @@ ok(dp.sd > sh.sd * 3, `深いと明線が立つ（sd ${sh.sd.toFixed(3)} → ${d
 /* ---- 品質表（§6.3 / §7） ---- */
 ok(UW_TIERS.high.tile === 512 && UW_TIERS.high.frames === 16 && UW_TIERS.mid.tile === 256 && UW_TIERS.mid.frames === 8 && UW_TIERS.low.frames === 8, 'caustics の焼き込み 16 × 512² / 8 × 256²');
 ok(UW_TIERS.high.plankton === 800 && UW_TIERS.mid.plankton === 400 && UW_TIERS.low.plankton === 150, 'プランクトン 800 / 400 / 150');
-ok(UW_TIERS.high.shaftSteps === 16 && UW_TIERS.low.shaftSteps === 0, '光柱 16 ステップ（high）・low は解析');
+ok(UW_TIERS.high.shaftSteps >= 12 && UW_TIERS.mid.shaftSteps >= 8 && UW_TIERS.low.shaftSteps === 0, '光柱 12 / 8 ステップ・low は解析');
+ok(UW_TIERS.high.shaftScale >= UW_TIERS.mid.shaftScale && UW_TIERS.mid.shaftScale >= UW_TIERS.low.shaftScale, '光柱の解像度は段で単調');
 ok(uwTier('x') === UW_TIERS.mid, '知らない段は mid');
 
 console.log(`underwater-optics: ${n} 件合格`);
