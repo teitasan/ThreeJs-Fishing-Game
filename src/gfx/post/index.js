@@ -82,7 +82,7 @@ export class PostModule extends NgModule {
       ngSrcTexel: U(new T.Vector4(1, 1, 1, 1)), ngDstSize: U(new T.Vector4(1, 1, 1, 1)),
       ngKaris: U(0), ngUpMix: U(0.62), ngProj: U(new T.Vector4(1, 1, 0.1, 1000)), ngCamWorld: U(new T.Matrix4()),
       ngDepthTexel: U(new T.Vector4(1, 1, 1, 1)), ngShaft: U(new T.Vector4(0, 0, 0, 1)), ngAo: U(new T.Vector4(1.2, 6, 1.25, 70)),
-      ngFrameNo: U(0),
+      ngFrameNo: U(0), ngSrcGain: U(1),
     };
     this.util = ngShaderMaterial({
       key: 'post-util', module: 'post', lights: false, fog: false,
@@ -94,6 +94,7 @@ export class PostModule extends NgModule {
       ngBloomAmt: U(0), ngCas: U(0), ngWb: U(new T.Vector3(1, 1, 1)), ngSat: U(1), ngPurk: U(0), ngVig: U(0.12),
       ngLift: U(new T.Vector3()), ngGamma: U(1), ngGain: U(new T.Vector3(1, 1, 1)), ngFrameNo: U(0), ngOutSrgb: U(1),
       ngChart: U(0), ngChartCols: U(NG_CHART_24.map((c) => new T.Vector3(c[0], c[1], c[2]))), ngDither: U(1),
+      ngFused: U(0), ngFExpo: U(1), ngFAoAmt: U(0), ngFShaftAmt: U(0), ngFAoTex: U(white), ngFShaftTex: U(black), ngFSceneColor: U(black),
     };
     this.final = ngShaderMaterial({
       key: 'post-final', module: 'post', lights: false, fog: false,
@@ -303,7 +304,22 @@ export class PostModule extends NgModule {
       }
       this._shaftAmt = shaftAmt;
 
-      /* PRE：水中 → NaN → AO → 光芒 → 露出 → hdr */
+      /* PRE：水中 → NaN → AO → 光芒 → 露出 → hdr。
+         水中の Effect が休んでいる（水上で水面から離れている）間は «融合»：PRE を FINAL の中で行い、
+         全画面の RGBA16F の書き出しと読み（1440p で 2 × 29MB）を省く。測光と Bloom の最初の段は main を露出倍で読む */
+      const uwOwner = this._uwFx?._owner;
+      const fused = !this._uwFx || (uwOwner && uwOwner.active === false);
+      this._fused = fused;
+      const fu = this.uF;
+      fu.ngFused.value = fused ? 1 : 0;
+      fu.ngFExpo.value = e;
+      fu.ngFAoAmt.value = fused && aoOn ? 1 : 0;
+      fu.ngFAoTex.value = fused && aoOn ? this.aoB.texture : this._white;
+      fu.ngFShaftAmt.value = fused ? shaftAmt : 0;
+      fu.ngFShaftTex.value = fused && shaftAmt > 0 ? this.shaft.texture : this._black;
+      fu.ngFSceneColor.value = ctx.pipeline.uniforms.ngSceneColor.value;
+      const src = fused ? targets.main : this.hdr;
+      u.ngSrcGain.value = fused ? e : 1;
       const pu = this.pre.uniforms;
       pu.get('ngPostExposure').value = e;
       pu.get('ngPostAoAmt').value = aoOn ? 1 : 0;
@@ -311,15 +327,16 @@ export class PostModule extends NgModule {
       pu.get('ngPostShaftAmt').value = shaftAmt;
       pu.get('ngPostShaftTex').value = shaftAmt > 0 ? this.shaft.texture : this._black;
       pu.get('ngSceneColor').value = ctx.pipeline.uniforms.ngSceneColor.value;
-      this.main.render(r, targets.main, this.hdr, dt);
-      this._draws++;
+      if (!fused) { this.main.render(r, targets.main, this.hdr, dt); this._draws++; }
 
       /* 測光（毎フレーム 32×18、読み戻しは 4Hz・非同期）。撮影中は順応しないので読まない */
       const now = performance.now();
       if (!capture && !this._reading && now - this._readT > 250) {
         this._readT = now;
-        this._pass(MODE.METER, this.hdr, this.meterRT);
+        this._pass(MODE.METER, src, this.meterRT);
+        u.ngSrcGain.value = 1;
         this._pass(MODE.REDUCE, this.meterRT, this.meterOut);
+        u.ngSrcGain.value = fused ? e : 1;
         this._readMeter(this.adapt, night);
       }
 
@@ -329,8 +346,9 @@ export class PostModule extends NgModule {
       const g = ngGradeParams({ sunAltDeg: alt, night, cloud: w.cloud, rain: w.rain, uw: uwS });
       if (n > 0 && force.bloom !== 0) {
         u.ngKaris.value = 1;
-        this._pass(MODE.DOWN, this.hdr, this.down[0]);
+        this._pass(MODE.DOWN, src, this.down[0]);
         u.ngKaris.value = 0;
+        u.ngSrcGain.value = 1;
         for (let i = 1; i < n; i++) this._pass(MODE.DOWN, this.down[i - 1], this.down[i]);
         for (let i = n - 2; i >= 0; i--) {
           u.ngSrc2.value = this.down[i].texture;
@@ -340,8 +358,8 @@ export class PostModule extends NgModule {
       }
 
       /* FINAL：グレード → AgX → ディザ → 画面（または AA の LDR） */
-      const fu = this.uF;
-      fu.ngHdr.value = this.hdr.texture;
+      u.ngSrcGain.value = 1;
+      fu.ngHdr.value = src.texture;
       fu.ngHdrTexel.value.set(1 / this.hdr.width, 1 / this.hdr.height, this.hdr.width, this.hdr.height);
       fu.ngBloom.value = bloomTex;
       fu.ngBloomAmt.value = bloomTex === this._black ? 0 : g.bloom;
@@ -419,7 +437,7 @@ export class PostModule extends NgModule {
     return {
       draws: this._draws, tris: this._draws, instances: 0, texBytes: bytes, programs: 3,
       underwaterEffect: !!this._uwFx, exposure: this.exposure, adapt: this.adapt, adaptTarget: this.adaptTarget,
-      meterLog2: this.meterLog2, ao: this._aoOn, shaft: this._shaftAmt, bloomLevels: this.cfg.bloom,
+      meterLog2: this.meterLog2, fused: !!this._fused, ao: this._aoOn, shaft: this._shaftAmt, bloomLevels: this.cfg.bloom,
     };
   }
 

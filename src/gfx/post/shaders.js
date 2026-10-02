@@ -62,9 +62,11 @@ uniform vec4 ngDepthTexel;      // ngSceneDepth の (1/w, 1/h, w, h)
 uniform vec4 ngShaft;           // (σ, ステップ数, 最大距離 m, 水面より上なら 1)
 uniform vec4 ngAo;              // (半径 m, ステップ数, 強さ, 距離のフェード m)
 uniform float ngFrameNo;
+uniform float ngSrcGain;        // 測光・Bloom の最初の段の入力の倍率（PRE を飛ばした «融合» の道では露出をここで掛ける）
 varying vec2 vUv;
 
 float ngPostLum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 ngSrcAt(vec2 uv) { return max(texture(ngSrc, uv).rgb * ngSrcGain, vec3(0.0)); }
 float ngPostNoise(vec2 fc, float k) {
   return fract(texelFetch(ngBlueNoiseTex, ivec2(fc) & ivec2(63), 0).r + k * 0.61803398875);
 }
@@ -77,7 +79,7 @@ vec4 ngModeMeter() {
   for (int j = 0; j < 4; j++) {
     for (int i = 0; i < 4; i++) {
       vec2 uv = vUv + (vec2(float(i), float(j)) - 1.5) * 0.25 * ngDstSize.zw;
-      s += log2(max(ngPostLum(texture(ngSrc, uv).rgb), 1e-5));
+      s += log2(max(ngPostLum(ngSrcAt(uv)), 1e-5));
     }
   }
   vec2 q = (vUv - 0.5) * vec2(1.6, 1.9);
@@ -105,19 +107,19 @@ vec3 ngKarisW(vec3 c) { return c / (1.0 + ngPostLum(c)); }
 vec4 ngModeDown() {
   /* COD の 13 タップ縮小。最初の段は 5 つの箱を Karis 平均（輝点のちらつきを抑える） */
   vec2 t = ngSrcTexel.xy;
-  vec3 a = texture(ngSrc, vUv + t * vec2(-2.0, -2.0)).rgb;
-  vec3 b = texture(ngSrc, vUv + t * vec2( 0.0, -2.0)).rgb;
-  vec3 c = texture(ngSrc, vUv + t * vec2( 2.0, -2.0)).rgb;
-  vec3 d = texture(ngSrc, vUv + t * vec2(-2.0,  0.0)).rgb;
-  vec3 e = texture(ngSrc, vUv).rgb;
-  vec3 f = texture(ngSrc, vUv + t * vec2( 2.0,  0.0)).rgb;
-  vec3 g = texture(ngSrc, vUv + t * vec2(-2.0,  2.0)).rgb;
-  vec3 h = texture(ngSrc, vUv + t * vec2( 0.0,  2.0)).rgb;
-  vec3 i = texture(ngSrc, vUv + t * vec2( 2.0,  2.0)).rgb;
-  vec3 j = texture(ngSrc, vUv + t * vec2(-1.0, -1.0)).rgb;
-  vec3 k = texture(ngSrc, vUv + t * vec2( 1.0, -1.0)).rgb;
-  vec3 l = texture(ngSrc, vUv + t * vec2(-1.0,  1.0)).rgb;
-  vec3 m = texture(ngSrc, vUv + t * vec2( 1.0,  1.0)).rgb;
+  vec3 a = ngSrcAt(vUv + t * vec2(-2.0, -2.0));
+  vec3 b = ngSrcAt(vUv + t * vec2( 0.0, -2.0));
+  vec3 c = ngSrcAt(vUv + t * vec2( 2.0, -2.0));
+  vec3 d = ngSrcAt(vUv + t * vec2(-2.0,  0.0));
+  vec3 e = ngSrcAt(vUv);
+  vec3 f = ngSrcAt(vUv + t * vec2( 2.0,  0.0));
+  vec3 g = ngSrcAt(vUv + t * vec2(-2.0,  2.0));
+  vec3 h = ngSrcAt(vUv + t * vec2( 0.0,  2.0));
+  vec3 i = ngSrcAt(vUv + t * vec2( 2.0,  2.0));
+  vec3 j = ngSrcAt(vUv + t * vec2(-1.0, -1.0));
+  vec3 k = ngSrcAt(vUv + t * vec2( 1.0, -1.0));
+  vec3 l = ngSrcAt(vUv + t * vec2(-1.0,  1.0));
+  vec3 m = ngSrcAt(vUv + t * vec2( 1.0,  1.0));
   vec3 o;
   if (ngKaris > 0.5) {
     vec3 g0 = (j + k + l + m) * 0.25, g1 = (a + b + d + e) * 0.25, g2 = (b + c + e + f) * 0.25, g3 = (d + e + g + h) * 0.25, g4 = (e + f + h + i) * 0.25;
@@ -305,7 +307,34 @@ uniform float ngOutSrgb;        // 1 = 画面へ（sRGB の値をそのまま書
 uniform float ngChart;          // 1 = AgX のチャート（24 パッチ × ±4EV）
 uniform vec3 ngChartCols[24];
 uniform float ngDither;
+/* 融合の道（水中の Effect が休んでいる水上）：PRE（NaN の除去・AO・光芒・露出）をここで行い、HDR の RT の書き出しと読みを省く */
+uniform float ngFused;
+uniform float ngFExpo;
+uniform float ngFAoAmt;
+uniform float ngFShaftAmt;
+uniform sampler2D ngFAoTex;
+uniform sampler2D ngFShaftTex;
+uniform sampler2D ngFSceneColor;
 varying vec2 vUv;
+vec3 ngClean(vec3 c) {
+  bvec3 bad = bvec3(c.r != c.r || c.r > 65000.0, c.g != c.g || c.g > 65000.0, c.b != c.b || c.b > 65000.0);
+  return any(bad) ? vec3(0.0) : max(c, vec3(0.0));
+}
+vec3 ngHdrAt(vec2 uv) { vec3 c = texture(ngHdr, uv).rgb; return ngFused > 0.5 ? min(ngClean(c) * ngFExpo, vec3(60000.0)) : c; }
+vec3 ngHdrCenter(vec2 uv) {
+  vec3 raw = texture(ngHdr, uv).rgb;
+  if (ngFused < 0.5) return raw;
+  vec3 c = ngClean(raw);
+  if (ngFAoAmt > 0.0) {
+    vec3 opq = texture(ngFSceneColor, uv).rgb;
+    float lr = dot(raw, vec3(0.2126, 0.7152, 0.0722)), lo = dot(opq, vec3(0.2126, 0.7152, 0.0722));
+    float diff = abs(lr - lo) / max(max(lr, lo), 1e-4);
+    float opaque = 1.0 - smoothstep(0.015, 0.05, diff);
+    c *= mix(1.0, texture(ngFAoTex, uv).r, opaque * ngFAoAmt);
+  }
+  if (ngFShaftAmt > 0.0) c += max(texture(ngFShaftTex, uv).rgb, vec3(0.0)) * ngFShaftAmt;
+  return min(c * ngFExpo, vec3(60000.0));
+}
 
 float ngPostLum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 float ngToSrgb(float x) { return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0 / 2.4) - 0.055; }
@@ -339,11 +368,11 @@ void main() {
     c = ngChartCols[i] * exp2(ev) * edge;
   } else {
     vec2 t = ngHdrTexel.xy;
-    c = texture(ngHdr, vUv).rgb;
+    c = ngHdrCenter(vUv);
     if (ngCas > 0.0) {
       /* 軽い CAS（AMD FidelityFX の簡略）：近傍の輝度の幅で鋭さを決める（DRS で落とした解像度を戻す） */
-      vec3 a = texture(ngHdr, vUv - vec2(0.0, t.y)).rgb, b = texture(ngHdr, vUv - vec2(t.x, 0.0)).rgb;
-      vec3 d = texture(ngHdr, vUv + vec2(t.x, 0.0)).rgb, e = texture(ngHdr, vUv + vec2(0.0, t.y)).rgb;
+      vec3 a = ngHdrAt(vUv - vec2(0.0, t.y)), b = ngHdrAt(vUv - vec2(t.x, 0.0));
+      vec3 d = ngHdrAt(vUv + vec2(t.x, 0.0)), e = ngHdrAt(vUv + vec2(0.0, t.y));
       vec3 mn = min(min(min(a, b), min(d, e)), c), mx = max(max(max(a, b), max(d, e)), c);
       vec3 cm = mn / (1.0 + mn), cx = mx / (1.0 + mx);
       vec3 amp = sqrt(clamp(min(cm, 1.0 - cx) / max(cx, 1e-4), 0.0, 1.0));
