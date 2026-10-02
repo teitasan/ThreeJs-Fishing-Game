@@ -35,7 +35,7 @@ export const GC_QUALITY = Object.freeze({
   low: {
     grass: [
       { c: 0.45, n: 20, r0: 0, r1: 8.5, fade: 2.0, tpl: 'near' },
-      { c: 0.9, n: 20, r0: 7, r1: 17.5, fade: 5, tpl: 'far' },
+      { c: 0.9, n: 24, r0: 7, r1: 17.5, fade: 5, tpl: 'far' },
     ],
     plants: { c: 0.85, n: 20, r0: 0, r1: 17, fade: 4.5, tpl: 'near', density: 0.3 },
     debris: { c: 0.7, n: 14, r0: 0, r1: 9.5, fade: 3, tpl: 'near', density: 0.4 },
