@@ -356,9 +356,17 @@ export const GC_FS_AO = /* glsl */ `
   else if (k < 1.5) ao = vGcB.w > 0.9 ? 0.7 : mix(0.5, 1.0, smoothstep(0.0, 0.7, ngGcT));
   else if (k < 2.5) ao = mix(0.5, 1.0, ngGcT);
   else ao = mix(0.35, 1.0, smoothstep(0.0, 0.7, ngGcT));
-  if (ngGcLook.w > 0.5) { ao = 1.0; skyV = 1.0; }
+  if (ngGcLook.w > 0.5) {
+    /* 検査：地形と同じ光の掛け方（TERRAIN_FRAG_AO、素材の AO ≈ 0.8、空の見え 1 − 0.75·樹冠） */
+    float cnv = clamp((1.0 - vGcB.x) / 0.62, 0.0, 1.0), aoT = 0.8;
+    float occ = (1.0 - 0.75 * cnv) * mix(1.0, aoT, 0.7);
+    reflectedLight.indirectDiffuse *= aoT * (occ * 0.6 + 0.4);
+    reflectedLight.indirectSpecular *= occ;
+    reflectedLight.directDiffuse *= mix(1.0, aoT, 0.45);
+  } else {
   reflectedLight.indirectDiffuse *= ao * skyV;
   reflectedLight.indirectSpecular *= ao * skyV;
   reflectedLight.directDiffuse *= mix(1.0, ao, 0.35);
+  }
 }
 `;

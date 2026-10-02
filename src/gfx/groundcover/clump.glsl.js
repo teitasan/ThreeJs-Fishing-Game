@@ -82,6 +82,7 @@ ${NG_SHADOW_GLSL}
 #define NG_GC_W ${GC_TEX_W}
 #define NG_GC_MAXR ${GC_MAX_REGIONS}
 #define NG_GC_NTR ${GC_TRAMPLE_N}
+#define NG_GC_MEADOW_GAIN vec3(0.42, 0.54, 0.60)
 uniform sampler2D ngGcFarAlb;
 uniform vec4 ngGcReg[NG_GC_MAXR];    // x = 最初の行, y = 行数, z = セル m, w = 半数 n
 uniform vec4 ngGcReg2[NG_GC_MAXR];   // x = r0, y = r1, z = 外の帯, w = 内の帯
@@ -186,10 +187,20 @@ void ngGcMain(ivec2 px) {
     else { ngGcCull(); return; }
   }
 
-  /* 根元の色 = 地形の遠景の色（farAlbedo：同じ重み × 層の平均色 × マクロの色むら）。
-     樹冠の混ざった所（a 大）は林床の色へ寄せる（樹冠の色が地面の色に化けない） */
+  /* 根元の色 = 近景の地形の色（素材と同じ重み × 層の平均色 × マクロの色むら）。
+     farAlbedo の rgb は «地面 c と森の色 can を a2 で混ぜた物»（a2 = max(樹冠, 林床・苔の重み × 0.82)）なので、
+     開けた所（樹冠 < 0.3 → can = 林の陰の色 gen、同じ式で作れる）では c = (fa − a2·gen)/(1 − a2) と解いて地面の色を取り出す。
+     樹冠の下・a2 が大きすぎて解けない所は林床の定数へ */
   vec4 fa = texture(ngGcFarAlb, ngFarMapUV(xz));
-  vec3 root = mix(fa.rgb, vec3(0.105, 0.082, 0.052) * (0.85 + 0.3 * nPatch), smoothstep(0.3, 0.85, fa.a) * 0.8);
+  float fnA = ngVNoise2(xz / 210.0), fnB = ngVNoise2(xz / 75.0 + 5.3), fnC = ngVNoise2(xz / 31.0 + 1.7);
+  float plant = smoothstep(0.40, 0.50, fnA + 0.12 * (fnB - 0.5) - 0.0003 * (y - 250.0));
+  vec3 gen = mix(vec3(0.036, 0.056, 0.025) * (0.8 + 0.4 * fnC), vec3(0.019, 0.032, 0.021) * (0.85 + 0.3 * fnC), plant);
+  vec3 cg = max((fa.rgb - fa.a * gen) / max(1.0 - fa.a, 0.12), vec3(0.0));
+  float solv = (1.0 - smoothstep(0.22, 0.32, cn.x)) * (1.0 - smoothstep(0.80, 0.88, fa.a));
+  vec3 litC = vec3(0.105, 0.082, 0.052) * (0.85 + 0.3 * nPatch);
+  /* 草地の層だけは近景の素材（描き込まれた草の葉・窪みの AO）が farAlbedo より暗く緑：lab の ΔE の検査で合わせた倍率（線形）。
+     terrain の遠近の色の段（docs/nextgen/modules/groundcover.md の依頼）が直れば 1 へ戻す */
+  vec3 root = mix(litC, cg * mix(vec3(1.0), NG_GC_MEADOW_GAIN, clamp(wA.z, 0.0, 1.0)), solv);
 
   /* 風：ngWindAt（38m と 13m の斑が風下へ流れる）。静かな傾き + 突風の波 + 小さな揺れ */
   vec4 W = ngWindAt(xz);
