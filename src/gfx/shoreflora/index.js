@@ -14,7 +14,7 @@ import { NG_PASS } from '../core/frame.js';
 import { ngExtendStandard, ngAttachDepth, ngCutout, ngShaderMaterial } from '../core/extend.js';
 import { isVisible } from '../../world/placement.js';
 import { hash01 } from '../../world/rng.js';
-import { SF_QUALITY, SF_TPL, sfStemCount } from './quality.js';
+import { SF_QUALITY, SF_TPL, sfStemCount, sfWeedFillers } from './quality.js';
 import {
   SF_REED_VS_PARS, SF_REED_VS_NORMAL, SF_REED_VS_BEGIN, SF_REED_FS_PARS, SF_REED_FS_SURFACE, SF_REED_FS_ALPHA,
   SF_REED_FS_ROUGH, SF_REED_FS_LIGHTS, SF_REED_FS_AO, reedTemplate, reedCardTemplate,
@@ -137,7 +137,11 @@ export class ShorefloraModule extends NgModule {
     progress?.(0.6);
 
     /* ---- 3. 沈水植物 ---- */
-    const weeds = (placement.weeds || []).filter((w) => [w.x, w.z, w.height].every(Number.isFinite)).slice().sort((a, b) => a.rank - b.rank);
+    const base = (placement.weeds || []).filter((w) => [w.x, w.z, w.height].every(Number.isFinite));
+    const seed = placement.seed ?? 1;
+    const fill = sfWeedFillers(lake?.flats || [], base, (x, z) => Math.max(-heightfield.heightAt(x, z), 0), (i, j, k) => hash01(seed + k * 7919, i, j));
+    this.weedFillers = fill.length;
+    const weeds = base.concat(fill).sort((a, b) => a.rank - b.rank);
     this.weeds = weeds;
     const nw = Math.max(1, weeds.length);
     const w0 = new Float32Array(nw * 4), w1 = new Float32Array(nw * 4);
@@ -167,7 +171,6 @@ export class ShorefloraModule extends NgModule {
     ngOwn(this.weed, NG_LAYER.UNDERWATER);
     this._applyTier(this.tier, this.profile);
     this.ctx.scene.add(this.root);
-    void lake;
     progress?.(1);
   }
 
@@ -181,6 +184,7 @@ export class ShorefloraModule extends NgModule {
     if (this.weed) this.weed.geometry.instanceCount = cnt(this.weeds, 'weeds');
     this.debug.lilies = this.lily?.geometry.instanceCount || 0;
     this.debug.weeds = this.weed?.geometry.instanceCount || 0;
+    this.debug.weedFillers = this.weedFillers || 0;
     for (const m of this.reedMats || []) ngCutout(m, this.profile, 0.5);
     if (this.reedNear) ngAttachDepth(this.reedNear);
     if (this.weed) ngCutout(this.weed.material, this.profile, 0.5);

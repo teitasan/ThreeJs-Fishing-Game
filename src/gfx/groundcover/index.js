@@ -14,7 +14,7 @@ import { ngExtendStandard, ngShaderMaterial, ngAttachDepth, ngCutout } from '../
 import { GC_QUALITY, GC_TEX_W, GC_TPL, gcLayout, gcWindow } from './quality.js';
 import { GC_CLUMP_VS, gcClumpFS, gcWeightsGLSL, GC_MAX_REGIONS, GC_TRAMPLE_N } from './clump.glsl.js';
 import {
-  GC_TPL_ID, GC_VS_PARS, GC_VS_NORMAL, GC_VS_BEGIN, GC_FS_PARS, GC_FS_SURFACE, GC_FS_ALPHA, GC_FS_ROUGH, GC_FS_LIGHTS, GC_FS_AO,
+  GC_TPL_ID, GC_VS_PARS, GC_VS_NORMAL, GC_VS_BEGIN, GC_FS_PARS, GC_FS_SURFACE, GC_FS_ALPHA, GC_FS_NORMAL, GC_FS_ROUGH, GC_FS_LIGHTS, GC_FS_AO,
 } from './cover.glsl.js';
 import {
   SHRUB_LEAF_FRAG, buildShrubGeometry, SHRUB_VS_PARS, SHRUB_VS_BEGIN, SHRUB_FS_PARS, SHRUB_FS_SURFACE, SHRUB_FS_ROUGH,
@@ -79,6 +79,8 @@ export class GroundcoverModule extends NgModule {
     this._v3 = new T.Vector3();
     this._shrubAt = null;
     this._shrubTier = null;
+    /** 検査：true で根元の色の ΔE を測る表示（lab の proof だけが立てる） */
+    this.debugRoot = false;
     this.debug = { windows: [], instances: 0, shrubs: 0, weightsMode: '' };
     const v4 = () => Array.from({ length: GC_MAX_REGIONS }, () => new T.Vector4());
     this.cu = {
@@ -140,7 +142,7 @@ export class GroundcoverModule extends NgModule {
         key: 'gc-cover', module: ID,
         uniforms: { ngGcData: this.shared.ngGcData, ngGcLook: this.shared.ngGcLook, ngGcDraw: draw },
         vertex: { pars: GC_VS_PARS, normal: GC_VS_NORMAL, begin: GC_VS_BEGIN },
-        fragment: { pars: GC_FS_PARS, surface: GC_FS_SURFACE, alpha: GC_FS_ALPHA, rough: GC_FS_ROUGH, lights: GC_FS_LIGHTS, ao: GC_FS_AO },
+        fragment: { pars: GC_FS_PARS, surface: GC_FS_SURFACE, alpha: GC_FS_ALPHA, normal: GC_FS_NORMAL, rough: GC_FS_ROUGH, lights: GC_FS_LIGHTS, ao: GC_FS_AO },
       });
       const mesh = new T.Mesh(geo, mat);
       mesh.name = `ng-gc-${name}`;
@@ -207,7 +209,7 @@ export class GroundcoverModule extends NgModule {
       u.ngGcReg3.value[i].set(r.sys, r.density ?? 1, r.tpl === 'far' ? 1 : 0, 0);
       u.ngGcReg4.value[i].set(0, 0, 2 * r.n, 2 * r.n);
       const d = this.draws[i];
-      if (d) d.draw.value.x = r.row0;
+      if (d) { d.draw.value.x = r.row0; d.draw.value.w = r.c; }
     }
     if (profile) this.profile = profile;
     for (const d of this.draws) ngCutout(d.mesh.material, this.profile, 0.5);
@@ -258,7 +260,7 @@ export class GroundcoverModule extends NgModule {
     /* 季節の枯れ（初夏 0.42 → 先が少し枯れる）。雨は ngWet が濡らす */
     const F = this.ctx.frame?.data;
     const season = F ? F[12 * 4 + 3] : 0.42;
-    this.shared.ngGcLook.value.set(1, Math.max(0, Math.min(1, 0.15 + 0.6 * Math.max(0, season - 0.55))), 1, 0);
+    this.shared.ngGcLook.value.set(1, Math.max(0, Math.min(1, 0.15 + 0.6 * Math.max(0, season - 0.55))), 1, Number(this.debugRoot) || 0);
     const prev = renderer.getRenderTarget();
     renderer.setRenderTarget(this.rt);
     renderer.render(this.quadScene, this.quadCam);
@@ -303,7 +305,7 @@ export class GroundcoverModule extends NgModule {
     renderer.readRenderTargetPixels(this.rt, 0, 0, W, H, buf);
     return this.layout.regions.map((r, i) => {
       const kinds = {}, root = [0, 0, 0], samples = {};
-      let alive = 0;
+      let alive = 0, hf = 0;
       const n = (this.draws[i]?.mesh.geometry.instanceCount) || 0;
       for (let k = 0; k < n; k++) {
         const row = r.row0 + Math.floor(k / GC_TEX_W), col = k % GC_TEX_W;
@@ -314,8 +316,10 @@ export class GroundcoverModule extends NgModule {
         kinds[kind] = (kinds[kind] || 0) + 1;
         if (!samples[kind]) samples[kind] = [+buf[a].toFixed(2), +buf[a + 1].toFixed(2), +buf[a + 2].toFixed(2), +buf[a + 3].toFixed(3)];
         root[0] += buf[b]; root[1] += buf[b + 1]; root[2] += buf[b + 2];
+        const cw = buf[(row * W + col + 2 * GC_TEX_W) * 4 + 3];
+        hf += (cw - Math.floor(cw)) / 0.99;
       }
-      return { name: this.draws[i]?.name || r.name, alive, kinds, samples, root: root.map((v) => +(v / Math.max(alive, 1)).toFixed(4)) };
+      return { name: this.draws[i]?.name || r.name, alive, kinds, samples, hf: +(hf / Math.max(alive, 1)).toFixed(3), root: root.map((v) => +(v / Math.max(alive, 1)).toFixed(4)) };
     });
   }
 

@@ -62,3 +62,50 @@ export function sfFlatCoverage(flats, weeds, o = {}) {
     return n ? hit / n : 1;
   });
 }
+
+/**
+ * 藻場の «埋め草»：placement.weeds が届かない lake.flats の円の中の隙間に、見た目だけの沈水植物を足す（決定的、純関数）。
+ * 1.3m の格子のハッシュのジッタ。円の 0.85r までは隙間を必ず埋め、外はガウスで減らす。水深 0.15–16m（4m・7m より深い所は低く。澄んだ山の湖の車軸藻のように深くまで）
+ * @param {Array<{x:number,z:number,r:number}>} flats
+ * @param {Array<{x:number,z:number}>} weeds placement.weeds
+ * @param {(x:number,z:number)=>number} depthAt
+ * @param {(i:number,j:number,k:number)=>number} hash 0..1
+ * @returns {Array<{x:number,z:number,y:number,depth:number,height:number,rot:number,rank:number,flat:number,filler:true}>}
+ */
+export function sfWeedFillers(flats, weeds, depthAt, hash) {
+  const cell = new Map(), key = (x, z) => `${Math.floor(x / 3)},${Math.floor(z / 3)}`;
+  const add = (w) => { const k = key(w.x, w.z); if (!cell.has(k)) cell.set(k, []); cell.get(k).push(w); };
+  for (const w of weeds) add(w);
+  const near = (x, z, r) => {
+    const i0 = Math.floor(x / 3), j0 = Math.floor(z / 3);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      const L = cell.get(`${i0 + i},${j0 + j}`);
+      if (L) for (const w of L) if ((w.x - x) ** 2 + (w.z - z) ** 2 < r * r) return true;
+    }
+    return false;
+  };
+  const out = [];
+  const S = 1.3;
+  flats.forEach((f, fi) => {
+    const n = Math.ceil(f.r / S) + 1;
+    for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+      const gx = Math.floor(f.x / S) + i, gz = Math.floor(f.z / S) + j;
+      const x = (gx + 0.15 + 0.7 * hash(gx, gz, 1)) * S, z = (gz + 0.15 + 0.7 * hash(gx, gz, 2)) * S;
+      const d = Math.hypot(x - f.x, z - f.z) / f.r;
+      if (d > 1.15) continue;
+      if (d > 0.85 && hash(gx, gz, 3) > Math.exp(-(((d - 0.85) / 0.2) ** 2))) continue;
+      const depth = depthAt(x, z);
+      if (!(depth > 0.15 && depth < 16)) continue;
+      if (near(x, z, 1.5)) continue;
+      const w = {
+        /* 深い所（> 4m、光が届きにくい）は低く疎らな草丈、浅い所は水面の 12cm 下まで */
+        x, z, y: -depth, depth, height: Math.min(depth - 0.12, depth > 7 ? 0.14 + 0.25 * hash(gx, gz, 4) : depth > 4 ? 0.22 + 0.45 * hash(gx, gz, 4) : 0.3 + 0.9 * hash(gx, gz, 4) * Math.min(depth, 2.5) / 2.5),
+        rot: hash(gx, gz, 5) * Math.PI * 2, rank: hash(gx, gz, 6), flat: fi, filler: true,
+      };
+      if (!(w.height > 0.12)) continue;
+      out.push(w);
+      add(w);
+    }
+  });
+  return out;
+}

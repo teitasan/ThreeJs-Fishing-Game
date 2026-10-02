@@ -177,12 +177,12 @@ void ngGcMain(ivec2 px) {
     float peb = wA.w * 0.95 + wB.z * 0.45 + wB.x * 0.22 + wB.y * 0.06;
     float twig = wA.x * 0.08;
     float lit = wA.x * mix(0.18, 0.42, cn.x);
-    float moss = wA.y * 0.40 + wA.x * 0.012;
+    float moss = wA.y * 0.22 + wA.x * 0.006;
     if (y < -0.18 || tierCut >= R3.y) { ngGcCull(); return; }
     if (u < peb) { kind = 3.0; H = mix(0.035, 0.13, pow(hj.y, 1.8)) * mix(0.8, 1.25, wA.w); }
     else if (u < peb + twig && land) { kind = 4.0; H = mix(0.18, 0.62, hj.y); }
     else if (u < peb + twig + lit && land) { kind = 6.0; H = mix(0.035, 0.07, hj.y); }
-    else if (u < peb + twig + lit + moss && land) { kind = 5.0; H = mix(0.12, 0.34, hj.x); }
+    else if (u < peb + twig + lit + moss && land) { kind = 5.0; H = mix(0.08, 0.22, hj.x); }
     else { ngGcCull(); return; }
   }
 
