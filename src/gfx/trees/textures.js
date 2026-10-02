@@ -32,11 +32,13 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
   rough = 0.85;
   if (L == 0 || L == 1) {
     /* スギ・ヒノキ：縦に裂けた繊維の帯。帯の縁が剥がれて灰色に乾く */
-    float fine = L == 1 ? 1.4 : 1.0;
+    /* 9 × fine は整数（周の継ぎ目で帯が切れない）：ヒノキは 13 本 */
+    float fine = L == 1 ? 13.0 / 9.0 : 1.0;
     vec2 q = vec2(p.x * 9.0 * fine, p.y * 1.5);
     q.x += 0.9 * ngFbmP(vec2(p.x * 3.0, p.y * 2.0), vec2(3.0, 2.0), 3) - 0.45;
     float strip = abs(fract(q.x) - 0.5) * 2.0;
-    float fib = ngFbmP(vec2(p.x * 60.0 * fine, p.y * 3.0), vec2(60.0 * fine, 3.0), 3);
+    float fibN = L == 1 ? 87.0 : 60.0;
+    float fib = ngFbmP(vec2(p.x * fibN, p.y * 3.0), vec2(fibN, 3.0), 3);
     float peel = smoothstep(0.55, 0.8, ngFbmP(vec2(p.x * 18.0, p.y * 6.0), vec2(18.0, 6.0), 3));
     h = (1.0 - pow(strip, 1.6)) * 0.7 + fib * 0.3;
     vec3 red = L == 1 ? vec3(0.19, 0.098, 0.062) : vec3(0.16, 0.082, 0.052);
@@ -64,8 +66,8 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     /* ブナの樹皮の反射率は 0.2–0.3（地衣の白でも 0.32 まで。前の 0.40 は岩より明るく、昼の林縁で幹が白く浮いた） */
     col = vec3(0.215, 0.21, 0.195) * (0.86 + 0.24 * base);
     col = mix(col, vec3(0.31, 0.31, 0.29) * (0.92 + 0.16 * fc), lichW * 0.85);
-    col = mix(col, vec3(0.21, 0.245, 0.17), lichG * 0.8);
-    col = mix(col, vec3(0.15, 0.15, 0.14), crust * 0.75);
+    col = mix(col, vec3(0.20, 0.225, 0.17), lichG * 0.65);
+    col = mix(col, vec3(0.16, 0.155, 0.145), crust * 0.5);
     col = mix(col, vec3(0.10, 0.09, 0.08), speck * 0.6);
     col *= 1.0 - lent * 0.3;
     h = 0.5 + 0.12 * base + 0.12 * lichW + 0.08 * lichG + 0.05 * crust - lent * 0.2;
@@ -73,9 +75,10 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
   } else if (L == 3) {
     /* ミズナラ：灰褐色の不規則な縦の剥片 */
     /* 縦に長い畝が不規則に割れて剥片になる。溝は細い黒線でなく «深く柔らかい» 勾配（鱗に見せない） */
-    vec2 q = p * vec2(9.0, 2.2);
+    /* 周期は整数（2.2 だとタイルの縦の継ぎ目で畝が切れ、1m ごとに横の線が出た） */
+    vec2 q = p * vec2(9.0, 2.0);
     q.x += 1.1 * ngFbmP(vec2(p.x * 2.0, p.y * 3.0), vec2(2.0, 3.0), 3);
-    vec3 w = ngWorley2P(q, vec2(9.0, 2.2));
+    vec3 w = ngWorley2P(q, vec2(9.0, 2.0));
     float ridge = smoothstep(0.0, 0.38, w.y - w.x);
     float fib = ngFbmP(vec2(p.x * 70.0, p.y * 6.0), vec2(70.0, 6.0), 3);
     float fl = ngFbmP(p * vec2(20.0, 8.0), vec2(20.0, 8.0), 4);
@@ -114,8 +117,9 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
   } else if (L == 7) {
     /* ヤナギ：深い網目の割れ（菱形）、灰褐色 */
     vec2 q = vec2(p.x * 8.0, p.y * 2.5);
-    float a = abs(sin((q.x + q.y * 0.9 + 0.5 * ngFbmP(p * 4.0, vec2(4.0), 2)) * 3.14159));
-    float b = abs(sin((q.x - q.y * 0.9 + 0.5 * ngFbmP(p * 4.0 + 3.0, vec2(4.0), 2)) * 3.14159));
+    /* 縦の 1 周期で位相が整数回（q.y × 0.8 = 2 p.y）：タイルの縦の継ぎ目で網目が切れない */
+    float a = abs(sin((q.x + q.y * 0.8 + 0.5 * ngFbmP(p * 4.0, vec2(4.0), 2)) * 3.14159));
+    float b = abs(sin((q.x - q.y * 0.8 + 0.5 * ngFbmP(p * 4.0 + 3.0, vec2(4.0), 2)) * 3.14159));
     float ridge = smoothstep(0.15, 0.6, min(a, b) + 0.3 * ngFbmP(p * vec2(30.0, 6.0), vec2(30.0, 6.0), 2));
     h = ridge;
     col = mix(vec3(0.08, 0.07, 0.06), vec3(0.20, 0.18, 0.15), ridge) * (0.9 + 0.2 * ngFbmP(p * 10.0, vec2(10.0), 2));
