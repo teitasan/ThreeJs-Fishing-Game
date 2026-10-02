@@ -82,10 +82,12 @@ export default async function (h) {
         if (P.h[k] < 10) continue;
         let open = 0;
         for (let d = 12; d <= 72; d += 10) if (hAt(P.x[k] + ux * d, P.z[k] + uz * d) < 0) open++;
-        if (open < 4) continue;
+        const con = P.species[k] <= 1;
+        /* スギ・ヒノキは植林で汀に少ない：湖の見えが 2 段でも採る */
+        if (open < (con ? 2 : 4)) continue;
         const cx = P.x[k] - ux * BACK, cz = P.z[k] - uz * BACK;
         if (hAt(cx, cz) < 0.5) continue;
-        const score = P.h[k] + open * 2 - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k])) * 2 + (P.species[k] === 0 ? 14 : P.species[k] === 1 ? 10 : 0);
+        const score = P.h[k] + open * 2 - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k])) * 2 + (P.species[k] === 0 ? 40 : P.species[k] === 1 ? 32 : 0);
         cand.push([score, k]);
       }
       cand.sort((a, b) => b[0] - a[0]);
@@ -133,8 +135,12 @@ export default async function (h) {
         blocks: { pos: [0, 360, 0], target: [1, 0, 0] },
       };
     });
-    R.cams = { sugi: cams.sugi.k, sugiSpecies: cams.sugi.sp, collide: cams.collide.k };
+    R.cams = { sugi: cams.sugi.k, sugiSpecies: cams.sugi.sp, collide: cams.collide.k, lookup: cams.lookup, interior: cams.interiorDense, backlit: cams.sugi };
+    /* 開発用：ONLY=lookup-13,interior-13 で一部だけ撮る、DBG=N で調べ物の表示（ngTreeMisc.w） */
+    const only = list(process.env.ONLY, null);
+    if (process.env.DBG) await h.eval((w) => { window.__lab.gfx.modules.get('trees').U.ngTreeMisc.value.w = w; }, Number(process.env.DBG));
     const shoot = async (name, cam, hour, weather = 'clear', view = null, ticks = 30) => {
+      if (only && !only.includes(name)) return null;
       const r = await h.eval(({ cam, hour, weather, view, ticks }) => {
         const L = window.__lab;
         L.cam(cam); L.setHour(hour); L.setWeather(weather, { instant: true }); L.view(view); L.freeze(10);
@@ -194,6 +200,7 @@ export default async function (h) {
       }, cams.collide.k);
       await shoot('collide-overlay-12', cams.collide, 12);
       await h.eval(() => { const L = window.__lab; const g = L.scene.getObjectByName('trees-collide-overlay'); if (g) L.scene.remove(g); });
+      if (only) { console.log('  ONLY: 寄り・風は省く'); } else {
       /* 林縁への寄り（LOD の切り替え）：8 段、隣どうしの差 */
       const dollyFiles = [];
       for (let i = 0; i < cams.dolly.length; i++) dollyFiles.push(await shoot(`dolly-${String(i).padStart(2, '0')}`, cams.dolly[i], 12));
@@ -214,6 +221,7 @@ export default async function (h) {
       for (let i = 1; i < windFiles.length; i++) R.windDiff.push(+pngDiff(windFiles[i - 1], windFiles[i], [0.25, 0.05, 0.75, 0.6]).toFixed(2));
       console.log('  wind diff', JSON.stringify(R.windDiff));
       expect(R.windDiff.some((d) => d > 0.05), `${tier}: 風で木が動いていない`);
+      }
     }
     await h.eval(() => window.__lab.view(null));
     R.audit = await h.eval((id) => {

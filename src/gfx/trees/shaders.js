@@ -50,7 +50,8 @@ vec3 ngCanopyAmbient(vec4 canopy, float below) {
   /* 樹冠の下の空の見え：密な森の幹の根元で 0.4 前後（緑に偏る）。以前の 0.2 は林縁の幹まで黒くした */
   float occ = clamp(canopy.r * below, 0.0, 1.0);
   /* 葉を通った緑の光と林床の照り返しが残る：最も暗くて (0.45, 0.52, 0.34)（前の 0.32/0.40/0.22 は林内の幹の割れ目を黒く潰した） */
-  return mix(vec3(1.0), vec3(0.38, 0.46, 0.26), occ * 0.75);
+  /* 林床の照り返し（褐色）も混ぜる：空の青い SH × 緑だけだと林内の灰色の幹が青緑に寄った */
+  return mix(vec3(1.0), vec3(0.42, 0.45, 0.25), occ * 0.75);
 }
 uniform sampler2D ngCanopyMap;
 /* 調べ物の表示（ngTreeMisc.w）：1 直接の鏡面なし・2 空の鏡面なし・3 透過なし・4 間接の拡散だけ・5 直接の鏡面だけ・6 空の鏡面だけ・7 透過だけ・8 直接の拡散だけ */
@@ -383,7 +384,12 @@ vec3 ngTr = vec3(0.0);
   vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
   ngCanAmb = ngCanopyAmbient(ngCan, below);
   /* 樹冠の中の枝：自分の葉に囲まれている（樹冠の地図が疎らな一本木でも空の 4 割しか見えない）。前は樹冠の中で遮りが 0 になり、見上げた枝が白く光った */
-  if (ngTLeaf < 0.5) ngCanAmb = min(ngCanAmb, mix(vec3(1.0), vec3(0.38, 0.46, 0.26), 0.75 * smoothstep(0.35, 0.7, vNgTInst.w)));
+  if (ngTLeaf < 0.5) {
+    float ngInCr = smoothstep(0.35, 0.7, vNgTInst.w);
+    ngCanAmb = min(ngCanAmb, mix(vec3(1.0), vec3(0.32, 0.37, 0.21), 0.85 * ngInCr));
+    /* 下を向いた樹皮は暗い林床と下の葉を見る（見上げた枝が空の色で白く浮かない） */
+    ngCanAmb *= mix(1.0, 0.6, max(ngInCr, clamp(ngCan.r * below, 0.0, 1.0)) * (1.0 - smoothstep(-0.7, 0.05, Nw.y)));
+  }
   /* 葉の本当の面（微分から。頂点の法線は樹冠へ曲げてある）で、光と目が同じ側か。
      反対側（裏から光が来る）なら反射の鏡面は無く、拡散も透過に譲る（下から見上げた葉が白く光らない） */
   float ngSame = 0.65;
@@ -400,7 +406,8 @@ vec3 ngTr = vec3(0.0);
     float self = mix(1.0, mix(0.35, 1.0, vNgTInfo.z), ngTreeFarW(vNgWorld) * 0.85 + 0.15);
     reflectedLight.directDiffuse *= self;
     reflectedLight.directSpecular *= self * 0.35;
-    ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, vis * self, dep) * mix(0.3, 1.0, 1.0 - ngSame)
+    /* 透過は影の地図の 0/1 でなく «外側の薄い葉の層を抜けた光»：樹冠の外側（dep 0）は影の側でも低い太陽の key の 32%（昼は 7%）が抜ける（逆光の樹冠の縁が光る。昼の見上げはライム色に平たくしない） */
+    ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, ngTN.b, max(vis * self, ngKeyVis * ngMt * (0.07 + 0.25 * (1.0 - smoothstep(0.3, 0.75, ngKeyDir.y))) * (1.0 - dep)), dep) * mix(0.3, 1.0, 1.0 - ngSame)
          + ngTreeLeak(material.diffuseColor, Vw, ngTN.b, ngKeyVis * ngMt, ngNearVis, dep);
     reflectedLight.directDiffuse += ngTr;
   }
@@ -422,6 +429,8 @@ const TREE_FS_AO = /* glsl */ `
   /* 幹の根元の接地の陰（地面が空を半分隠す）：地上 0 → 0.9m */
   if (ngTLeaf < 0.5) occ = max(occ * mix(0.45, 1.0, smoothstep(0.0, 0.9, vNgTInst.w * vNgTInst.z)), 0.45);
   vec3 ngIrrRaw = reflectedLight.indirectDiffuse / max(material.diffuseColor, vec3(1e-3));
+  /* 葉の裏から抜ける空の光（薄い葉は反対の半球の空も通す）。夕方の逆光の樹冠が真っ黒に潰れない */
+  if (ngTLeaf > 0.5) reflectedLight.indirectDiffuse += material.diffuseColor * vec3(0.95, 1.3, 0.5) * ngSkyIrr * (0.55 * ngTN.b);
   reflectedLight.indirectDiffuse *= occ * ngCanAmb;
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
   /* 調べ物 9 = アルベド、10 = 間接の遮り（occ × 樹冠の下の空の見え）、11 = 遮る前の間接の照度 × 0.3、12 = 樹皮・葉のテクスチャの色 × 0.5 をそのまま出す（9 もアルベド × 0.5） */
