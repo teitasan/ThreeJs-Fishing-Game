@@ -16,7 +16,7 @@ import { cloudShadow } from '../core/medium.js';
 import { SkyRig } from './rig.js';
 import { skyTier } from './quality.js';
 import { TRANS_FRAG, MS_FRAG, SKYCLEAR_FRAG, SKYVIEW_FRAG } from './atmo.glsl.js';
-import { SHAPE_FRAG, DETAIL_FRAG, CIRRUS_FRAG, MOON_FRAG, PANO_FRAG, STRIP_COPY_FRAG } from './clouds.glsl.js';
+import { SHAPE_FRAG, DETAIL_FRAG, CIRRUS_FRAG, MOON_FRAG, COVER_FRAG, COVER_Q, PANO_FRAG, STRIP_COPY_FRAG } from './clouds.glsl.js';
 import { DOME_VS, DOME_FS } from './dome.glsl.js';
 
 const PASS_VS = /* glsl */ `
@@ -67,6 +67,7 @@ export class SkyModule extends NgModule {
       uSkyE: V4(), uSkyTw: V4(), uSkySunCol: { value: new T.Vector3(1, 1, 1) }, uSkyDeck: V4(), uSkyDeckL: V3(), uSkySunDir: { value: new T.Vector3(0, 1, 0) },
       uSteps: { value: 32 },
       uSkyClear: { value: null }, uCloudPano: { value: null }, uStrip: { value: null }, uPrev: { value: null },
+      uNgCoverN: { value: null }, uCoverXf: V4(),
       uNgShape: { value: null }, uNgDetail: { value: null }, uNgCirrus: { value: null }, uMoonTex: { value: null },
       uPano: V4(), uCloud: V4(), uCloud2: V4(), uWind: V4(), uLight: V4(), uLightE: V3(), uAmbTop: V3(), uAmbBot: V3(),
       uMode: V4(), uCirrus: V4(), uCirrusW: V4(),
@@ -153,6 +154,8 @@ export class SkyModule extends NgModule {
     this.U.uNgCirrus.value = forge.bake2D({ w: 512, h: 512, frag: CIRRUS_FRAG, type: T.UnsignedByteType, mips: true, wrap: 'repeat' });
     await forge.step(); progress?.(0.75);
     this.U.uMoonTex.value = forge.bake2D({ w: 512, h: 256, frag: MOON_FRAG, type: T.UnsignedByteType, mips: true, wrap: 'clamp' });
+    await forge.step();
+    this.U.uNgCoverN.value = forge.bake2D({ w: 2048, h: 2048, frag: COVER_FRAG, uniforms: { ngFrame: { value: ngFrameData } }, type: T.UnsignedByteType, format: T.RedFormat, wrap: 'clamp' });
     for (const t of old) if (t && t !== this.U.uNgShape.value) { /* forge の RT は forge が持つ */ }
     progress?.(0.85);
   }
@@ -170,7 +173,7 @@ export class SkyModule extends NgModule {
     this.full = true;
     if (this.ctx.services.sky && this.ready) this.ctx.services.provide('sky', { cloudPanoTex: this.rtPano.texture });
     this.texBytes = (256 * 64 + 32 * 32 + SKY_W * SKY_H * 2.34 + w * h + w * Math.ceil(h / this.q.strips)) * 8
-      + 64 ** 3 * 4 + 32 ** 3 * 4 + 512 * 512 * 4 * 1.34 + 512 * 256 * 4 * 1.34;
+      + 64 ** 3 * 4 + 32 ** 3 * 4 + 2048 * 2048 + 512 * 512 * 4 * 1.34 + 512 * 256 * 4 * 1.34;
   }
 
   /* 注視点の樹冠の密度（heightfield の派生マップ。CPU の画素から読む） */
@@ -234,6 +237,8 @@ export class SkyModule extends NgModule {
     const a = (h / 24) * Math.PI * 2;
     const ox = F[NG.CLOUDSH * 4] / 1000, oz = F[NG.CLOUDSH * 4 + 1] / 1000;
     U.uCloud.value.set(wp.cover, wp.base / 1000, wp.top / 1000, wp.strat);
+    const inv = F[NG.CLOUDSH * 4 + 2];
+    U.uCoverXf.value.set(inv * 1000, F[NG.CLOUDSH * 4] * inv, F[NG.CLOUDSH * 4 + 1] * inv, COVER_Q);
     U.uCloud2.value.set(wp.sigma, 1 / 1.6, 1 / 0.32, wp.erosion);
     /* 細部は 24h 周期の小さな円でさらに流れる（湧き立ち） */
     U.uWind.value.set(ox, oz, ox * 1.35 + Math.cos(a * 3) * 1.1, oz * 1.35 + Math.sin(a * 3) * 1.1);

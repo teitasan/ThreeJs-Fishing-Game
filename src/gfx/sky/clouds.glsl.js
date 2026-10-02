@@ -115,6 +115,17 @@ void main() {
 }
 `;
 
+/** 雲の被覆のノイズ n(q)（core の ngCloudCoverAt の smoothstep の前）を q ∈ [−Q, Q]² で焼く（2048²、R8）。
+    雲パノラマの内側のループで値ノイズ 3 回（ハッシュ 12 回）を 1 回のテクスチャ読みにする */
+export const COVER_Q = 36;
+export const COVER_FRAG = NG_FRAME_GLSL + NG_CLOUD_GLSL + /* glsl */ `
+void main() {
+  vec2 q = (vUv - 0.5) * ${COVER_Q.toFixed(1)} * 2.0;
+  float n = 0.5 * ngCloudNoise(q) + 0.3 * ngCloudNoise(q * 2.03 + 11.7) + 0.2 * ngCloudNoise(q * 4.11 + 3.9);
+  gl_FragColor = vec4(n, 0.0, 0.0, 1.0);
+}
+`;
+
 /* ---------- 雲パノラマ（1/16 の帯ずつ。帯の RT に描いて写す） ---------- */
 export const PANO_FRAG = NG_FRAME_GLSL + NG_CLOUD_GLSL + NG_SURFACE_GLSL + NG_SKY_TRANS_GLSL + /* glsl */ `
 uniform highp sampler3D uNgShape;
@@ -133,7 +144,18 @@ uniform vec3 uAmbBot;      // 地面の照り返し（ng）
 uniform vec4 uMode;        // 段数, 光の段数, 履歴の混ぜ（1 = 置き換え）, 2D の層（low）
 uniform vec4 uCirrus;      // 被覆, 高さ km, タイル km, 濃さ
 uniform vec4 uCirrusW;     // 巻雲の流れ km (x, z), 予備, ジッタの種
+uniform sampler2D uNgCoverN;
+uniform vec4 uCoverXf;     // q / km, 流れの q (x, z), Q
 const float NG_O_H = 0.02;
+/* core の ngCloudCoverAt と同じ被覆（焼いたノイズ + 今の被覆の smoothstep）。xz は km。Q の外は平均の被覆 */
+float ngSkyCover(vec2 xzKm) {
+  vec2 q = xzKm * uCoverXf.x + uCoverXf.yz;
+  vec2 uv = q / (2.0 * uCoverXf.w) + 0.5;
+  float c = clamp(ngCloudCover, 0.0, 1.0);
+  float n = texture(uNgCoverN, uv).r;
+  float cov = smoothstep(1.0 - c - 0.12, 1.0 - c + 0.22, n);
+  return mix(cov, c, smoothstep(0.80, 0.98, max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0));
+}
 float ngSkyRemapF(float v, float a, float b) { return (v - a) / max(b - a, 1e-5); }
 float ngCloudHeightGrad(float h01, float strat) {
   float cu = smoothstep(0.0, 0.10, h01) * (1.0 - smoothstep(0.35, 1.0, h01));
@@ -145,8 +167,8 @@ float ngCloudDensity(vec3 p, float distKm, bool full, out float h01) {
   float base = uCloud.y, top = uCloud.z;
   h01 = (p.y - base) / max(top - base, 0.05);
   if (h01 < 0.0 || h01 > 1.0) return 0.0;
-  float cov = ngCloudCoverAt(p.xz * 1000.0);
-  cov = mix(cov, clamp(uCloud.x, 0.0, 1.0), smoothstep(25.0, 90.0, distKm));
+  float cov = ngSkyCover(p.xz);
+  if (cov <= 0.002) return 0.0;
   float hTop = mix(0.45 + 0.55 * cov, 1.0, uCloud.w);       // 積雲は被覆の高い所ほど頂が高い
   float hh = h01 / max(hTop, 0.05);
   if (hh > 1.0) return 0.0;
