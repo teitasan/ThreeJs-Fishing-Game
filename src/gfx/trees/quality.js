@@ -13,15 +13,15 @@
 export const TREES_QUALITY = {
   low: {
     lod0: 20, lod1: 70, imp: 250, shell: 230, fade0: 3, fade1: 12, shellFade: 25,
-    impFrame: 64, impVariants: 1, reflLod: 0.8, shadowLod0: 10, leaf: [1024, 512], bark: 256, cap0: 260, cap1: 1400, n0: 20, n1: 280,
+    impFrame: 64, impVariants: 1, reflLod: 0.8, shadowLod0: 10, leaf: [1024, 512], bark: 256, cap0: 260, cap1: 1400, n0: 20, n1: 120,
   },
   mid: {
     lod0: 30, lod1: 100, imp: 320, shell: 300, fade0: 4, fade1: 14, shellFade: 25,
-    impFrame: 96, impVariants: 2, reflLod: 0.8, shadowLod0: 16, leaf: [1024, 512], bark: 512, cap0: 420, cap1: 2400, n0: 40, n1: 520,
+    impFrame: 96, impVariants: 2, reflLod: 0.8, shadowLod0: 16, leaf: [1024, 512], bark: 512, cap0: 420, cap1: 2400, n0: 40, n1: 200,
   },
   high: {
     lod0: 30, lod1: 100, imp: 420, shell: 380, fade0: 5, fade1: 16, shellFade: 30,
-    impFrame: 128, impVariants: 2, reflLod: 0.6, shadowLod0: 14, leaf: [2048, 1024], bark: 512, cap0: 640, cap1: 3600, n0: 40, n1: 500,
+    impFrame: 128, impVariants: 2, reflLod: 0.6, shadowLod0: 14, leaf: [2048, 1024], bark: 512, cap0: 640, cap1: 3600, n0: 40, n1: 240,
   },
 };
 

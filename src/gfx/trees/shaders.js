@@ -66,6 +66,8 @@ void ngTreeDbg(inout ReflectedLight rl, vec3 tr, float mode) {
   else if (m == 7) { rl.directDiffuse = tr; rl.indirectDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
   else if (m == 8) { rl.directDiffuse -= tr; rl.indirectDiffuse = vec3(0.0); rl.directSpecular = vec3(0.0); rl.indirectSpecular = vec3(0.0); }
 }
+/* 暗さの度合い：空の平均の照度（SH0）が夜の水準ほど 1 */
+float ngTreeLowLight() { return 1.0 - smoothstep(0.003, 0.05, dot(ngSkyIrr, vec3(0.2126, 0.7152, 0.0722))); }
 vec4 ngCanopyAt2(vec2 xz) { return texture2D(ngCanopyMap, (xz + 512.0) / 1024.0); }
 #endif
 `;
@@ -429,9 +431,17 @@ const TREE_FS_AO = /* glsl */ `
   /* 幹の根元の接地の陰（地面が空を半分隠す）：地上 0 → 0.9m */
   if (ngTLeaf < 0.5) occ = max(occ * mix(0.45, 1.0, smoothstep(0.0, 0.9, vNgTInst.w * vNgTInst.z)), 0.45);
   vec3 ngIrrRaw = reflectedLight.indirectDiffuse / max(material.diffuseColor, vec3(1e-3));
-  /* 葉の裏から抜ける空の光（薄い葉は反対の半球の空も通す）。夕方の逆光の樹冠が真っ黒に潰れない */
-  if (ngTLeaf > 0.5) reflectedLight.indirectDiffuse += material.diffuseColor * vec3(0.95, 1.3, 0.5) * ngSkyIrr * (0.55 * ngTN.b);
-  reflectedLight.indirectDiffuse *= occ * ngCanAmb;
+  /* 葉の裏から抜ける空の光：薄い葉は反対の半球（−N）の空の照度も通す（SH を −N で引く。透過率 ≈ 反射率 × 0.8）。
+     夕方の逆光の樹冠は «太陽の側の明るい空» を裏から受けて、真っ黒の切り絵に潰れない */
+  if (ngTLeaf > 0.5) {
+    vec3 ngEb = max(getLightProbeIrradiance(lightProbe, -normal), vec3(0.0));
+    reflectedLight.indirectDiffuse += material.diffuseColor * vec3(0.95, 1.3, 0.5) * ngEb * (0.3183 * 0.8 * ngTN.b);
+  }
+  /* 暗い時（夜・日没後）は光が空の全体からほぼ等方に来るので、昼に合わせた遮り（AO × 樹冠の下）を半分まで緩める。
+     夜の林の下の帯が真っ黒（sRGB ≤ 3）に潰れない */
+  float ngLow = ngTreeLowLight();
+  occ = mix(occ, 1.0, 0.5 * ngLow);
+  reflectedLight.indirectDiffuse *= occ * mix(ngCanAmb, vec3(1.0), 0.5 * ngLow);
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
   /* 調べ物 9 = アルベド、10 = 間接の遮り（occ × 樹冠の下の空の見え）、11 = 遮る前の間接の照度 × 0.3、12 = 樹皮・葉のテクスチャの色 × 0.5 をそのまま出す（9 もアルベド × 0.5） */
   if (ngTreeMisc.w > 8.5) {
@@ -518,7 +528,8 @@ const IMP_VS_BEGIN = /* glsl */ `
   if (fr.x >= fr.y) { c1 = gi + vec2(1.0, 0.0); w = vec3(1.0 - fr.x, fr.x - fr.y, fr.y); }
   else { c1 = gi + vec2(0.0, 1.0); w = vec3(1.0 - fr.y, fr.y - fr.x, fr.x); }
   /* 反射（波で崩れる・半解像度）では 3 フレームのブレンドをやめて一番近いフレームだけ（断片の読みが 6 → 2） */
-  if (ngPassId == NG_PASS_REFLECTION) {
+  /* 220m より先も同じ（視線が 1° 動く間に進むのは数 cm、フレームの切り替えはほぼ起きない。山肌の重なった板の断片の読みが 6 → 2） */
+  if (ngPassId == NG_PASS_REFLECTION || ngD > 220.0) {
     if (w.y > w.x && w.y >= w.z) c0 = c1; else if (w.z > w.x && w.z > w.y) c0 = c2;
     w = vec3(1.0, 0.0, 0.0);
   }
@@ -624,8 +635,11 @@ const IMP_FS_LIGHTS = /* glsl */ `
   vec3 R = reflect(-Vw, ngINw);
   float nv = clamp(dot(ngINw, Vw), 0.0, 1.0);
   reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, max(ngCan.r, 0.6)) * ao * (0.22 + 0.78 * ngWet) * can;
-  reflectedLight.indirectDiffuse *= mix(0.45, 1.0, ao) * can;
+  float ngLow = ngTreeLowLight();
+  reflectedLight.indirectDiffuse *= mix(mix(0.45, 1.0, ao) * can, vec3(1.0), 0.5 * ngLow);
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
+  /* 調べ物 9 以上：アルベド × 0.5 をそのまま（木の 3 つのマテリアルで同じ） */
+  if (ngTreeMisc.w > 8.5) { reflectedLight.directDiffuse = vec3(0.0); reflectedLight.directSpecular = vec3(0.0); reflectedLight.indirectSpecular = vec3(0.0); reflectedLight.indirectDiffuse = material.diffuseColor * 0.5; }
 }
 `;
 
@@ -875,8 +889,9 @@ const SHELL_FS_LIGHTS = /* glsl */ `
   reflectedLight.directSpecular *= ngMt;
   vec3 ngTr = ngTreeTransmit(material.diffuseColor, Nw, Vw, 0.7, ngKeyVis * ngNearVis * self * ngMt, 0.5);
   reflectedLight.directDiffuse += ngTr;
-  reflectedLight.indirectDiffuse *= mix(0.5, 1.0, ngShB);
+  reflectedLight.indirectDiffuse *= mix(0.5 + 0.25 * ngTreeLowLight(), 1.0, ngShB);
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
+  if (ngTreeMisc.w > 8.5) { reflectedLight.directDiffuse = vec3(0.0); reflectedLight.directSpecular = vec3(0.0); reflectedLight.indirectSpecular = vec3(0.0); reflectedLight.indirectDiffuse = material.diffuseColor * 0.5; }
 }
 `;
 
