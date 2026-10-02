@@ -57,6 +57,7 @@ attribute vec4 ngWind;
 attribute vec4 ngExtra;
 uniform vec4 ngTreeEye;     // xyz = 主カメラの位置（反射・影でも同じ）、w = LOD の倍率
 uniform vec4 ngTreeLod;     // x = LOD0 の端、y = LOD1 の端、z = 0→1 のディザ幅、w = 1→インポスターのディザ幅
+uniform vec4 ngTreePass;    // x = 反射の LOD1 の端、y = その幅、z = 影の LOD0 の端
 uniform vec4 ngTreeWindK;   // x = 幹、y = 枝、z = 葉の震え（m / (m/s)）、w = 時間の倍率
 varying vec2 vNgTUv;
 varying vec4 vNgTInfo;      // x = 葉 1 / 樹皮 0、y = 層、z = AO、w = 樹冠の深さ
@@ -106,14 +107,19 @@ const TREE_VS_BEGIN = /* glsl */ `
   float ngFim = smoothstep(ngTreeLod.y - ngTreeLod.w, ngTreeLod.y, ngD);
   float ngKeep = ngLod1 > 0.5 ? ngF01 * (1.0 - ngFim) : 1.0 - ngF01;
   bool ngDrop = false;
+  /* 印（[3][3]）：1 = 普通、2 = 代理（視野の中の LOD0 の木の LOD1：反射と遠めの影）、3 = 影だけ（視野の外の近い木） */
   if (ngPassId == NG_PASS_REFLECTION) {
-    /* 反射は LOD1 だけ：LOD0 は落とし、LOD1（代理を含む）は 0→1 のディザを掛けない */
-    if (ngLod1 < 0.5) ngDrop = true;
-    ngKeep = 1.0 - ngFim;
+    /* 反射：LOD1 は近い所（ngTreePass.x まで）だけ、その先はインポスター。LOD0 は落とす */
+    float fr = smoothstep(ngTreePass.x - ngTreePass.y, ngTreePass.x, ngD);
+    ngKeep = 1.0 - fr;
+    if (ngLod1 < 0.5 || ngFlag > 2.5) ngDrop = true;
+  } else if (ngPassId == NG_PASS_SHADOW) {
+    /* 影：LOD0 は ngTreePass.z の内側だけ、外は LOD1（代理・影だけを含む） */
+    if (ngLod1 < 0.5) ngKeep = step(ngD, ngTreePass.z);
+    else ngKeep = ngFlag > 1.5 ? (ngFlag > 2.5 ? 1.0 : step(ngTreePass.z, ngD)) : step(0.5, ngKeep);
   } else if (ngFlag > 1.5) {
     ngDrop = true;
   }
-  if (ngPassId == NG_PASS_SHADOW) ngKeep = step(0.5, ngKeep);
   if (ngKeep < 0.003) ngDrop = true;
 
   /* 風（世界の m で決めて、インスタンスの行列の逆でローカルへ）。影の変種も同じ式 */
@@ -338,6 +344,7 @@ attribute vec4 ngIPos;     // x, y（根元）, z, 樹高 h
 attribute vec4 ngIRot;     // x = rotation.y, y = 層, z = 乱数, w = 傾き
 uniform vec4 ngImpMeta[16];   // x = 中心の高さ（正規化）、y = 半径（正規化）
 uniform vec4 ngImpLod;        // x = 出始め, y = 出始めの幅, z = 消える端, w = 消える幅
+uniform vec4 ngTreePass;
 uniform vec4 ngTreeEye;
 varying vec3 vNgI0; varying vec3 vNgI1; varying vec3 vNgI2;  // xy = フレームの中の uv、z = 重み
 varying vec4 vNgIF;            // xy = フレーム 0 の格子、zw = 1
@@ -360,7 +367,9 @@ const IMP_VS_BEGIN = /* glsl */ `
   vec3 C = ngIPos.xyz + vec3(0.0, meta.x * h, 0.0);
   float R = meta.y * h;
   float ngD = length(ngIPos.xz - ngTreeEye.xz) / max(ngTreeEye.w, 1e-3);
-  float keep = smoothstep(ngImpLod.x - ngImpLod.y, ngImpLod.x, ngD) * (1.0 - smoothstep(ngImpLod.z - ngImpLod.w, ngImpLod.z, ngD));
+  float st = ngPassId == NG_PASS_REFLECTION ? ngTreePass.x : ngImpLod.x;
+  float sw = ngPassId == NG_PASS_REFLECTION ? ngTreePass.y : ngImpLod.y;
+  float keep = smoothstep(st - sw, st, ngD) * (1.0 - smoothstep(ngImpLod.z - ngImpLod.w, ngImpLod.z, ngD));
   /* 視線（描くカメラ。反射なら鏡映のカメラ）を木のローカルへ */
   vec3 toCam = cameraPosition - C;
   vec3 V = normalize(toCam);
@@ -377,7 +386,9 @@ const IMP_VS_BEGIN = /* glsl */ `
   vec3 up = abs(V.y) > 0.98 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
   vec3 rr = normalize(cross(up, V));
   vec3 uu = cross(V, rr);
-  vec3 P = C + (rr * position.x + uu * position.y) * (2.0 * R);
+  /* 横幅は水平の広がり（ngImpMeta.z）まで。真上から見るときは球の包み */
+  float Rw = mix(max(meta.z * h, 0.2), R, abs(V.y));
+  vec3 P = C + rr * (position.x * 2.0 * Rw) + uu * (position.y * 2.0 * R);
   vec3 Pl = ngRotY(P - C, -rot);
   vNgI0 = vec3(ngImpUV(c0, Pl, R), w.x);
   vNgI1 = vec3(ngImpUV(c1, Pl, R), w.y);

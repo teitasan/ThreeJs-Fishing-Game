@@ -95,6 +95,7 @@ export class TreesModule extends NgModule {
       ngTreeEye: { value: new T.Vector4(0, 0, 0, 1) },
       ngTreeLod: { value: new T.Vector4(q.lod0, q.lod1, q.fade0, q.fade1) },
       ngTreeWindK: { value: new T.Vector4(0.0011, 0.016, 0.0045, 1) },
+      ngTreePass: { value: new T.Vector4(q.lod0, q.fade1, 22, 0) },
       ngTreeMisc: { value: new T.Vector4(0, 1, 0, 0) },
       ngImpLod: { value: new T.Vector4(q.lod1, q.fade1, q.imp, q.fade1) },
       ngShellLod: { value: new T.Vector4(q.shell, q.shellFade, 0, 0) },
@@ -107,7 +108,7 @@ export class TreesModule extends NgModule {
       key: 'trees-tree', module: 'trees',
       uniforms: {
         ngBarkAlb: { value: this.tex.barkAlb }, ngBarkNrm: { value: this.tex.barkNrm }, ngLeafAlb: { value: this.tex.leafAlb }, ngLeafNrm: { value: this.tex.leafNrm }, ngLeafSize: { value: this.tex.leafSize },
-        ngTreeEye: U.ngTreeEye, ngTreeLod: U.ngTreeLod, ngTreeWindK: U.ngTreeWindK, ngTreeMisc: U.ngTreeMisc,
+        ngTreeEye: U.ngTreeEye, ngTreeLod: U.ngTreeLod, ngTreeWindK: U.ngTreeWindK, ngTreeMisc: U.ngTreeMisc, ngTreePass: U.ngTreePass,
         ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap,
       },
       vertex: TREE_HOOKS.vertex, fragment: TREE_HOOKS.fragment, depth: true, hfShadow: true,
@@ -153,8 +154,13 @@ export class TreesModule extends NgModule {
         ds.sort();
         /* 外れの頂点（垂れた葉の先など）で枠を広げない：99.7 分位 × 1.03 */
         const R = ds[Math.floor(ds.length * 0.997)] * 1.03;
+        /* 水平の広がり（幹の軸から）：板の横幅に使う */
+        const dh = new Float32Array(pos.length / 3);
+        for (let i = 0; i < pos.length; i += 3) dh[i / 3] = Math.hypot(pos[i], pos[i + 2]) / 32767 * POS_RANGE;
+        dh.sort();
+        const Rh = Math.min(R, dh[Math.floor(dh.length * 0.997)] * 1.06);
         layers.push({ geo: this.geos[0][vi], cy, R, href: V.href });
-        this.impMeta.push(new T.Vector4(cy, R, s, 0));
+        this.impMeta.push(new T.Vector4(cy, R, Rh, s));
       }
     }
     while (this.impMeta.length < 16) this.impMeta.push(new T.Vector4(0.5, 0.6, 0, 0));
@@ -166,7 +172,7 @@ export class TreesModule extends NgModule {
       key: 'trees-impostor', module: 'trees',
       uniforms: {
         ngImpAlb: { value: this.imp.alb.texture }, ngImpNrm: { value: this.imp.nrm.texture }, ngImpMeta: { value: this.impMeta },
-        ngImpLod: U.ngImpLod, ngTreeEye: U.ngTreeEye, ngTreeMisc: U.ngTreeMisc, ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap,
+        ngImpLod: U.ngImpLod, ngTreePass: U.ngTreePass, ngTreeEye: U.ngTreeEye, ngTreeMisc: U.ngTreeMisc, ngSkyViewTex: U.ngSkyViewTex, ngSkyViewMips: U.ngSkyViewMips, ngCanopyMap: U.ngCanopyMap,
       },
       vertex: IMP_HOOKS.vertex, fragment: IMP_HOOKS.fragment, hfShadow: true,
     });
@@ -346,13 +352,15 @@ export class TreesModule extends NgModule {
     return this._m;
   }
 
-  /** カメラの近くの木を LOD0 / LOD1 / 代理へ詰め直す */
+  /** カメラの近くの木を LOD0 / LOD1 / 代理 / 影だけへ詰め直す。
+   *  LOD0・LOD1 の距離は «視野の中の本数の上限»（q.n0 / q.n1）で縮める（深い森で頂点が溢れない）。
+   *  縮めた距離は update で毎フレーム滑らかに追う（シェーダのディザの境目が跳ばない） */
   _assign(cam) {
     const P = this.ctx.placement?.trees;
     if (!P || !this.batches || !this.visible) return;
     const q = this.q, k = this.lodScale;
     const ex = cam.position.x, ez = cam.position.z;
-    const L0 = q.lod0 * k, L1 = q.lod1 * k, W0 = q.fade0 * k;
+    const L0 = this.L0eff, L1 = this.L1eff, W0 = q.fade0 * k;
     /* 水平の視野の扇：横の半画角 + 余裕 25° */
     const fwd = this._v.set(0, 0, -1).applyQuaternion(cam.quaternion);
     let fx = fwd.x, fz = fwd.z;
@@ -363,38 +371,61 @@ export class TreesModule extends NgModule {
     const cosCut = Math.cos(Math.min(Math.PI, hfov + 0.44));
     const lookDown = Math.abs(fwd.y) > 0.8;
     const [b0, b1] = this.batches;
-    let n0 = 0, n1 = 0, np = 0;
-    const R = L1 + 2;
+    let n0 = 0, n1 = 0, np = 0, ns = 0;
+    const SR = this.shadowR || 60;
+    const R = q.lod1 * k + 2;
     const i0 = Math.max(0, Math.floor((ex - R + GRID_HALF) / CELL)), i1 = Math.min(GRID_N - 1, Math.floor((ex + R + GRID_HALF) / CELL));
     const j0 = Math.max(0, Math.floor((ez - R + GRID_HALF) / CELL)), j1 = Math.min(GRID_N - 1, Math.floor((ez + R + GRID_HALF) / CELL));
     const gid = (t) => P.species[t] * 4 + (P.variant[t] | 0);
+    const cand = this._cand || (this._cand = new Int32Array(8192));
+    const cd = this._cd || (this._cd = new Float32Array(8192));
+    let nc = 0;
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
         const c = j * GRID_N + i;
-        for (let e = this.cellStart[c]; e < this.cellStart[c + 1]; e++) {
+        for (let e = this.cellStart[c]; e < this.cellStart[c + 1] && nc < 8192; e++) {
           const t = this.cellList[e];
           if (!this.visible[t]) continue;
           const dx = P.x[t] - ex, dz = P.z[t] - ez;
           const d = Math.hypot(dx, dz);
-          if (d >= L1) continue;
+          if (d >= R) continue;
           const slack = P.h[t] * 0.35;
           const inView = lookDown || d < slack + 4 || (dx * fx + dz * fz) / Math.max(d, 1e-3) > cosCut - slack / Math.max(d, 1);
-          if (d < L0) {
-            if (n0 < b0.cap) { const id = n0++; b0.bm.setGeometryIdAt(id, b0.ids[gid(t)]); b0.bm.setMatrixAt(id, this._matrix(t, 1)); }
-            if (n1 < b1.cap && inView) {
-              /* 切り替えの帯は本物の LOD1（ディザ）、内側は反射だけの代理 */
-              const proxy = d < L0 - W0;
-              const id = n1++;
-              b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
-              b1.bm.setMatrixAt(id, this._matrix(t, proxy ? 2 : 1));
-              if (proxy) np++;
-            }
-          } else if (inView && n1 < b1.cap) {
-            const id = n1++;
-            b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
-            b1.bm.setMatrixAt(id, this._matrix(t, 1));
-          }
+          cand[nc] = inView ? t : -1 - t;
+          cd[nc] = d;
+          nc++;
         }
+      }
+    }
+    /* 視野の中の本数から距離の上限（k 番目に近い木の距離） */
+    const dv = [];
+    for (let c = 0; c < nc; c++) if (cand[c] >= 0) dv.push(cd[c]);
+    dv.sort((a, b) => a - b);
+    const kth = (n) => (dv.length > n ? dv[n] : Infinity);
+    this.L0target = Math.max(q.lod0 * 0.35, Math.min(q.lod0, kth(q.n0) / k)) ;
+    this.L1target = Math.max(q.lod0 * 1.2, Math.min(q.lod1, kth(q.n1) / k));
+    for (let c = 0; c < nc; c++) {
+      const inView = cand[c] >= 0;
+      const t = inView ? cand[c] : -1 - cand[c];
+      const d = cd[c];
+      if (inView && d < L0) {
+        if (n0 < b0.cap) { const id = n0++; b0.bm.setGeometryIdAt(id, b0.ids[gid(t)]); b0.bm.setMatrixAt(id, this._matrix(t, 1)); }
+        if (n1 < b1.cap) {
+          /* 切り替えの帯は本物の LOD1（ディザ）、内側は代理（反射と遠めの影） */
+          const proxy = d < L0 - W0 - 1;
+          const id = n1++;
+          b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
+          b1.bm.setMatrixAt(id, this._matrix(t, proxy ? 2 : 1));
+          if (proxy) np++;
+        }
+      } else if (inView && d < L1) {
+        if (n1 < b1.cap) { const id = n1++; b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]); b1.bm.setMatrixAt(id, this._matrix(t, 1)); }
+      } else if (!inView && d < SR && n1 < b1.cap) {
+        /* 視野の外の近い木：影だけ（LOD1） */
+        const id = n1++;
+        b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
+        b1.bm.setMatrixAt(id, this._matrix(t, 3));
+        ns++;
       }
     }
     for (const [b, n] of [[b0, n0], [b1, n1]]) {
@@ -404,23 +435,38 @@ export class TreesModule extends NgModule {
       /* setGeometryIdAt は描く一覧の作り直しを立てない（three r180）ので立てる */
       b.bm._visibilityChanged = true;
     }
-    this.counts.lod0 = n0; this.counts.lod1 = n1 - np; this.counts.proxy = np;
+    this.counts.lod0 = n0; this.counts.lod1 = n1 - np - ns; this.counts.proxy = np; this.counts.shadowOnly = ns;
   }
 
   update(f) {
     const cam = f?.camera;
     if (!cam || !this.batches) return;
-    this.clock += Number.isFinite(f.realDt) ? f.realDt : 0;
     const p = cam.position;
     if (!Number.isFinite(p.x) || !Number.isFinite(p.z)) return;
     this.U.ngTreeEye.value.set(p.x, p.y, p.z, this.lodScale);
+    /* LOD の距離を目標へ滑らかに（縮めるのは速く、広げるのはゆっくり）。シェーダの距離は ÷ lodScale */
+    const q = this.q, dt = Math.min(Math.max(Number.isFinite(f.realDt) ? f.realDt : 0, Number.isFinite(f.dt) ? f.dt : 0, 1 / 60), 0.1);
+    const ease = (cur, tgt) => cur + (tgt - cur) * Math.min(1, dt * (tgt < cur ? 3 : 0.8));
+    this.clock += dt;
+    this.L0n = ease(this.L0n ?? q.lod0, this.L0target ?? q.lod0);
+    this.L1n = ease(this.L1n ?? q.lod1, this.L1target ?? q.lod1);
+    if (this.forceBuild) { this.L0n = this.L0target ?? this.L0n; this.L1n = this.L1target ?? this.L1n; }
+    this.U.ngTreeLod.value.x = this.L0n;
+    this.U.ngTreeLod.value.y = this.L1n;
+    this.U.ngImpLod.value.x = this.L1n;
+    /* 割り当ては滑らかな距離 + ディザの幅の分だけ外まで（シェーダが残す割合を決める） */
+    this.L0eff = (this.L0n + 2) * this.lodScale;
+    this.L1eff = (this.L1n + 2) * this.lodScale;
     const fwd = this._v.set(0, 0, -1).applyQuaternion(cam.quaternion);
     const yaw = Math.atan2(fwd.x, fwd.z);
     const L = this.lastEye;
     let dy = Math.abs(yaw - L.yaw);
     if (dy > Math.PI) dy = 2 * Math.PI - dy;
     const moved = Math.hypot(p.x - L.x, p.z - L.z);
-    if (this.forceBuild || moved > 1.5 || dy > 0.12 || this.clock - L.t > 0.25) {
+    const lodMoved = Math.abs((this.L0n ?? 0) - (L.l0 ?? 0)) > 1 || Math.abs((this.L1n ?? 0) - (L.l1 ?? 0)) > 2;
+    if (this.forceBuild || moved > 1.5 || dy > 0.12 || lodMoved || this.clock - L.t > 0.25) {
+      L.l0 = this.L0n; L.l1 = this.L1n;
+      if (this.forceBuild) { this._assign(cam); this.L0n = this.L0target; this.L1n = this.L1target; this.L0eff = (this.L0n + 2) * this.lodScale; this.L1eff = (this.L1n + 2) * this.lodScale; }
       this._assign(cam);
       L.x = p.x; L.z = p.z; L.yaw = yaw; L.t = this.clock;
       this.forceBuild = false;
@@ -444,8 +490,11 @@ export class TreesModule extends NgModule {
     this.U.ngTreeLod.value.set(q.lod0, q.lod1, q.fade0, q.fade1);
     this.U.ngImpLod.value.set(q.lod1, q.fade1, q.imp, q.fade1);
     this.U.ngShellLod.value.set(q.shell, q.shellFade, 0, 0);
+    this.U.ngTreePass.value.set(q.lod0 * (q.reflLod ?? 1), q.fade1 * 0.5, q.shadowLod0, 0);
     const a2c = (profile?.msaa | 0) > 0;
     this.U.ngTreeMisc.value.x = a2c ? 1 : 0;
+    /* 影を落とす範囲：近景の影の半幅 + 樹高の分（視野の外の木もここまでは影だけ描く） */
+    this.shadowR = (profile?.nearShadow?.extent || 48) + 14;
     ngCutout(this.treeMat, profile, 0.5);
     ngCutout(this.impMat, profile, 0.5);
     ngCutout(this.shellMat, profile, 0.5);
@@ -476,7 +525,8 @@ export class TreesModule extends NgModule {
     tris += this.counts.imp * 2 + 256 * 256 * 2;
     return {
       draws: 4, tris, instances: this.counts.lod0 + this.counts.lod1 + this.counts.imp, texBytes: this.texBytes, programs: 4,
-      lod0: this.counts.lod0, lod1: this.counts.lod1, proxy: this.counts.proxy, impostors: this.counts.imp, trees: P?.count || 0,
+      lod0: this.counts.lod0, lod1: this.counts.lod1, proxy: this.counts.proxy, shadowOnly: this.counts.shadowOnly,
+      lodDist: [+(this.L0n ?? 0).toFixed(1), +(this.L1n ?? 0).toFixed(1), +(this.L0target ?? 0).toFixed(1), +(this.L1target ?? 0).toFixed(1)], impostors: this.counts.imp, trees: P?.count || 0,
     };
   }
 
