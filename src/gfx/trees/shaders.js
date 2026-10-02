@@ -49,7 +49,8 @@ vec3 ngTreeLeak(vec3 albedo, vec3 Vw, float thin, float vis0, float nearVis, flo
 vec3 ngCanopyAmbient(vec4 canopy, float below) {
   /* 樹冠の下の空の見え：密な森の幹の根元で 0.4 前後（緑に偏る）。以前の 0.2 は林縁の幹まで黒くした */
   float occ = clamp(canopy.r * below, 0.0, 1.0);
-  return mix(vec3(1.0), vec3(0.32, 0.40, 0.22), occ * 0.8);
+  /* 葉を通った緑の光と林床の照り返しが残る：最も暗くて (0.45, 0.52, 0.34)（前の 0.32/0.40/0.22 は林内の幹の割れ目を黒く潰した） */
+  return mix(vec3(1.0), vec3(0.38, 0.46, 0.26), occ * 0.75);
 }
 uniform sampler2D ngCanopyMap;
 /* 調べ物の表示（ngTreeMisc.w）：1 直接の鏡面なし・2 空の鏡面なし・3 透過なし・4 間接の拡散だけ・5 直接の鏡面だけ・6 空の鏡面だけ・7 透過だけ・8 直接の拡散だけ */
@@ -327,7 +328,8 @@ if (ngTLeaf > 0.5) {
   c *= 1.0 - 0.25 * streak;
   /* 根元：土の跳ね返りと湿り（35cm まで土色へ） */
   c = mix(c, vec3(0.075, 0.062, 0.045), (1.0 - smoothstep(0.0, 0.35, hM)) * 0.55);
-  diffuseColor.rgb = c;
+  /* 樹皮の割れ目でも反射率 0.05 は残る（木の灰・地衣・苔） */
+  diffuseColor.rgb = max(c, vec3(0.055, 0.048, 0.04));
 }
 `;
 
@@ -381,7 +383,7 @@ vec3 ngTr = vec3(0.0);
   vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
   ngCanAmb = ngCanopyAmbient(ngCan, below);
   /* 樹冠の中の枝：自分の葉に囲まれている（樹冠の地図が疎らな一本木でも空の 4 割しか見えない）。前は樹冠の中で遮りが 0 になり、見上げた枝が白く光った */
-  if (ngTLeaf < 0.5) ngCanAmb = min(ngCanAmb, mix(vec3(1.0), vec3(0.32, 0.40, 0.22), 0.75 * smoothstep(0.35, 0.7, vNgTInst.w)));
+  if (ngTLeaf < 0.5) ngCanAmb = min(ngCanAmb, mix(vec3(1.0), vec3(0.38, 0.46, 0.26), 0.75 * smoothstep(0.35, 0.7, vNgTInst.w)));
   /* 葉の本当の面（微分から。頂点の法線は樹冠へ曲げてある）で、光と目が同じ側か。
      反対側（裏から光が来る）なら反射の鏡面は無く、拡散も透過に譲る（下から見上げた葉が白く光らない） */
   float ngSame = 0.65;
@@ -418,7 +420,7 @@ const TREE_FS_AO = /* glsl */ `
 {
   float occ = vNgTInfo.z * (ngTLeaf > 0.5 ? (1.0 - 0.55 * vNgTInfo.w) : ngTN.b);
   /* 幹の根元の接地の陰（地面が空を半分隠す）：地上 0 → 0.9m */
-  if (ngTLeaf < 0.5) occ *= mix(0.45, 1.0, smoothstep(0.0, 0.9, vNgTInst.w * vNgTInst.z));
+  if (ngTLeaf < 0.5) occ = max(occ * mix(0.45, 1.0, smoothstep(0.0, 0.9, vNgTInst.w * vNgTInst.z)), 0.45);
   reflectedLight.indirectDiffuse *= occ * ngCanAmb;
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
 }

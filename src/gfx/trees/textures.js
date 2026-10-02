@@ -99,7 +99,7 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     float plate = smoothstep(0.02, 0.34, w.y - w.x);
     float fl = ngFbmP(p * vec2(24.0, 18.0), vec2(24.0, 18.0), 3);
     h = plate * (0.75 + 0.25 * fl);
-    col = mix(vec3(0.06, 0.045, 0.038), mix(vec3(0.17, 0.13, 0.11), vec3(0.24, 0.14, 0.09), w.z) * (0.85 + 0.3 * fl), smoothstep(0.0, 0.8, plate));
+    col = mix(vec3(0.075, 0.058, 0.048), mix(vec3(0.17, 0.13, 0.11), vec3(0.24, 0.14, 0.09), w.z) * (0.85 + 0.3 * fl), smoothstep(0.0, 0.8, plate));
     rough = 0.92;
   } else if (L == 6) {
     /* アカマツ（上）：赤橙の薄い鱗片が剥がれる */
@@ -118,7 +118,7 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     float b = abs(sin((q.x - q.y * 0.9 + 0.5 * ngFbmP(p * 4.0 + 3.0, vec2(4.0), 2)) * 3.14159));
     float ridge = smoothstep(0.15, 0.6, min(a, b) + 0.3 * ngFbmP(p * vec2(30.0, 6.0), vec2(30.0, 6.0), 2));
     h = ridge;
-    col = mix(vec3(0.05, 0.045, 0.04), vec3(0.19, 0.17, 0.14), ridge) * (0.9 + 0.2 * ngFbmP(p * 10.0, vec2(10.0), 2));
+    col = mix(vec3(0.08, 0.07, 0.06), vec3(0.20, 0.18, 0.15), ridge) * (0.9 + 0.2 * ngFbmP(p * 10.0, vec2(10.0), 2));
     rough = 0.9;
   } else {
     /* ハンノキ：灰褐色の滑らかな樹皮、横長の皮目 */
@@ -155,7 +155,8 @@ void main() {
     float a = float(k) * 1.0472;
     ao += ngBarkH(L, fract(p + vec2(cos(a), sin(a)) * 0.02), c2, r2);
   }
-  ao = clamp(1.0 - max(ao / 6.0 - h, 0.0) * 2.5, 0.25, 1.0);
+  /* 割れ目の暗さはアルベドにもう入っているので、AO は 0.45 で止める（二重に掛けて陰の幹が黒く潰れた） */
+  ao = clamp(1.0 - max(ao / 6.0 - h, 0.0) * 2.5, 0.45, 1.0);
   gl_FragColor = vec4(n.xy * 0.5 + 0.5, ao, rough);
 }
 `;
