@@ -330,10 +330,17 @@ export class SkyModule extends NgModule {
     this.rtClear.scissorTest = false;
     /* 雲パノラマ：普段は 1/16 の帯、跳び・段の変更・起動では全部 */
     const [W, H] = q.pano, n = q.strips, rows = Math.ceil(H / n);
-    U.uMode.value.set(Math.max(q.steps, 1), q.light, this.full ? 1 : 0.5, q.steps > 0 ? 0 : 1);
-    const count = this.full ? n : 1;
+    /* 天候の遷移中（被覆・層状・腹が 1 巡りで 1% 以上動く）は 1 フレームに 4 帯を置き換えで描く。1 帯ずつだと
+       古い帯と新しい帯の境が仰角の弧として見えた（本編の雨の入り） */
+    const cw = U.uCloud.value, wNow = [cw.x, cw.w, U.uLight.value.w];
+    const wPrev = this._wPrev || wNow;
+    const dW = Math.max(Math.abs(wNow[0] - wPrev[0]), Math.abs(wNow[1] - wPrev[1]), Math.abs(wNow[2] - wPrev[2]));
+    this._wPrev = wNow;
+    const moving = !this.full && dW * n > 0.01;
+    U.uMode.value.set(Math.max(q.steps, 1), q.light, this.full || moving ? 1 : 0.5, q.steps > 0 ? 0 : 1);
+    const count = this.full ? n : moving ? Math.min(4, n) : 1;
     for (let k = 0; k < count; k++) {
-      const si = stripAt(this.full ? k : this.strip, n);
+      const si = stripAt(this.full ? k : this.strip + k, n);
       const y0 = si * rows, hh = Math.min(rows, H - y0);
       if (hh <= 0) continue;
       U.uPano.value.set(W, H, y0, hh);
@@ -346,7 +353,7 @@ export class SkyModule extends NgModule {
       U.uCloudPano.value = this.rtPano.texture;
       this.rtPano.scissorTest = false;
     }
-    if (!this.full) this.strip = (this.strip + 1) % n;
+    if (!this.full) this.strip = (this.strip + count) % n;
     this.full = false;
     U.uCopyMode.value = 0;
     this._pass(this.mUtil, this.rtView);
