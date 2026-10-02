@@ -72,30 +72,31 @@ vec3 ngPostViewPos(vec2 uv, float d) { return vec3((uv * 2.0 - 1.0) / ngProj.xy 
 float ngPostDepth(vec2 uv) { return texture(ngSceneDepth, uv).r; }
 
 vec4 ngModeMeter() {
-  /* 1/16 縮小の log 輝度。中央を重く（周辺 40%） */
-  vec2 h = ngSrcTexel.xy * 4.0;
+  /* 32×18 の測光：各画素は自分の区画を 4×4 の双線形のタップで覆う（= 1/80 縮小の log 平均）。中央を重く（周辺 40%） */
   float s = 0.0;
-  s += log2(max(ngPostLum(texture(ngSrc, vUv + vec2(-h.x, -h.y)).rgb), 1e-5));
-  s += log2(max(ngPostLum(texture(ngSrc, vUv + vec2( h.x, -h.y)).rgb), 1e-5));
-  s += log2(max(ngPostLum(texture(ngSrc, vUv + vec2(-h.x,  h.y)).rgb), 1e-5));
-  s += log2(max(ngPostLum(texture(ngSrc, vUv + vec2( h.x,  h.y)).rgb), 1e-5));
+  for (int j = 0; j < 4; j++) {
+    for (int i = 0; i < 4; i++) {
+      vec2 uv = vUv + (vec2(float(i), float(j)) - 1.5) * 0.25 * ngDstSize.zw;
+      s += log2(max(ngPostLum(texture(ngSrc, uv).rgb), 1e-5));
+    }
+  }
   vec2 q = (vUv - 0.5) * vec2(1.6, 1.9);
   float w = mix(0.4, 1.0, exp(-dot(q, q) * 2.2));
-  return vec4(s * 0.25 * w, w, 0.0, 1.0);
+  return vec4(s * 0.0625 * w, w, 0.0, 1.0);
 }
 
 vec4 ngModeReduce() {
-  /* 測光の RT（小さい）を 1 画素へ。結果は RGBA8 に詰める：log2 L ∈ [−20, 12] → 16 bit */
+  /* 測光の RT（32×18）を 1 画素へ。結果は RGBA8 に詰める：log2 L ∈ [−20, 12] → 16 bit */
   float sl = 0.0, sw = 0.0;
-  for (int j = 0; j < 12; j++) {
-    for (int i = 0; i < 16; i++) {
-      vec2 uv = (vec2(float(i), float(j)) + 0.5) / vec2(16.0, 12.0);
-      vec4 m = texture(ngSrc, uv);
+  for (int j = 0; j < 18; j++) {
+    for (int i = 0; i < 32; i++) {
+      vec4 m = texelFetch(ngSrc, ivec2(i, j), 0);
       sl += m.r; sw += m.g;
     }
   }
   float L = sl / max(sw, 1e-4);
-  float v = clamp((L + 20.0) / 32.0, 0.0, 1.0) * 65535.0;
+  L = (L != L) ? 0.0 : L;
+  float v = floor(clamp((L + 20.0) / 32.0, 0.0, 1.0) * 65535.0 + 0.5);
   float hi = floor(v / 256.0), lo = v - hi * 256.0;
   return vec4(hi / 255.0, lo / 255.0, 0.0, 1.0);
 }
@@ -127,6 +128,8 @@ vec4 ngModeDown() {
     o = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
   }
   o = (o.r != o.r || o.g != o.g || o.b != o.b) ? vec3(0.0) : min(o, vec3(60000.0));
+  /* 最初の段：太陽の円盤（露出後 ~4e4）を 256 で頭打ち。エネルギー保存の 3.5% でも画面の 1/4 が白く飛ぶ光暈にしない */
+  if (ngKaris > 0.5) o *= min(1.0, 256.0 / max(ngPostLum(o), 1e-4));
   return vec4(o, 1.0);
 }
 
@@ -268,7 +271,22 @@ void main() {
 `;
 
 export const FINAL_FS = /* glsl */ `
-#include <tonemapping_pars_fragment>
+/* AgX（Sobotka。three r180 の AgXToneMapping・pmndrs の AGX と同じ式。toneMappingExposure には頼らない：露出は PRE で掛け済み） */
+vec3 ngAgxContrast(vec3 x) {
+  vec3 x2 = x * x, x4 = x2 * x2;
+  return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+vec3 ngAgx(vec3 c) {
+  const mat3 toRec2020 = mat3(vec3(0.6274, 0.0691, 0.0164), vec3(0.3293, 0.9195, 0.0880), vec3(0.0433, 0.0113, 0.8956));
+  const mat3 fromRec2020 = mat3(vec3(1.6605, -0.1246, -0.0182), vec3(-0.5876, 1.1329, -0.1006), vec3(-0.0728, -0.0083, 1.1187));
+  const mat3 inset = mat3(vec3(0.856627153315983, 0.137318972929847, 0.11189821299995), vec3(0.0951212405381588, 0.761241990602591, 0.0767994186031903), vec3(0.0482516061458583, 0.101439036467562, 0.811302368396859));
+  const mat3 outset = mat3(vec3(1.1271005818144368, -0.1413297634984383, -0.14132976349843826), vec3(-0.11060664309660323, 1.157823702216272, -0.11060664309660294), vec3(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405));
+  c = inset * (toRec2020 * c);
+  c = clamp((log2(max(c, vec3(1e-10))) + 12.47393) / 16.5, 0.0, 1.0);
+  c = outset * ngAgxContrast(c);
+  c = pow(max(c, vec3(0.0)), vec3(2.2));
+  return clamp(fromRec2020 * c, 0.0, 1.0);
+}
 uniform sampler2D ngHdr;
 uniform sampler2D ngBloom;
 uniform sampler2D ngBlueNoiseTex;
@@ -302,7 +320,7 @@ vec3 ngGrade(vec3 c, float vig) {
   L = ngPostLum(c);
   c = max(vec3(L) + (c - vec3(L)) * ngSat, vec3(0.0));
   c *= vig;
-  vec3 t = AgXToneMapping(c);
+  vec3 t = ngAgx(c);
   t = ngGain * (t + ngLift * (1.0 - t));
   t = pow(max(t, vec3(0.0)), vec3(1.0 / ngGamma));
   return clamp(t, 0.0, 1.0);

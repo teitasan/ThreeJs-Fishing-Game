@@ -123,3 +123,46 @@ export function ngShaftGate(sunAltDeg, ndcX, ndcY, front, uw) {
   const alt = smooth(-1.5, 1.5, sunAltDeg) * (1 - smooth(18, 25, sunAltDeg));
   return alt * (1 - smooth(1.0, 1.3, m));
 }
+
+/* ---------- AgX の CPU 双子（FINAL_FS の ngAgx と同じ式。グレーカードの目標と 24 パッチの検査に使う） ---------- */
+const AGX_TO2020 = [[0.6274, 0.3293, 0.0433], [0.0691, 0.9195, 0.0113], [0.0164, 0.0880, 0.8956]];
+const AGX_FROM2020 = [[1.6605, -0.5876, -0.0728], [-0.1246, 1.1329, -0.0083], [-0.0182, -0.1006, 1.1187]];
+const AGX_INSET = [[0.856627153315983, 0.0951212405381588, 0.0482516061458583], [0.137318972929847, 0.761241990602591, 0.101439036467562], [0.11189821299995, 0.0767994186031903, 0.811302368396859]];
+const AGX_OUTSET = [[1.1271005818144368, -0.11060664309660323, -0.016493938717834573], [-0.1413297634984383, 1.157823702216272, -0.016493938717834257], [-0.14132976349843826, -0.11060664309660294, 1.2519364065950405]];
+const mul3 = (M, v) => [M[0][0] * v[0] + M[0][1] * v[1] + M[0][2] * v[2], M[1][0] * v[0] + M[1][1] * v[1] + M[1][2] * v[2], M[2][0] * v[0] + M[2][1] * v[1] + M[2][2] * v[2]];
+const agxCurve = (x) => { const x2 = x * x, x4 = x2 * x2; return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232; };
+
+/**
+ * AgX（線形の表示の値 0..1 を返す。sRGB の符号化の前）
+ * @param {number[]} rgb 露出後の線形 HDR
+ * @returns {number[]}
+ */
+export function ngAgx(rgb) {
+  let c = mul3(AGX_INSET, mul3(AGX_TO2020, rgb));
+  c = c.map((v) => clamp((Math.log2(Math.max(v, 1e-10)) + 12.47393) / 16.5, 0, 1));
+  c = mul3(AGX_OUTSET, c.map(agxCurve)).map((v) => Math.pow(Math.max(v, 0), 2.2));
+  return mul3(AGX_FROM2020, c).map((v) => clamp(v, 0, 1));
+}
+
+/** 線形 → sRGB の符号化 */
+export function ngToSrgb(x) { return x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055; }
+
+/**
+ * 露出後の線形 HDR → 画面の sRGB（FINAL_FS の ngGrade と同じ順：WB → プルキニエ → 彩度 → AgX → lift/gain → gamma。ビネット・Bloom・ディザ抜き）
+ * @param {number[]} rgb
+ * @param {ReturnType<typeof ngGradeParams>} g
+ * @returns {number[]}
+ */
+export function ngDisplay(rgb, g) {
+  let c = [rgb[0] * g.wb[0], rgb[1] * g.wb[1], rgb[2] * g.wb[2]];
+  let L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const rod = g.purkinje * (1 - smooth(0.02, 0.45, L));
+  const tint = [0.84, 0.97, 1.32];
+  c = c.map((v, i) => v + ((L + (v - L) * 0.65) * tint[i] - v) * rod);
+  L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  c = c.map((v) => Math.max(L + (v - L) * g.sat, 0));
+  let t = ngAgx(c);
+  t = t.map((v, i) => g.gain[i] * (v + g.lift[i] * (1 - v)));
+  t = t.map((v) => clamp(Math.pow(Math.max(v, 0), 1 / g.gamma), 0, 1));
+  return t.map(ngToSrgb);
+}
