@@ -29,7 +29,10 @@ export const MOON_SKY = 0.55;
  *  月夜の雲は空より少し明るい銀灰（縁が光り、腹は空に溶ける）くらいに */
 export const MOON_CLOUD = 0.5;
 /** 夜の地面への空の光の上乗せ（SH・AMB だけ。rig.step の _nf） */
-export const NIGHT_FILL = 1.0;
+export const NIGHT_FILL = 1.8;
+/** 雨の夜の上乗せ（r4 で 1.6 を試した：雨の crush は 5% → 3.9% しか減らず、真夜中 / 真昼の比が水の明るい構図で 0.65 に。
+ *  雨の夜の黒つぶれは SH の量でなく、空の光を受けない暗い面（stub の森の内側・影）で決まる → 0） */
+export const NIGHT_FILL_RAIN = 0;
 /** 月が照らす空の項の色（key の MOON_TINT とは別）。Rayleigh がすでに青くするので、ここで青を重ねると AgX の後で R が 0 に潰れた
  *  «青のベタ塗り» になる（23:30 の天頂 #011e45）。ほぼ中立にして、表示で #0b1426 に近い色度（リニア 0.70, 0.99, 1.98）に */
 export const MOON_SKY_TINT = Object.freeze((() => { const c = [0.97, 1.0, 1.06]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
@@ -280,7 +283,7 @@ export class SkyRig {
     const gTw = this.twilightGain(s[1]);
     /* 夜の «月明かりの埋め»：地面が受ける空の光（SH・AMB）だけを夜に NIGHT_FILL 倍。見える夜空（#0b1426 の暗さ）は変えずに、
        影の森・岸が黒く潰れない（art-metrics の crush・真夜中 / 真昼の比）。−3° より上（ブルーアワー）は 1 */
-    this._nf = 1 + NIGHT_FILL * smooth(-0.05, -0.20, s[1]);
+    this._nf = 1 + (NIGHT_FILL + NIGHT_FILL_RAIN * wp.kr) * smooth(-0.02, -0.20, s[1]);
     p.eS0 = this.Etop * sunSky;
     for (let k = 0; k < 3; k++) {
       p.eS[k] = this.Etop * this.sunCol[k] * sunSky * gTw[k];
