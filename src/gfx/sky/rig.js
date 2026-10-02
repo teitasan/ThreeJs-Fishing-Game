@@ -10,7 +10,7 @@
 import { NG } from '../core/frame.js';
 import { NG_UNITS, ngScheduledExposure, ngLuminance } from '../core/palette.js';
 import { solveInscatterAmb } from '../core/medium.js';
-import { AtmosphereCPU, ATMO, fibonacciSphere, clamp01, smooth, phaseHG, sunDirAt } from './atmosphere.js';
+import { AtmosphereCPU, ATMO, fibonacciSphere, clamp, clamp01, smooth, phaseHG, sunDirAt } from './atmosphere.js';
 
 const SIN_1DEG = Math.sin(Math.PI / 180);
 const SH_N = 128;
@@ -19,7 +19,10 @@ const HZ_Y = 0.02;
 /** 雲の流れの円の半径 m（24h で 1 周：≈393 m/h、時刻の純関数で真夜中に連続） */
 export const CLOUD_R = 1500;
 /** 夜空の底（大気光。放射輝度 ng）。NG_UNITS.NIGHT_SKY の ≈ 半分を空の底に */
-export const NIGHT_FLOOR = Object.freeze([0.00030, 0.00042, 0.00068]);
+export const NIGHT_FLOOR = Object.freeze([0.00024, 0.00040, 0.00084]);
+/** 月の光の色（輝度 1）。物理の月光は太陽よりわずかに赤いが、夜の目（プルキンエ）と絵の約束（#0b1426 の天頂）で青へ寄せる。
+    月の空の項・月の key・雲を照らす月の光に掛ける */
+export const MOON_TINT = Object.freeze((() => { const c = [0.66, 0.90, 1.55]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
 const MIE_G_MEDIUM = 0.76;
 
 /**
@@ -51,29 +54,26 @@ export function weatherParams(cloud, rain, hour = 12) {
   };
 }
 
-/** 薄明の持ち上げの形（atmo.glsl.js の ngSkyTwilight と同じ式）。v・s は単位ベクトル */
-export function twilightShape(vx, vy, vz, sx, sz, out) {
-  const y = Math.max(vy, 0);
+/* ---------- 薄明の利得（ブルーアワー） ----------
+   露出の時刻表（palette、post が持つ）は太陽 −4° で ×3.6、−8° で ×7 にしか上がらないのに、物理の空の照度は
+   0° → −6° で 1/80 に落ちる。そのままだと薄明が真っ黒になるので、空の «太陽の項» だけを
+   (1) 露出後の空の照度が日没 0.26 → 夜 0.12 へ単調に下がる明るさ、(2) RGB 3 波長のオゾンが作る
+   赤紫の平均色度を «ブルーアワーの青» へ寄せた色度、に持ち上げる。方向ごとの比（ビーナスベルトの桃色・
+   地球の影の青灰・太陽側の残照の橙）は物理の raymarch のまま残る（平均の色度だけを直す）。 */
+/** 露出後の空の照度（輝度）の目標。sy = sin(太陽高度) */
+export function twilightTarget(sy) { return 0.12 + 0.14 * smooth(-0.30, -0.02, sy); }
+/** 薄明の平均の色度（輝度 1 に正規化して使う）：市民薄明の青と、航海薄明の深い青 */
+export const TW_CIVIL = Object.freeze([0.70, 0.90, 2.10]);
+/** 太陽の側の地平（残照）は物理の色度のまま明るさだけ持ち上げる：その重み（atmo.glsl.js の ngSkyWarmW と同じ式） */
+export function warmWeight(vx, vy, vz, sx, sz) {
   const mu = (vx * sx + vz * sz) / Math.max(Math.hypot(vx, vz) * Math.hypot(sx, sz), 1e-4);
-  const g = Math.exp(-y * 3.5);
-  const w = g * Math.pow(0.5 + 0.5 * mu, 3) * 1.4, pk = Math.exp(-y * 5) * Math.pow(0.5 - 0.5 * mu, 2) * 0.35;
-  const f = smooth(-0.08, 0, vy), b = 0.55 + 0.45 * y;
-  out[0] = (0.26 * b + 1.0 * w + 0.85 * pk) * f;
-  out[1] = (0.42 * b + 0.52 * w + 0.48 * pk) * f;
-  out[2] = (1.0 * b + 0.22 * w + 0.70 * pk) * f;
-  return out;
+  const a = Math.max(0.5 + 0.5 * mu, 0), a2 = a * a;
+  return a2 * a2 * a2 * smooth(0.0, 0.06, vy) * Math.exp(-Math.max(vy, 0) * 7.0);
 }
-
-/**
- * 薄明の持ち上げの照度（ng、水平面の空の照度の輝度）。露出の時刻表（palette）× 空の照度が
- * 夜（月の空 ≈ 0.0055 × 露出 22 ≈ 0.12）を下回らず、夜明けに向けて少しずつ上がるように
- * @param {number} sy sin(太陽高度)
- */
-export function twilightIrradiance(sy) {
-  const alt = Math.asin(Math.max(-1, Math.min(1, sy))) * 180 / Math.PI;
-  const D0 = 0.12 + 0.10 * smooth(-0.37, -0.03, sy);
-  return Math.max(0, D0 / ngScheduledExposure(alt, 0, 0) - 0.0055) * (1 - smooth(-0.035, 0.07, sy));
-}
+/** 残照の色度（太陽の側の地平の数度上。RGB のオゾンが作る桃紫を橙へ寄せる） */
+export const TW_GLOW = Object.freeze([2.0, 0.95, 0.40]);
+export const TW_DEEP = Object.freeze([0.46, 0.80, 2.70]);
+const TW_A0 = -24, TW_N = 31, TW_GMAX = 2000;
 
 /** three の SphericalHarmonics3.getBasisAt と同じ順・係数 */
 export function shBasis(x, y, z, out) {
@@ -93,13 +93,15 @@ export class SkyRig {
     this.A.setHaze(1, true);
     this.sunCol = [1, 1, 1];
     this._calibrate();
-    /* 薄明の形の水平面照度（輝度）。太陽の方位に依らない */
-    {
-      const ds = fibonacciSphere(512), o = [0, 0, 0];
-      let E = 0;
-      for (const d of ds) { if (d[1] <= 0) continue; twilightShape(d[0], d[1], d[2], 1, 0.3, o); E += ngLuminance(o[0], o[1], o[2]) * d[1] * (4 * Math.PI / 512); }
-      this.twNorm = 1 / Math.max(E, 1e-6);
-    }
+    /* 薄明の利得の表（太陽高度 −24°〜+6° の 1° 刻み、rgb）。init で buildTwilight() を刻んで作る。それまでは 1 */
+    this.twG = new Float32Array(TW_N * 3).fill(1);
+    this.twW = new Float32Array(TW_N * 3).fill(1);
+    this.twE = new Float32Array(TW_N * 3);
+    this.twM = new Float32Array(TW_N);
+    this.gW = [1, 1, 1];
+    this.upTw = [0, 0, 0];
+    this.twReady = false;
+    this.gTw = [1, 1, 1];
     this.dirs = fibonacciSphere(SH_N);
     for (let i = 0; i < HZ_N; i++) {
       const a = (i / HZ_N) * Math.PI * 2, l = Math.hypot(1, HZ_Y);
@@ -116,7 +118,7 @@ export class SkyRig {
     this._shT = -1; this._last = null;
     this.canopy = 0;
     this.uwInsc = null; this.uw = 0;
-    this.p = { tw: 0, eS: [0, 0, 0], eM: [0, 0, 0], ambTop: [0, 0, 0], ambBot: [0, 0, 0], deckL: [0, 0, 0], lightE: [0, 0, 0], light: [0, 1, 0], useMoonLight: false };
+    this.p = { eS0: 0, eS: [0, 0, 0], eM: [0, 0, 0], ambTop: [0, 0, 0], ambBot: [0, 0, 0], deckL: [0, 0, 0], lightE: [0, 0, 0], light: [0, 1, 0], useMoonLight: false };
     this.out = {
       keyDir: [0, 1, 0], keyE: [0, 0, 0], keyColor: [1, 1, 1], keyIntensity: 0,
       zenith: [0, 0, 0], horizon: [0, 0, 0], exposure: 1, wp: null, sunDisk: [0, 0, 0], moonDisk: [0, 0, 0],
@@ -144,6 +146,71 @@ export class SkyRig {
   }
 
   /**
+   * 薄明の利得の表を作る生成器（高度ごとに yield。≈20ms）。晴れ（haze 1.6）・甲板なしの物理の空の照度と、
+   * 同じ時刻の月の空の照度から、太陽の項の rgb の倍率を決める（twilightTarget・TW_CIVIL・TW_DEEP）
+   */
+  *buildTwilight() {
+    const atm = new AtmosphereCPU();
+    atm.setHaze(1.6, true);
+    const dirs = fibonacciSphere(48), w = (4 * Math.PI) / 48, o = [0, 0, 0], z = [0, 0, 0];
+    const flo = ngLuminance(NIGHT_FLOOR[0], NIGHT_FLOOR[1], NIGHT_FLOOR[2]) * Math.PI;
+    const nC = (c) => { const l = ngLuminance(c[0], c[1], c[2]); return c.map((v) => v / l); };
+    const civ = nC(TW_CIVIL), deep = nC(TW_DEEP), glow = nC(TW_GLOW);
+    yield 0;
+    for (let i = 0; i < TW_N; i++) {
+      const alt = (TW_A0 + i) * Math.PI / 180, sy = Math.sin(alt);
+      const s = [Math.cos(alt), sy, 0];
+      const sunSky = smooth(-0.40, -0.05, sy), moonSky = smooth(-0.40, -0.05, -sy);
+      const eS = [this.Etop * sunSky, this.Etop * sunSky, this.Etop * sunSky], eM = MOON_TINT.map((t) => this.moonTop * moonSky * t);
+      const Es = [0, 0, 0];
+      let Em = 0;
+      for (const d of dirs) {
+        if (d[1] <= 0) continue;
+        if (sunSky > 0) { atm.radiance(d[0], d[1], d[2], s[0], s[1], s[2], eS, z, this.G, 10, o); for (let k = 0; k < 3; k++) Es[k] += o[k] * d[1] * w; }
+        if (moonSky > 0) { atm.radiance(d[0], d[1], d[2], s[0], s[1], s[2], z, eM, this.G, 10, o); Em += ngLuminance(o[0], o[1], o[2]) * d[1] * w; }
+      }
+      const lp = ngLuminance(Es[0], Es[1], Es[2]);
+      const ex = ngScheduledExposure(alt * 180 / Math.PI, 0, 0);
+      const tgt = Math.max(twilightTarget(sy) / ex - Em - flo, 0) * (1 - smooth(-0.22, -0.31, sy));
+      const lum = Math.max(lp, tgt);
+      const w1 = smooth(0.0, -0.035, sy), w2 = smooth(-0.06, -0.16, sy);
+      const gl = clamp(lp > 1e-12 ? lum / lp : 1, 1, TW_GMAX), wg = smooth(0.0, -0.03, sy);
+      this.twM[i] = Em;
+      for (let k = 0; k < 3; k++) {
+        const cp = lp > 1e-12 ? Es[k] / lp : deep[k];
+        const c = (cp + (civ[k] - cp) * w1) + (deep[k] - civ[k]) * w2 * w1;
+        const g = Es[k] > 1e-12 ? (lum * c) / Es[k] : 1;
+        this.twG[i * 3 + k] = clamp(Number.isFinite(g) ? g : 1, 0.05, TW_GMAX);
+        this.twE[i * 3 + k] = Es[k] * this.twG[i * 3 + k];
+        /* 太陽の側：明るさは同じ倍率、色度は物理の平均 → 残照の橙へ。深い薄明（−6° より下）では青へ戻す（残照は −10° で消える） */
+        const gw = gl * Math.pow(glow[k] / Math.max(lp > 1e-12 ? Es[k] / lp : 1, 1e-3), 0.6 * wg);
+        this.twW[i * 3 + k] = clamp(gw + (this.twG[i * 3 + k] - gw) * smooth(-0.10, -0.19, sy), 0.05, TW_GMAX);
+      }
+      yield i;
+    }
+    this.twReady = true;
+  }
+
+  /** 太陽高度 sy での薄明の利得 rgb（表を線形補間。表の外は端の値、+6° より上は 1） */
+  twilightGain(sy, out = this.gTw) {
+    const a = Math.asin(clampN(sy)) * 180 / Math.PI - TW_A0;
+    const up = this.upTw;
+    if (!this.twReady || a >= TW_N - 1) { out[0] = out[1] = out[2] = 1; this.gW.fill(1); up[0] = up[1] = up[2] = 0; return out; }
+    const x = Math.max(0, a), i = Math.min(TW_N - 2, Math.floor(x)), f = Math.min(1, x - i);
+    const t = smooth(4, 6, a + TW_A0);       // +4°〜+6° で 1 へ
+    const lerp = (tab, j) => tab[j] + (tab[j + (tab === this.twM ? 1 : 3)] - tab[j]) * f;
+    for (let k = 0; k < 3; k++) {
+      const g = lerp(this.twG, i * 3 + k);
+      out[k] = g + (1 - g) * t;
+    }
+    for (let k = 0; k < 3; k++) { const gw = lerp(this.twW, i * 3 + k); this.gW[k] = gw + (1 - gw) * t; }
+    /* 薄明・夜の «甲板なしの» 空の照度 rgb（雲の上の環境光・甲板の底の明かり。昼は使わない） */
+    const m = lerp(this.twM, i), fade = 1 - smooth(0.0, 0.10, Math.sin((a + TW_A0) * Math.PI / 180));
+    for (let k = 0; k < 3; k++) up[k] = (lerp(this.twE, i * 3 + k) + m * MOON_TINT[k] + NIGHT_FLOOR[k] * Math.PI) * fade;
+    return out;
+  }
+
+  /**
    * 1 フレーム。F（ngFrameData）の slot 0–7・12・13・17 を書き、結果（this.out）と SH（this.sh）を返す
    * @param {{dt:number, hour:number, weather:{cloud:number, rain:number}, sunDir:{x,y,z}, nightAmount?:number,
    *          envTime?:number, camera?:{position:{x,y,z}}}} input
@@ -166,15 +233,17 @@ export class SkyRig {
     /* 光：太陽・月の上端の照度。空の LUT は両方を灯す（月は −sunDir） */
     const sunSky = smooth(-0.40, -0.05, s[1]), moonSky = smooth(-0.40, -0.05, -s[1]);
     const p = this.p;
+    const gTw = this.twilightGain(s[1]);
+    p.eS0 = this.Etop * sunSky;
     for (let k = 0; k < 3; k++) {
-      p.eS[k] = this.Etop * this.sunCol[k] * sunSky;
-      p.eM[k] = this.moonTop * this.sunCol[k] * moonSky;
+      p.eS[k] = this.Etop * this.sunCol[k] * sunSky * gTw[k];
+      p.eM[k] = this.moonTop * this.sunCol[k] * moonSky * MOON_TINT[k];
     }
     /* 雲を照らす光：太陽が −6° より上なら太陽、それより下は月（月は 6° より上でだけ灯す → 切り替えで 0） */
     p.useMoonLight = s[1] < -0.10;
     p.light = p.useMoonLight ? [-s[0], -s[1], -s[2]] : s.slice();
     const lg = p.useMoonLight ? smooth(0.10, 0.25, -s[1]) : 1;
-    for (let k = 0; k < 3; k++) p.lightE[k] = (p.useMoonLight ? this.moonTop : this.Etop) * this.sunCol[k] * lg;
+    for (let k = 0; k < 3; k++) p.lightE[k] = (p.useMoonLight ? this.moonTop * MOON_TINT[k] : this.Etop) * this.sunCol[k] * lg;
     /* key：太陽高度 −1° で月へ。交差点で両方 0 */
     const useSun = s[1] > -SIN_1DEG;
     const kd = useSun ? s : [-s[0], -s[1], -s[2]];
@@ -182,27 +251,27 @@ export class SkyRig {
     const Tk = A.direct(kd[1], this._t);
     const top = useSun ? this.Etop : this.moonTop;
     const E = [0, 0, 0];
-    for (let k = 0; k < 3; k++) E[k] = top * this.sunCol[k] * Tk[k] * gate * wp.cloudDim;
+    for (let k = 0; k < 3; k++) E[k] = top * this.sunCol[k] * Tk[k] * gate * wp.cloudDim * (useSun ? 1 : MOON_TINT[k]);
     /* 雲の甲板（晴れの空の LUT の «甲板の下»）：底の放射輝度 */
     const Tcl = A.sunTransmittance(ATMO.Rg + wp.base, p.light[1], [0, 0, 0]);
     const tau = wp.sigma * (wp.top - wp.base) / 1000;
     const D = 1 / (1 + 0.75 * tau * 0.15);
     const lyE = Math.sqrt(Math.max(p.light[1], 0.03));
-    for (let k = 0; k < 3; k++) p.deckL[k] = p.lightE[k] * Tcl[k] * D * lyE / Math.PI * smooth(0.2, 0.9, wp.cover);
+    const upT = this.upTw;
+    for (let k = 0; k < 3; k++) p.deckL[k] = (p.lightE[k] * Tcl[k] * lyE + 0.6 * upT[k]) * D / Math.PI * smooth(0.2, 0.9, wp.cover);
     A.deck.h = wp.base; A.deck.occ = wp.deckOcc; A.deck.L = p.deckL;
     if (this.B !== A && this.B) { this.B.deck = A.deck; }
-    /* 薄明の持ち上げ（雲の甲板の下では半分） */
-    p.tw = twilightIrradiance(s[1]) * this.twNorm * (1 - 0.5 * wp.deckOcc);
     /* 晴れの空の方向ごとの値（毎フレーム 9 方向ずつ、跳びは全部） */
     const n = this.dirs.length;
     const per = jumped || this.rr === 0 && !this._filled ? n : 9;
-    const o = [0, 0, 0], tw = [0, 0, 0];
+    const o = [0, 0, 0], eSd = [0, 0, 0];
     for (let c = 0; c < per; c++) {
       const i = this.rr % n;
       const d = this.dirs[i];
-      A.radiance(d[0], d[1], d[2], s[0], s[1], s[2], p.eS, p.eM, this.G, 12, o);
-      twilightShape(d[0], d[1], d[2], s[0], s[2], tw);
-      this.Lclear[i * 3] = o[0] + p.tw * tw[0]; this.Lclear[i * 3 + 1] = o[1] + p.tw * tw[1]; this.Lclear[i * 3 + 2] = o[2] + p.tw * tw[2];
+      const ww = warmWeight(d[0], d[1], d[2], s[0], s[2]);
+      for (let k = 0; k < 3; k++) eSd[k] = p.eS0 * this.sunCol[k] * (gTw[k] + (this.gW[k] - gTw[k]) * ww);
+      A.radiance(d[0], d[1], d[2], s[0], s[1], s[2], eSd, p.eM, this.G, 12, o);
+      this.Lclear[i * 3] = o[0]; this.Lclear[i * 3 + 1] = o[1]; this.Lclear[i * 3 + 2] = o[2];
       this.rr = (this.rr + 1) % n;
     }
     this._filled = true;
@@ -216,7 +285,7 @@ export class SkyRig {
     }
     const up = this.skyUp;
     /* 雲の上の空（雲の環境光）：空の半球照度 / π × 0.75（雲の中では上の雲が遮る）+ 夜の底 */
-    for (let k = 0; k < 3; k++) p.ambTop[k] = (this.skyUp[k] / Math.PI) * 0.55 + NIGHT_FLOOR[k];
+    for (let k = 0; k < 3; k++) p.ambTop[k] = (Math.max(this.skyUp[k], upT[k]) / Math.PI) * 0.55 + NIGHT_FLOOR[k];
     for (let k = 0; k < 3; k++) p.ambBot[k] = ATMO.albedo * (E[k] * Math.max(kd[1], 0) + up[k]) / Math.PI;
     /* 媒質（core の ngApplyMedium）：Rayleigh・谷の霞（雨で 2 倍以上）・朝霧 */
     const bM = 3.5e-5 * (1 + 1.5 * cloud + 3.5 * rain);

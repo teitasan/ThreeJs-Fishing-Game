@@ -177,21 +177,20 @@ export const SKY_COMMON_GLSL = NG_SKY_TRANS_GLSL + /* glsl */ `
 uniform sampler2D ngSkyMS;
 uniform vec4 uSkyE;
 uniform vec3 uSkySunCol;
+uniform vec3 uSkyMoonCol;   // 月の項の色（rig.js の MOON_TINT）
+uniform vec3 uSkySunWarm;   // 太陽の側の地平の数度上の利得 rgb（残照の橙）
+/* rig.js の warmWeight と同じ式：太陽の方位の地平ほど 1 */
+float ngSkyWarmW(vec3 v, vec3 s) {
+  float mu = dot(v.xz, s.xz) / max(length(v.xz) * length(s.xz), 1e-4);
+  float a = max(0.5 + 0.5 * mu, 0.0), a2 = a * a;
+  return a2 * a2 * a2 * smoothstep(0.0, 0.06, v.y) * exp(-max(v.y, 0.0) * 7.0);
+}
 uniform vec4 uSkyDeck;
 uniform vec3 uSkyDeckL;
 uniform vec3 uSkySunDir;
-uniform vec4 uSkyTw;       // x = 薄明の持ち上げの振幅（ng の放射輝度）
-/* 薄明の持ち上げ（rig.js の twilightShape と同じ式）：太陽が −2°〜−20° の間、露出の時刻表に対して
-   夜の明るさを下回らないように足す «芸術的な» 多重散乱。天頂は深い青、太陽の方位の地平に暖色の帯、反対側に薄い桃色 */
-vec3 ngSkyTwilight(vec3 v, vec3 s) {
-  float vy = max(v.y, 0.0);
-  float mu = dot(v.xz, s.xz) / max(length(v.xz) * length(s.xz), 1e-4);
-  float g = exp(-vy * 3.5);
-  vec3 blue = vec3(0.26, 0.42, 1.0) * (0.55 + 0.45 * vy);
-  vec3 warm = vec3(1.0, 0.52, 0.22) * (g * pow(0.5 + 0.5 * mu, 3.0) * 1.4);
-  vec3 pink = vec3(0.85, 0.48, 0.70) * (exp(-vy * 5.0) * pow(0.5 - 0.5 * mu, 2.0) * 0.35);
-  return (blue + warm + pink) * smoothstep(-0.08, 0.0, v.y);
-}
+/* uSkySunCol：薄明の利得（rgb。rig.js の twilightGain：太陽が地平の下のとき、空の «太陽の項だけ» を
+   露出の時刻表に見合う明るさとブルーアワーの色度へ持ち上げる。方向ごとの比（ビーナスベルト・地球の影・
+   太陽側の残照）は物理のまま。月の項には掛けない） */
 vec3 ngSkyMSAt(float r, float muS) {
   vec2 uv = vec2(ngSkyU2Uv(clamp(muS * 0.5 + 0.5, 0.0, 1.0), 32.0), ngSkyU2Uv(clamp((r - NG_SKY_RG) / (NG_SKY_RT - NG_SKY_RG), 0.0, 1.0), 32.0));
   return texture(ngSkyMS, uv).rgb;
@@ -206,7 +205,7 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
   float pRs = ngSkyPhaseR(muSv), pMs = ngSkyPhaseCS(muSv, NG_SKY_G);
   float pRm = ngSkyPhaseR(-muSv), pMm = ngSkyPhaseCS(-muSv, NG_SKY_G);
   float haze = uSkyE.w;
-  vec3 eS = uSkySunCol * uSkyE.x, eM = uSkySunCol * uSkyE.y;
+  vec3 eS = mix(uSkySunCol, uSkySunWarm, ngSkyWarmW(v, s)) * uSkyE.x, eM = uSkyMoonCol * uSkyE.y;
   vec3 thr = vec3(1.0), L = vec3(0.0), sR, ext; float sM;
   float tPrev = 0.0, fs = float(steps);
   for (int i = 0; i < 48; i++) {
@@ -241,7 +240,7 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
     if (uSkyE.y > 0.0) E += eM * ngSkySunT(rp, -muS) * max(-muS, 0.0);
     L += thr * E * (1.0 - uSkyDeck.y) * NG_SKY_ALBEDO / 3.14159265;
   }
-  return L * uSkyE.z + uSkyTw.x * ngSkyTwilight(v, s);
+  return L * uSkyE.z;
 }
 #endif
 `;

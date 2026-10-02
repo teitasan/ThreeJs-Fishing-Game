@@ -288,7 +288,7 @@ void ngCirrusLayer(vec3 d, vec3 Lsky, out vec3 rgb, out float a) {
   vec3 Ld = uLight.xyz;
   float muL = dot(d, Ld), rp = length(P);
   vec3 E = uLightE * ngSkySunT(rp, dot(P, Ld) / rp);
-  vec3 Lci = (E * (0.55 * ngSkyPhaseHG(muL, 0.78) + 0.45 * 0.0795775) + uAmbTop * 0.9) * (1.0 - T);
+  vec3 Lci = (E * (0.55 * ngSkyPhaseHG(muL, 0.78) + 0.45 * 0.0795775) + uAmbTop * 0.25) * (1.0 - T);
   vec3 Tair; float F;
   ngCloudAerial(d, tc, Tair, F);
   a = T;

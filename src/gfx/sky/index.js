@@ -13,7 +13,8 @@ import { NG, NG_PASS, ngFrameData } from '../core/frame.js';
 import { NG_LAYER, ngOwn } from '../core/layers.js';
 import { ngShaderMaterial } from '../core/extend.js';
 import { cloudShadow } from '../core/medium.js';
-import { SkyRig } from './rig.js';
+import { SkyRig, MOON_TINT } from './rig.js';
+import { smooth as smooth01 } from './atmosphere.js';
 import { skyTier } from './quality.js';
 import { TRANS_FRAG, MS_FRAG, SKYCLEAR_FRAG, SKYVIEW_FRAG } from './atmo.glsl.js';
 import { SHAPE_FRAG, DETAIL_FRAG, CIRRUS_FRAG, MOON_FRAG, COVER_FRAG, COVER_Q, PANO_FRAG, STRIP_COPY_FRAG } from './clouds.glsl.js';
@@ -64,7 +65,7 @@ export class SkyModule extends NgModule {
       ngFrame: { value: ngFrameData },
       ngSkyTrans: { value: null }, ngSkyMS: { value: null },
       uHaze: { value: 1 }, uLutMode: { value: 0 }, uCopyMode: { value: 0 },
-      uSkyE: V4(), uSkyTw: V4(), uSkySunCol: { value: new T.Vector3(1, 1, 1) }, uSkyDeck: V4(), uSkyDeckL: V3(), uSkySunDir: { value: new T.Vector3(0, 1, 0) },
+      uSkyE: V4(), uSkySunCol: { value: new T.Vector3(1, 1, 1) }, uSkyMoonCol: { value: new T.Vector3().fromArray(MOON_TINT) }, uSkySunWarm: { value: new T.Vector3(1, 1, 1) }, uSkyDeck: V4(), uSkyDeckL: V3(), uSkySunDir: { value: new T.Vector3(0, 1, 0) },
       uSteps: { value: 32 },
       uSkyClear: { value: null }, uCloudPano: { value: null }, uStrip: { value: null }, uPrev: { value: null },
       uNgCoverN: { value: null }, uCoverXf: V4(),
@@ -114,6 +115,9 @@ export class SkyModule extends NgModule {
     this.U.uSkyClear.value = this.rtClear.texture;
     progress?.(0.1);
     await this._bake(progress);
+    /* 薄明の利得の表（CPU ≈20ms を 30ms ごとに譲って） */
+    for (const _ of this.rig.buildTwilight()) await forge.step();
+    this.rig._last = null;
     this._allocPano();
     /* ドーム */
     this.dome = new T.Mesh(tri.clone(), ngShaderMaterial({
@@ -227,9 +231,10 @@ export class SkyModule extends NgModule {
     const U = this.U, p = this.rig.p, wp = o.wp, F = this.ctx.frame.data;
     const s = [F[NG.SUN * 4], F[NG.SUN * 4 + 1], F[NG.SUN * 4 + 2]];
     U.uSkySunDir.value.set(s[0], s[1], s[2]);
-    U.uSkyE.value.set(p.eS[1], p.eM[1], this.rig.G, this.rig.A.haze);
+    U.uSkyE.value.set(p.eS0, this.rig.moonTop * smooth01(-0.40, -0.05, -s[1]), this.rig.G, this.rig.A.haze);
+    U.uSkySunCol.value.fromArray(this.rig.gTw);
+    U.uSkySunWarm.value.fromArray(this.rig.gW);
     U.uSkyDeck.value.set(wp.base / 1000, wp.deckOcc, 0, 0);
-    U.uSkyTw.value.set(p.tw, 0, 0, 0);
     U.uSkyDeckL.value.fromArray(p.deckL);
     U.uHaze.value = this.rig.A.haze;
     /* 雲 */
