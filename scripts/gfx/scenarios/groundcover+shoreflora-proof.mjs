@@ -61,6 +61,21 @@ export default async function (h) {
       const ang0 = Math.atan2(end.z, end.x);
       const H = (x, z) => Math.max(lake.heightAt(x, z), 0);
       L.freeze(10);
+      /* 視線を塞ぐ物（木の幹・岩）：(x0,z0) から (x1,z1) の線分の 0.6–0.95 の区間の近くにある数 */
+      const TR = P.trees, treeList = [];
+      /* placement.trees は列の形（SoA：x・z の配列と count） */
+      for (let i = 0; i < (TR?.count || 0); i++) treeList.push({ x: TR.x[i], z: TR.z[i], r: Math.max(0.6, (TR.r?.[i] || 0.3) + 0.5) });
+      const blockers = treeList.concat((P.boulders || []).filter((b) => b.top > 0.5).map((b) => ({ x: b.x, z: b.z, r: b.r + 0.4 })));
+      const blocked = (x0, z0, x1, z1, from = 0.0, to = 0.95) => {
+        const dx = x1 - x0, dz = z1 - z0, L2 = dx * dx + dz * dz || 1;
+        let n = 0;
+        for (const b of blockers) {
+          const t = ((b.x - x0) * dx + (b.z - z0) * dz) / L2;
+          if (t < from || t > to) continue;
+          if (Math.hypot(x0 + dx * t - b.x, z0 + dz * t - b.z) < b.r) n++;
+        }
+        return n;
+      };
       let meadow = null, sasa = null;
       for (let da = -Math.PI; da < Math.PI; da += 0.14) {
         for (const inland of [16, 26, 36]) {
@@ -86,7 +101,9 @@ export default async function (h) {
           L.cam({ pos: [x, y + 1.6, z], target: [x + sux * 8, H(x + sux * 8, z + suz * 8) + 0.6, z + suz * 8] });
           L.tick(2);
           const c = gc.debugCounts();
-          const g = ((c[0]?.alive || 0) + (c[1]?.alive || 0) * 0.5) * Math.pow(Math.min(c[0]?.hf ?? 0, c[1]?.hf ?? 0), 2);
+          /* 太陽の方 14m に幹・岩があれば落とす（逆光の草原の手前を木が塞がない） */
+          const blk = blocked(x, z, x + sux * 14, z + suz * 14, 0.05, 1.0);
+          const g = ((c[0]?.alive || 0) + (c[1]?.alive || 0) * 0.5) * Math.pow(Math.min(c[0]?.hf ?? 0, c[1]?.hf ?? 0), 2) * (blk ? 0.05 : 1);
           if (!back || g > back.score) back = { score: g, x, z, y, a, hf: c[0]?.hf };
         }
       }
@@ -114,9 +131,21 @@ export default async function (h) {
       const best = [...grid.values()].sort((a, b) => b.n - a.n)[0];
       const lily = { n: best.n, x: best.x / best.n, z: best.z / best.n };
       const lr = Math.hypot(lily.x, lily.z) || 1;
-      /* 藪：桟橋の付け根に一番近い株 */
+      /* 藪：株の多い輪（6m 以内の仲間）を、湖側の 10m（8 方向から視線が通る所）から見る */
       let th = null;
-      for (const t of P.thicket) { const dd = Math.hypot(t.x - st.x, t.z - st.z); if (!th || dd < th.d) th = { ...t, d: dd }; }
+      for (const t of P.thicket) {
+        let nb = 0;
+        for (const u of P.thicket) if (Math.hypot(u.x - t.x, u.z - t.z) < 6) nb++;
+        const r0 = Math.hypot(t.x, t.z) || 1;
+        for (let k = -2; k <= 2; k++) {
+          const a = Math.atan2(-t.z / r0, -t.x / r0) + k * 0.35;
+          const cx = t.x + Math.cos(a) * 10, cz = t.z + Math.sin(a) * 10;
+          if (lake.depthAt(cx, cz) > 0) continue;
+          const blk = blocked(cx, cz, t.x, t.z, 0.0, 0.85);
+          const score = nb - 6 * blk - Math.abs(k) * 0.5;
+          if (!th || score > th.score) th = { ...t, score, cx, cz, nb, blk };
+        }
+      }
       return { meadow, sasa, back, reed, lily: { ...lily, ox: lily.x / lr, oz: lily.z / lr }, thicket: th, sun17: [sx, sz], dockY: L.gfx.f?.camPos ? null : null };
     });
     T.spots = spots;
@@ -135,7 +164,7 @@ export default async function (h) {
       ['gc-meadow', look(M.x, M.y + 1.7, M.z, ca, sa, 7, -1.0), 13, 'clear', true],
       ['gc-meadow-backlit-1730', look(Bk.x, Bk.y + 1.6, Bk.z, sun[0], sun[1], 8, -0.9), 17.5, 'clear', true],
       ['gc-meadow-rain', look(M.x, M.y + 1.7, M.z, ca, sa, 6, -1.1), 11, 'rain', true],
-      ['gc-thicket-10m', Th ? { pos: [Th.x + toLake[0] * 9.2 - toLake[1] * 3.8, Th.y + 1.6, Th.z + toLake[1] * 9.2 + toLake[0] * 3.8], target: [Th.x, Th.y + 0.9, Th.z], groundEye: 1.6 } : 'forest-floor', 15, 'clear', true],
+      ['gc-thicket-10m', Th ? { pos: [Th.cx, Th.y + 1.6, Th.cz], target: [Th.x, Th.y + 0.8, Th.z], groundEye: 1.6 } : 'forest-floor', 15, 'clear', true],
       ['gc-edge-60m', look(M.x - ca * 4, M.y + 2.3, M.z - sa * 4, ca, sa, 60, -1.2), 14, 'clear', true],
       ['gc-dusk', look(M.x, M.y + 1.7, M.z, ca, sa, 7, -1.0), 18.3, 'clear', false],
       ['sf-reeds-from-dock-dusk', { pos: [R.x, 0, R.z], target: [R.cx, 0.9, R.cz], dockEye: true }, 17.6, 'clear', true],

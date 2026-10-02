@@ -24,6 +24,7 @@ uniform vec4 ngGcLook;   // w = 1：検査（根元の色の ΔE。法線を上�
 #define NG_GC_W ${GC_TEX_W}
 out vec4 vGcA;   // x = t（根元 0 → 先 1）, y = 横 −1..1, z = 種類, w = 刃のハッシュ
 out vec3 vGcRoot;
+out vec2 vGcN;   // 株の斑（0.35/m・1.7/m の値の雑音、株の根元で 1 回。断片で読まない）
 out vec4 vGcB;   // x = 空の見え, y = 山の影, z = 縮み（1 = 満開）, w = 枯れ
 out vec3 vGcL;   // 小物：単位球の局所座標（模様）／草：(株の中心 xz, 突風)
 vec3 ngGcP;
@@ -68,7 +69,7 @@ export const GC_VS_NORMAL = /* glsl */ `
     vec2 off = mix(tuft, jit, step(0.45, hb2));
     vec3 p0 = base + vec3(off.x, -0.012, off.y);
     float len = H * mix(0.5, 1.0, hb) * (1.0 + 0.25 * (1.0 - (bi + 0.5) / nb));
-    float tilt = mix(0.10, 0.62, hb2 * hb2) + 0.25 * (bi + 0.5) / nb;
+    float tilt = mix(0.14, 0.75, hb2 * hb2) + 0.3 * (bi + 0.5) / nb;
     float fl = sin(ngEnvTime * (2.6 + 2.2 * hb) + hb * 6.2831 + dot(base.xz, vec2(0.7, 0.3))) * (0.015 + 0.05 * gust) * (0.4 + length(bend));
     vec2 D = dir * tilt + bend * (1.0 + 0.35 * (hb - 0.5)) + vec2(-dir.y, dir.x) * fl;
     float dl = length(D);
@@ -86,7 +87,9 @@ export const GC_VS_NORMAL = /* glsl */ `
     if (dot(Nf, vec3(dir.x, 0.0, dir.y)) < 0.0) Nf = -Nf;
     N = normalize(Nf + sv * sd * 0.55 + vec3(0.0, 0.25, 0.0));
     if (ngGcLook.w > 0.5) N = vec3(0.0, 1.0, 0.0);
-    dry = smoothstep(0.55, 1.0, t) * smoothstep(0.55, 0.95, ngHash12(base.xz * 3.3 + bi)) ;
+    dry = smoothstep(0.55, 1.0, t) * smoothstep(0.55, 0.95, ngHash12(base.xz * 3.3 + bi));
+    /* 去年の枯れ葉（刃の 6%）：根元から先まで藁色 */
+    dry = max(dry, step(0.94, ngHash12(base.xz * 7.7 + bi * 1.9)) * smoothstep(0.08, 0.3, t) * 0.95);
   } else if (tpl < 2.5) {
     /* ---- 笹（クマザサ）とシダ：葉 = 太さの変わるリボン ---- */
     float nl = 16.0;
@@ -190,6 +193,7 @@ export const GC_VS_NORMAL = /* glsl */ `
   }
   vGcA = vec4(t, sd, kind, hb);
   vGcRoot = ngB.rgb;
+  vGcN = vec2(ngVNoise2(base.xz * 0.35 + 3.0), ngVNoise2(base.xz * 1.7 + 9.0));
   vGcB = vec4(skyV, hfV, shrink, dry);
   ngGcP = P;
   objectNormal = N;
@@ -202,6 +206,7 @@ export const GC_VS_BEGIN = /* glsl */ `transformed = ngGcP;`;
 export const GC_FS_PARS = NG_SURFACE_GLSL + /* glsl */ `
 in vec4 vGcA;
 in vec3 vGcRoot;
+in vec2 vGcN;
 in vec4 vGcB;
 in vec3 vGcL;
 uniform vec4 ngGcLook;   // x = 透過の強さ, y = 季節の枯れ, z = 草の明るさ倍率, w = 1 で検査（根元の ΔE）
@@ -217,13 +222,17 @@ float ngGcPorous = 0.3;
 vec3 ngGcAlb;
 {
   vec2 cxz = vGcL.xy;
-  float ngPch = ngVNoise2(vNgWorld.xz * 0.35 + 3.0);
-  float ngPch2 = ngVNoise2(vNgWorld.xz * 1.7 + 9.0);
+  float ngPch = vGcN.x;
+  float ngPch2 = vGcN.y;
   if (ngGcK < 0.5) {
     /* 草（スゲ・イネ科）：初夏の黄緑〜青緑。株ごと・斑ごとの色むら、先の枯れ */
     vec3 fresh = mix(vec3(0.062, 0.135, 0.032), vec3(0.105, 0.165, 0.040), ngPch);
     fresh = mix(fresh, vec3(0.072, 0.118, 0.052), smoothstep(0.55, 0.95, ngGcH) * 0.6);
-    fresh *= mix(0.82, 1.12, ngPch2) * ngGcLook.z;
+    /* 株ごとの色相：黄緑の株・青緑の株（同じ緑の絨毯にしない） */
+    float hcl = ngHash12(vGcL.xy * 0.913 + 0.37);
+    fresh = mix(fresh, vec3(0.120, 0.170, 0.038), smoothstep(0.62, 0.95, ngPch2) * 0.7);
+    fresh = mix(fresh, vec3(0.055, 0.110, 0.055), smoothstep(0.35, 0.05, ngPch2) * 0.5);
+    fresh *= mix(0.82, 1.12, hcl) * ngGcLook.z;
     vec3 straw = vec3(0.215, 0.175, 0.085);
     float dry = clamp(vGcB.w + ngGcLook.y * smoothstep(0.6, 1.0, ngGcT) * ngPch, 0.0, 1.0);
     vec3 c = mix(fresh, straw, dry * 0.85);

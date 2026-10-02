@@ -11,6 +11,7 @@
 import { NG_NOISE_GLSL } from '../core/glsl/noise.glsl.js';
 import { NG_WIND_GLSL } from '../core/glsl/wind.glsl.js';
 import { NG_SURFACE_GLSL } from '../core/glsl/surface.glsl.js';
+import { SF_TPL } from './quality.js';
 
 export const SF_REED_VS_PARS = NG_WIND_GLSL + /* glsl */ `
 in vec4 ngRi0;
@@ -112,14 +113,16 @@ export const SF_REED_VS_NORMAL = /* glsl */ `
       float k = part - 1.0;
       float hk = ngHash12(base.xz * 1.9 + si * 5.3 + k * 2.7);
       float u0, len, wmax;
+      /* 葉の数は型板の通り（近い株 ${SF_TPL.reed.leaves} 枚・LOD1 ${SF_TPL.reedLod1.leaves} 枚）。茎の上に均等に散らす */
+      float nLeaf = mode > 0.5 ? ${SF_TPL.reedLod1.leaves.toFixed(1)} : ${SF_TPL.reed.leaves.toFixed(1)};
       if (kind < 0.5) {
-        u0 = mix(0.16, 0.9, (k + 0.3 * hk) / 8.0);
+        u0 = mix(0.16, 0.9, (k + 0.3 * hk) / nLeaf);
         len = mix(0.3, 0.5, hk) * clamp(top / 2.2, 0.6, 1.3) * mix(1.0, 0.7, old);
-        wmax = 0.028;
+        wmax = 0.032;
       } else {
-        u0 = mix(0.04, 0.34, (k + 0.3 * hk) / 8.0);
+        u0 = mix(0.04, 0.34, (k + 0.3 * hk) / nLeaf);
         len = top * mix(0.45, 0.8, hk);
-        wmax = 0.021;
+        wmax = 0.024;
       }
       float yl = max(u0 * top, -0.02);
       float ul = (yl - y0) / max(top - y0, 0.1);

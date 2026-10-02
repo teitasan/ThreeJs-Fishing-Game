@@ -45,7 +45,7 @@ export const SF_LILY_VS_NORMAL = /* glsl */ `
   /* 葉 i の中心：群落の中にハッシュで散らす（中心ほど密） */
   float hp = ngHash12(cl * 3.17 + pi * 7.7 + 0.4);
   float hp2 = ngHash12(cl * 1.31 + pi * 2.9 + 5.1);
-  float npads = 2.0 + floor(hc * 3.99);
+  float npads = 4.0 + floor(hc * 2.99);   // 群落 1 つに葉 4–6 枚（疎らな紙吹雪にしない）
   float ang = pi * 2.39996 + hc * 6.2831;
   float rr = spread * 0.5 * sqrt((pi + 0.5) / 6.0) * mix(0.7, 1.15, hp);
   vec2 c = cl + vec2(cos(ang), sin(ang)) * rr;
@@ -59,7 +59,7 @@ export const SF_LILY_VS_NORMAL = /* glsl */ `
   if (part < 0.5) {
     /* ---- ヒツジグサの葉：切れ込み（30°）のある円盤、縁がわずかに反る ---- */
     if (kind > 0.5 || pi >= npads) dead = true;
-    float rad = mix(0.09, 0.15, hp2);
+    float rad = mix(0.10, 0.17, hp2);
     float a = mix(0.26, 6.2832 - 0.26, v);
     vec2 q = vec2(cos(a), sin(a)) * u * rad * vec2(1.0, 0.86);
     L = vec3(q.x, 0.004 * pow(u, 4.0), q.y);

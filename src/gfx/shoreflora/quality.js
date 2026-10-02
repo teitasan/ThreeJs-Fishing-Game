@@ -16,7 +16,7 @@ export const SF_QUALITY = Object.freeze({
 
 /** 型板の形（頂点の数の見積もりとテスト用） */
 export const SF_TPL = Object.freeze({
-  reed: { stems: 12, nodes: 6, leaves: 8, leafNodes: 4 },
+  reed: { stems: 12, nodes: 6, leaves: 5, leafNodes: 4 },
   reedLod1: { stems: 6, nodes: 3, leaves: 2, leafNodes: 2 },
   lily: { pads: 6, padSeg: 14, petals: 12, rosette: 12 },
   weed: { stems: 4, nodes: 9 },
