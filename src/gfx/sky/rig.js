@@ -25,6 +25,9 @@ export const NIGHT_FLOOR = Object.freeze([0.00024, 0.00040, 0.00084]);
 /** 月が照らす空の明るさの倍率（key の月光はそのまま）。物理の比のままだと露出 ×22 の夜空が «昼の空を暗くしただけ»
  *  の明るい青になる（天頂 ≈ 2.5 × #0b1426）。空だけ半分にして、月明かりの地面と暗い夜空の対比を作る */
 export const MOON_SKY = 0.55;
+/** 雲を照らす月の光の倍率（r4）。物理の比のままだと露出 ×22 の 23:30 に積雲が «昼の白い紙» のように浮く。
+ *  月夜の雲は空より少し明るい銀灰（縁が光り、腹は空に溶ける）くらいに */
+export const MOON_CLOUD = 0.5;
 /** 夜の地面への空の光の上乗せ（SH・AMB だけ。rig.step の _nf） */
 export const NIGHT_FILL = 1.0;
 /** 月が照らす空の項の色（key の MOON_TINT とは別）。Rayleigh がすでに青くするので、ここで青を重ねると AgX の後で R が 0 に潰れた
@@ -287,7 +290,7 @@ export class SkyRig {
     p.useMoonLight = s[1] < -0.10;
     p.light = p.useMoonLight ? [-s[0], -s[1], -s[2]] : s.slice();
     const lg = p.useMoonLight ? smooth(0.10, 0.34, -s[1]) : 1;
-    for (let k = 0; k < 3; k++) p.lightE[k] = (p.useMoonLight ? this.moonTop * MOON_TINT[k] : this.Etop) * this.sunCol[k] * lg;
+    for (let k = 0; k < 3; k++) p.lightE[k] = (p.useMoonLight ? this.moonTop * MOON_TINT[k] * MOON_CLOUD : this.Etop) * this.sunCol[k] * lg;
     /* key：太陽高度 −1° で月へ。交差点で両方 0 */
     const useSun = s[1] > -SIN_1DEG;
     const kd = useSun ? s : [-s[0], -s[1], -s[2]];
