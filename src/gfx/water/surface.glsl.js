@@ -205,6 +205,9 @@ in vec4 vWfA;
 in vec2 vWfB;
 
 #define NG_F0 ${NG_WATER_F0.toFixed(3)}
+#ifndef NG_WBX
+#define NG_WBX 0
+#endif
 
 /* 解析リング：ウキ・魚・着水の輪の列（分散で外ほど波長が伸び、3 つほどの山が r = v·age を走る）。
    振幅は年齢と √半径で減る。勾配（dh/dx, dh/dz）を返す */
@@ -345,7 +348,11 @@ void main() {
   }
   sl += sd.x * wd + sd.y * wp;
   float varR = 0.0;
+#if (NG_WBX & 64) == 0
   vec2 ring = ngRippleSlope(p) + ngSimSlope(p) + ngWaterRain(p, ngEnvTime, rain, fpX, varR);
+#else
+  vec2 ring = vec2(0.0);
+#endif
   sl += ring;
   /* 鏡面の AA：輪・シミュ・雨は画面の微分から «画素に解けない» 勾配の分散（波は上で 1 本ずつ LEAN 済み） */
   vec2 dsx = dFdx(ring), dsy = dFdy(ring);
@@ -375,9 +382,13 @@ void main() {
     /* 深度の検証は ruv と ±1.5px の 4 点の最小で（MSAA の解決後の色は輪郭の画素に手前の物の色が混ざるが、
        深度は 1 サンプルなので «奥» と言う。1 点だけだと桟橋・手すりの輪郭に沿って手前の色の粒が出ていた） */
     vec2 o = ngScreen.zw * 1.5;
+#if (NG_WBX & 2) != 0
+    float zr = texture(ngSceneDepth, ruv).r;
+#else
     float zr = min(texture(ngSceneDepth, ruv).r,
                min(min(texture(ngSceneDepth, ruv + vec2(o.x, 0.0)).r, texture(ngSceneDepth, ruv - vec2(o.x, 0.0)).r),
                    min(texture(ngSceneDepth, ruv + vec2(0.0, o.y)).r, texture(ngSceneDepth, ruv - vec2(0.0, o.y)).r)));
+#endif
     float rok = smoothstep(vViewZ - 0.02, vViewZ + 0.15, zr);
     float rlod = clamp(log2(1.0 + alpha * min(path, 6.0) * 40.0), 0.0, ngCopyMips);
     vec3 refr = textureLod(ngSceneColor, suv, rlod).rgb;
@@ -438,18 +449,26 @@ void main() {
       float VoH = max(dot(V, H), 0.0);
       float Fs = NG_F0 + (1.0 - NG_F0) * pow(1.0 - VoH, 5.0);
       float s = D * Vis * Fs * NoL * (1.0 - 0.75 * ovc);
-      if (s > 1e-4) {
+      /* 影（近景の PCF 9 回 + 高さ場 2 回）を読むのは «見える» 鏡面だけ：key の鏡面が空の照度の 0.4% 未満の所
+         （GGX の裾。昼の見下ろしでは画面のほぼ全部）は影なしで足す（0.4% の段差は見えない。1440p で ≈1ms 減る） */
+      float sL = s * ngLuminance(ngKeyRad);
+      if (sL > 0.004 * max(ngLuminance(ngSkyIrr), 1e-3)) {
         float nearW = ngNearToFar(vWorld);
         /* 近景の影マップには地形が入らない（地形は影を落とさず高さ場影だけ）ので、高さ場影は近くでも掛ける */
+#if (NG_WBX & 1) == 0
         vis = min(mix(nearW < 1.0 ? getShadowMask() : 1.0, 1.0, nearW), ngHfShadow(vWorld)) * vNgCloud;
+#else
+        vis = vNgCloud;
+#endif
         spec = ngKeyRad * (s * vis * soft);
       } else {
         vis = vNgCloud;
+        spec = ngKeyRad * (s * vis * soft);
       }
     } else {
       vis = vNgCloud;
     }
-#if NUM_POINT_LIGHTS > 0
+#if NUM_POINT_LIGHTS > 0 && (NG_WBX & 16) == 0
     /* 灯籠：GGX の点光源（夜の縦長の映り込み）。消えている昼は払わない */
     if (dot(pointLights[0].color, vec3(1.0)) > 1e-4) {
       vec3 lv = uLampPos - vWorld;
@@ -478,7 +497,7 @@ void main() {
     col = mix(refr, refl, F) + (spec + scat) * vSegT;
 
     /* ---- 汀の泡（渚の遡上の位相で動く細い線）と接触の泡（杭・岩・ヨシ） ---- */
-    if (colW < 0.35) {
+    if ((NG_WBX & 128) == 0 && colW < 0.35) {
       float run = ngShoreRunUp(p, uTime) * uWind;
       float band = 0.05 + 0.22 * max(run, 0.0) + 0.04 * rain;
       float shoreW = (1.0 - smoothstep(0.0, band, colW)) * smoothstep(0.0, 0.006, colW);

@@ -83,11 +83,11 @@ export default async function (h) {
   }
 
   /* ウキの着水：ゲームの facade から輪と水しぶき（game.js の着水と同じ呼び方）→ 撮る */
-  await place({ back: 1.6, pitch: -0.32, clock: 10, fp: true });
+  await place({ back: 1.6, pitch: -0.22, clock: 10, fp: true });
   await h.tick(20);
   out.splash = await h.eval(() => {
     const g = window.__game, end = g.terrain.dockEnd, dir = g.terrain.dockDir;
-    const x = end.x + dir.x * 5, z = end.z + dir.z * 5;
+    const x = end.x + dir.x * 9, z = end.z + dir.z * 9;
     const m = window.__ngGfx.modules.get('water');
     const n0 = m._next;
     g.water.addSplash(x, g.water.surfaceY(x, z), z, 14, 1.0);
