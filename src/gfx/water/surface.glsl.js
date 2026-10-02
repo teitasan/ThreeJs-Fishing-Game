@@ -87,16 +87,16 @@ float ngWaterPatch(float U, float Ug) {
 }
 /* 全体の風の強さ（clear 1.4 → 0、cloudy 3.0 → 0.5、rain 5.0 → 1） */
 float ngWaterWindy(float Ug) { return smoothstep(1.5, 4.6, Ug); }
-/* 細かいカスケード（λ 1.7cm–36cm、単位の σ ≈ 0.17）：凪の所は σ ≈ 0.003 の鏡、斑の中は σ ≈ 0.05 */
+/* 細かいカスケード（λ 1.7cm–36cm、単位の σ ≈ 0.17）：凪の所は σ ≈ 0.002 の鏡（粗い方と合わせ ≈0.003：9:00 の対岸がくっきり写る）、斑の中は σ ≈ 0.05 */
 float ngWaterFineAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
   /* 雨は毛管の細波を潰す（雨滴の乱れで短い波が減衰する：雨の海面が «凪いで» 見える現象）→ 雨の輪が読める */
-  return (0.018 + 0.35 * pt + wy * (0.10 + 0.45 * pt)) * (1.0 - 0.6 * rain);
+  return (0.012 + 0.35 * pt + wy * (0.10 + 0.45 * pt)) * (1.0 - 0.6 * rain);
 }
 /* 粗いカスケード（λ 36cm–4.5m、単位の σ ≈ 0.08） */
 float ngWaterCoarseAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
-  return (0.05 + 0.45 * pt + wy * (0.25 + 0.3 * pt)) * (1.0 - 0.3 * rain);
+  return (0.03 + 0.45 * pt + wy * (0.25 + 0.3 * pt)) * (1.0 - 0.3 * rain);
 }
 `;
 
@@ -409,7 +409,7 @@ void main() {
         vec2 uvr = clamp(qr.xy / qr.w, vec2(0.001), vec2(0.999));
         /* 斜めから見た水面の映りは縦に伸び、横は鋭いまま（横へ傾いた法線は反射の向きを sinθ ぶんしか振らない）。
            横の幅で mip を選び、縦は 4 点で伸ばす */
-        float spread = 2.0 * alpha;                                  // 反射の向きの広がり rad ≈ uv（縦の画角 ≈ 1 rad）
+        float spread = 1.6 * alpha;                                  // 反射の向きの広がり rad ≈ uv（縦の画角 ≈ 1 rad）
         float lodH = clamp(log2(max(spread * uTierW.z * clamp(2.5 * V.y + 0.12, 0.12, 1.0), 1.0)), 0.0, uTierW.y);
         float dv = spread * 0.35;
         float lodV = clamp(log2(max(dv * uTierW.z, 1.0)), 0.0, uTierW.y);
