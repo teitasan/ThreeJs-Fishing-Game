@@ -85,7 +85,8 @@ export const GC_VS_NORMAL = /* glsl */ `
     P = Pc + sv * wd * sd;
     vec3 Nf = normalize(cross(sv, T));
     if (dot(Nf, vec3(dir.x, 0.0, dir.y)) < 0.0) Nf = -Nf;
-    N = normalize(Nf + sv * sd * 0.55 + vec3(0.0, 0.25, 0.0));
+    /* 法線を上へ寄せる（草地全体の «面» の法線）：横向きの刃が空の光を半分しか受けず、夕方・雨に地面より黒く沈んだ（art-metrics の crush 33%） */
+    N = normalize(Nf + sv * sd * 0.55 + vec3(0.0, 0.85, 0.0));
     if (ngGcLook.w > 0.5) N = vec3(0.0, 1.0, 0.0);
     dry = smoothstep(0.55, 1.0, t) * smoothstep(0.55, 0.95, ngHash12(base.xz * 3.3 + bi));
     /* 去年の枯れ葉（刃の 6%）：根元から先まで藁色 */
@@ -310,6 +311,13 @@ if (vGcA.z > 1.5 && vGcA.z < 2.5) {
 /* 検査の時だけ：法線を世界の上へ（裏面の反転に依らず地面と同じ光） */
 export const GC_FS_NORMAL = /* glsl */ `
 if (ngGcLook.w > 0.5) normal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+else if (vGcA.z < 2.5) {
+  /* 両面の刃：three は裏面で法線を反転するので、裏を見ている刃は法線が下を向き、空の光を受けずに黒く沈んだ（夕方・雨の crush）。
+     横の成分（視点へ向く）は残し、上下だけ上向きへ折り返す */
+  vec3 nw = inverseTransformDirection(normal, viewMatrix);
+  nw.y = abs(nw.y);
+  normal = normalize((viewMatrix * vec4(nw, 0.0)).xyz);
+}
 `;
 
 export const GC_FS_ROUGH = /* glsl */ `
@@ -361,7 +369,7 @@ export const GC_FS_AO = /* glsl */ `
   float k = vGcA.z;
   float skyV = mix(1.0, vGcB.x, 0.9);
   float ao = 1.0;
-  if (k < 0.5) ao = mix(0.32, 1.0, pow(ngGcT, 0.7));
+  if (k < 0.5) ao = mix(0.45, 1.0, pow(ngGcT, 0.7));
   else if (k < 1.5) ao = vGcB.w > 0.9 ? 0.7 : mix(0.5, 1.0, smoothstep(0.0, 0.7, ngGcT));
   else if (k < 2.5) ao = mix(0.5, 1.0, ngGcT);
   else ao = mix(0.35, 1.0, smoothstep(0.0, 0.7, ngGcT));
