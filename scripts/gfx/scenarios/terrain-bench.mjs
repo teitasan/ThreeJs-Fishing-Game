@@ -14,13 +14,13 @@ export default async function (h) {
   const rounds = Number(process.env.ROUNDS || 5);
   const res = {};
   for (const tier of tiers) {
-    await h.open(`lab/terrain.html?capture=1&tier=${tier}&gpuTimer=sync&chart=0`);
+    await h.open(`lab/terrain.html?capture=1&tier=${tier}&gpuTimer=sync&chart=0${process.env.STUB === '1' ? '&stub=1' : ''}`);
     await h.waitFor(() => window.__gfxReady === true, undefined, 240);
     const cams = await h.eval(camsInPage);
     res[tier] = {};
     /* VARIANTS='名前:式;名前:式'（式は m = terrain のモジュール、L = __lab で評価。開発中の切り分け用） */
     const variants = (process.env.VARIANTS || 'base:0').split(';').map((s) => { const i = s.indexOf(':'); return [s.slice(0, i), s.slice(i + 1)]; });
-    for (const [vn, expr] of variants) for (const v of views) {
+    for (const [vn, expr] of (process.env.STUB === '1' ? [['stub', '0']] : variants)) for (const v of views) {
       await h.eval((expr) => { const L = window.__lab, m = L.gfx.modules.get('terrain'); (0, eval)('(function(m, L){' + expr + '})')(m, L); }, expr);
       const cam = v.startsWith('@') ? cams[v.slice(1)] : v;
       const r = await h.eval(({ cam, rounds }) => {
@@ -36,7 +36,7 @@ export default async function (h) {
           }
         }
         const med = (x) => { const s = [...x].sort((p, q) => p - q); return +s[s.length >> 1].toFixed(2); };
-        const st = L.gfx.modules.get('terrain').stats();
+        const st = L.gfx.modules.get('terrain').stats?.() || {};
         return { total: med(tot), shadow: pass.shadow ? med(pass.shadow) : null, reflection: pass.reflection ? med(pass.reflection) : null,
           opaque: pass.opaque ? med(pass.opaque) : null, inst: st.passes, tris: st.tris, size: L.bench({ frames: 4, warm: 1, windows: 1, passes: false }).size };
       }, { cam, rounds });

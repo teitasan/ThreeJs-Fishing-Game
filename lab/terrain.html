@@ -24,7 +24,8 @@
 <script type="module">
 /* terrain の lab。terrain だけ担当者の index.js、残りは core のスタブ（または合流済みの本物） */
 import { bootLabPage } from './lab/_kit/page.js';
-bootLabPage({ modules: ['terrain'] });
+/* ?stub=1 は terrain もスタブで起動する（置き換え前との重さの比べ：terrain-bench の STUB=1） */
+bootLabPage({ modules: new URLSearchParams(location.search).get('stub') === '1' ? [] : ['terrain'] });
 </script>
 </body>
 </html>

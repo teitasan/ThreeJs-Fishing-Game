@@ -16,6 +16,7 @@ import { NG_PASS } from '../core/frame.js';
 import { ngExtendStandard, ngAttachDepth } from '../core/extend.js';
 import { CdlodList, cdlodRanges, cdlodSelect, heightPyramid, nodeHeightRange, CDLOD_MAX_INST, CDLOD_MAX_LEVELS, CDLOD_WALK_R } from './cdlod.js';
 import { TERRAIN_R0, terrainTier } from './quality.js';
+import { CTL_BAKE } from './ctl.js';
 import { TERRAIN_BAKE_A, TERRAIN_BAKE_B, TERRAIN_BAKE_MACRO, TERRAIN_TILE_M, TERRAIN_RELIEF_M } from './layers.glsl.js';
 import {
   TERRAIN_VERT_PARS, TERRAIN_VERT_NORMAL, TERRAIN_VERT_BEGIN, TERRAIN_FRAG_PARS, TERRAIN_FRAG_SURFACE,
@@ -74,7 +75,7 @@ export class TerrainModule extends NgModule {
 
     const sky = ctx.services.sky;
     this.u = {
-      ngTerrA: { value: null }, ngTerrB: { value: null }, ngTerrMacro: { value: null }, ngTerrFar: { value: null },
+      ngTerrA: { value: null }, ngTerrB: { value: null }, ngTerrMacro: { value: null }, ngTerrFar: { value: null }, ngTerrCtl: { value: null },
       ngSkyViewTex: { value: sky.skyViewTex }, ngSkyViewMips: { value: sky.skyViewMips || 0 },
       ngTerrParams: { value: new T.Vector4(this.q.hexMode, this.q.triplanar, this.q.farFrom, 0) },
       ngTerrWave: { value: new T.Vector4(0, 1, 0, 0) },
@@ -95,6 +96,7 @@ export class TerrainModule extends NgModule {
     lap('layers');
     progress?.(0.45);
     this._bakeMacro();
+    this._bakeCtl();
     await ctx.forge.step();
     lap('macro');
     this._bakeFar();
@@ -164,7 +166,7 @@ export class TerrainModule extends NgModule {
       t.type = T.UnsignedByteType; t.format = T.RGBAFormat;
       t.magFilter = T.LinearFilter; t.minFilter = T.LinearMipmapLinearFilter;
       t.wrapS = t.wrapT = t.wrapR = T.RepeatWrapping;
-      t.anisotropy = 8; t.name = name;
+      t.anisotropy = this.q.aniso; t.name = name;   // 1440p で 8 → 4 が地形の 1.3ms（high 4・mid 2・low 1）
       /* mip の全段を確保させてから自動生成を止める（generateMipmaps = false で確保すると 1 段しか作られない） */
       t.generateMipmaps = true;
       renderer.initRenderTarget(rt);
@@ -191,6 +193,19 @@ export class TerrainModule extends NgModule {
 
   _bakeMacro() {
     this.u.ngTerrMacro.value = this.ctx.forge.bake2D({ w: MACRO_SIZE, h: MACRO_SIZE, frag: TERRAIN_BAKE_MACRO, mips: true, wrap: 'repeat' });
+  }
+
+  /* 制御の配列（ctl.js）：重み 2 層 + マクロ。high 1024²（0.5m）、mid/low 512²（1m） */
+  _bakeCtl() {
+    const { THREE: T, forge, heightfield: hf } = this.ctx;
+    const n = this.q.texSize >= 1024 ? 1024 : 512;
+    const tex = forge.bakeArray({
+      w: n, h: n, layers: 3, frag: CTL_BAKE, type: T.UnsignedByteType, mips: true, wrap: 'repeat',
+      uniforms: { ...hf.uniforms, ngTerrMacro: this.u.ngTerrMacro, ngTerrDock: this.u.ngTerrDock },
+    });
+    tex.name = 'ng-terrain-ctl';
+    this.u.ngTerrCtl.value = tex;
+    this._ctlN = n;
   }
 
   _bakeFar() {
@@ -367,6 +382,7 @@ export class TerrainModule extends NgModule {
     if (!this.u) return;
     this._bakeLayers(this._texSize || this.q.texSize, false);
     this._bakeMacro();
+    this._bakeCtl();
     this._bakeFar();
     if (this._ridgeH) { this._ridgeH.needsUpdate = true; this._bakeHorizons(); }
     this._canopyCol.needsUpdate = true;
@@ -379,7 +395,8 @@ export class TerrainModule extends NgModule {
   stats() {
     const n = this.mesh?.geometry?.instanceCount || 0, cells = this._cells || 32;
     const tex = this._texSize || 0;
-    const texBytes = Math.round(tex * tex * 4 * 8 * 2 * 1.33 + FAR_SIZE * FAR_SIZE * 4 * 1.33 + MACRO_SIZE * MACRO_SIZE * 8 * 1.33 + 256 * 256 * 4);
+    const texBytes = Math.round(tex * tex * 4 * 8 * 2 * 1.33 + FAR_SIZE * FAR_SIZE * 4 * 1.33 + MACRO_SIZE * MACRO_SIZE * 8 * 1.33 + 256 * 256 * 4
+      + (this._ctlN || 0) ** 2 * 4 * 3 * 1.33);
     return {
       draws: (n > 0 ? 1 : 0) + (this.ridges ? 1 : 0),
       tris: n * cells * cells * 2 + (this._ridgeTris || 0),

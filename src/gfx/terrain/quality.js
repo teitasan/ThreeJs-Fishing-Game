@@ -6,9 +6,9 @@
    =========================================================== */
 
 export const TERRAIN_TIERS = Object.freeze({
-  low: Object.freeze({ cells: 16, rangeK: 0.6, texSize: 512, hexMode: 0, triplanar: 0, farFrom: 110, reflBias: 2 }),
-  mid: Object.freeze({ cells: 32, rangeK: 0.75, texSize: 512, hexMode: 1, triplanar: 1, farFrom: 150, reflBias: 2 }),
-  high: Object.freeze({ cells: 32, rangeK: 1.0, texSize: 1024, hexMode: 2, triplanar: 1, farFrom: 180, reflBias: 2 }),
+  low: Object.freeze({ cells: 16, rangeK: 0.6, texSize: 512, hexMode: 0, triplanar: 0, farFrom: 110, reflBias: 2, aniso: 1 }),
+  mid: Object.freeze({ cells: 32, rangeK: 0.75, texSize: 512, hexMode: 1, triplanar: 1, farFrom: 150, reflBias: 2, aniso: 2 }),
+  high: Object.freeze({ cells: 32, rangeK: 1.0, texSize: 1024, hexMode: 2, triplanar: 1, farFrom: 180, reflBias: 2, aniso: 4 }),
 });
 
 /** 段 0 の範囲（m）。段 l は 24·2^l（24/48/96/192/384/768） */
@@ -16,3 +16,7 @@ export const TERRAIN_R0 = 24;
 
 /** @param {string} tier */
 export function terrainTier(tier) { return TERRAIN_TIERS[tier] || TERRAIN_TIERS.mid; }
+
+/** 制御の配列（ctl.js：重みとマクロ）の重みの範囲（世界 m）。原点 = 左下の角、大きさ = 一辺 */
+export const CTL_ORIGIN = -256;
+export const CTL_SIZE = 512;
