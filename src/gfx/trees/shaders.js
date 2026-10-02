@@ -657,7 +657,9 @@ ${IMP_COMMON}
 attribute vec2 ngNrm;
 attribute vec2 ngUv;
 attribute vec4 ngExtra;
+attribute vec4 ngWind;
 uniform vec4 ngBakeC;      // xyz = 中心（正規化）、w = 半径
+uniform float ngBakeFrame; // 1 フレームの px
 varying vec2 vNgTUv;
 varying vec4 vNgTInfo;
 varying vec3 vNgN;
@@ -677,6 +679,9 @@ void main() {
   vec3 r, u;
   ngImpBasis(d, r, u);
   vec3 P = position * NG_POS_RANGE - ngBakeC.xyz;
+  /* 幹（管の level 0）だけ法線の向きへ 0.6px 太らせる（細い幹がフレームの画素より細いと抜けて、遠くの樹冠が宙に浮いて見えた。low の 64px で顕著）。
+     枝まで太らせると樹冠に樹皮の色の斑が出る */
+  if (ngExtra.y * 255.0 < 127.5 && ngWind.w < 0.01) P += ngTreeOct(ngNrm) * (ngBakeC.w * 2.0 / ngBakeFrame) * 0.6;
   vec2 q = vec2(dot(P, r), dot(P, u)) / ngBakeC.w;            // -1..1
   float z = -dot(P, d) / ngBakeC.w;                             // 手前ほど小さい
   vec2 ndc = ((cell + 0.5 + 0.5 * q) / NG_IMP_N) * 2.0 - 1.0;

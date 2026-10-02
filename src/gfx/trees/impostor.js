@@ -36,7 +36,7 @@ export async function bakeImpostors(o) {
   };
   const alb = mk(), nrm = mk();
   const uniforms = {
-    ngBakeC: { value: new T.Vector4() }, ngMode: { value: 0 }, ngHref: { value: 20 },
+    ngBakeC: { value: new T.Vector4() }, ngMode: { value: 0 }, ngHref: { value: 20 }, ngBakeFrame: { value: frame },
     ngBarkAlb: { value: tex.barkAlb }, ngLeafAlb: { value: tex.leafAlb }, ngLeafNrm: { value: tex.leafNrm }, ngLeafSize: { value: tex.leafSize },
   };
   const mat = new T.ShaderMaterial({ vertexShader: IMP_BAKE_VS, fragmentShader: IMP_BAKE_FS, uniforms, side: T.DoubleSide });
