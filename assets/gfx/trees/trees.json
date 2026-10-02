@@ -1,0 +1,1168 @@
+{
+ "version": 1,
+ "posRange": 1.25,
+ "cardSegs": [
+  3,
+  2
+ ],
+ "breastFlat": [
+  0.032,
+  0.1
+ ],
+ "bytes": 1070944,
+ "hash": "46ad2191",
+ "variants": [
+  {
+   "species": "sugi",
+   "si": 0,
+   "variant": 0,
+   "href": 25,
+   "bounds": {
+    "R": 0.197347,
+    "y0": -0.01479,
+    "y1": 1.01266
+   },
+   "crown": [
+    0.000776,
+    0.47814,
+    0.005073
+   ],
+   "crownR": 0.399524,
+   "trunkR": 0.0102,
+   "lods": [
+    {
+     "tubeOffset": 0,
+     "tubes": 134,
+     "cardOffset": 9232,
+     "cards": 1092,
+     "verts": 11994,
+     "tris": 10768
+    },
+    {
+     "tubeOffset": 28888,
+     "tubes": 68,
+     "cardOffset": 32012,
+     "cards": 300,
+     "verts": 2702,
+     "tris": 2160
+    }
+   ]
+  },
+  {
+   "species": "sugi",
+   "si": 0,
+   "variant": 1,
+   "href": 25,
+   "bounds": {
+    "R": 0.187054,
+    "y0": -0.01595,
+    "y1": 1.017859
+   },
+   "crown": [
+    0.001155,
+    0.496228,
+    0.000483
+   ],
+   "crownR": 0.371264,
+   "trunkR": 0.011,
+   "lods": [
+    {
+     "tubeOffset": 37412,
+     "tubes": 139,
+     "cardOffset": 46984,
+     "cards": 1068,
+     "verts": 11917,
+     "tris": 10768
+    },
+    {
+     "tubeOffset": 66208,
+     "tubes": 73,
+     "cardOffset": 69540,
+     "cards": 300,
+     "verts": 2758,
+     "tris": 2214
+    }
+   ]
+  },
+  {
+   "species": "sugi",
+   "si": 0,
+   "variant": 2,
+   "href": 25,
+   "bounds": {
+    "R": 0.192567,
+    "y0": -0.01392,
+    "y1": 1.01798
+   },
+   "crown": [
+    -0.003672,
+    0.482078,
+    0.00069
+   ],
+   "crownR": 0.389097,
+   "trunkR": 0.0096,
+   "lods": [
+    {
+     "tubeOffset": 74940,
+     "tubes": 138,
+     "cardOffset": 84444,
+     "cards": 1113,
+     "verts": 12222,
+     "tris": 10958
+    },
+    {
+     "tubeOffset": 104480,
+     "tubes": 63,
+     "cardOffset": 107384,
+     "cards": 300,
+     "verts": 2642,
+     "tris": 2100
+    }
+   ]
+  },
+  {
+   "species": "sugi",
+   "si": 0,
+   "variant": 3,
+   "href": 25,
+   "bounds": {
+    "R": 0.187971,
+    "y0": -0.01682,
+    "y1": 1.014901
+   },
+   "crown": [
+    0.000131,
+    0.479081,
+    -0.003121
+   ],
+   "crownR": 0.385836,
+   "trunkR": 0.0116,
+   "lods": [
+    {
+     "tubeOffset": 112784,
+     "tubes": 140,
+     "cardOffset": 122424,
+     "cards": 1096,
+     "verts": 12166,
+     "tris": 10968
+    },
+    {
+     "tubeOffset": 142152,
+     "tubes": 82,
+     "cardOffset": 145856,
+     "cards": 300,
+     "verts": 2858,
+     "tris": 2310
+    }
+   ]
+  },
+  {
+   "species": "hinoki",
+   "si": 1,
+   "variant": 0,
+   "href": 20,
+   "bounds": {
+    "R": 0.203133,
+    "y0": -0.0145,
+    "y1": 1.01939
+   },
+   "crown": [
+    -0.001218,
+    0.503623,
+    -0.000859
+   ],
+   "crownR": 0.418437,
+   "trunkR": 0.01,
+   "lods": [
+    {
+     "tubeOffset": 151256,
+     "tubes": 103,
+     "cardOffset": 158380,
+     "cards": 1010,
+     "verts": 10573,
+     "tris": 9300
+    },
+    {
+     "tubeOffset": 176560,
+     "tubes": 41,
+     "cardOffset": 178496,
+     "cards": 300,
+     "verts": 2378,
+     "tris": 1836
+    }
+   ]
+  },
+  {
+   "species": "hinoki",
+   "si": 1,
+   "variant": 1,
+   "href": 20,
+   "bounds": {
+    "R": 0.216032,
+    "y0": -0.01566,
+    "y1": 1.015421
+   },
+   "crown": [
+    -0.00101,
+    0.486412,
+    -0.001625
+   ],
+   "crownR": 0.423817,
+   "trunkR": 0.0108,
+   "lods": [
+    {
+     "tubeOffset": 183896,
+     "tubes": 102,
+     "cardOffset": 190988,
+     "cards": 1120,
+     "verts": 11485,
+     "tris": 10018
+    },
+    {
+     "tubeOffset": 211148,
+     "tubes": 46,
+     "cardOffset": 213304,
+     "cards": 300,
+     "verts": 2438,
+     "tris": 1896
+    }
+   ]
+  },
+  {
+   "species": "hinoki",
+   "si": 1,
+   "variant": 2,
+   "href": 20,
+   "bounds": {
+    "R": 0.21306,
+    "y0": -0.01363,
+    "y1": 1.022856
+   },
+   "crown": [
+    -0.002538,
+    0.511151,
+    0.000418
+   ],
+   "crownR": 0.407319,
+   "trunkR": 0.0094,
+   "lods": [
+    {
+     "tubeOffset": 218704,
+     "tubes": 103,
+     "cardOffset": 225828,
+     "cards": 1009,
+     "verts": 10555,
+     "tris": 9278
+    },
+    {
+     "tubeOffset": 243992,
+     "tubes": 36,
+     "cardOffset": 245708,
+     "cards": 300,
+     "verts": 2318,
+     "tris": 1776
+    }
+   ]
+  },
+  {
+   "species": "hinoki",
+   "si": 1,
+   "variant": 3,
+   "href": 20,
+   "bounds": {
+    "R": 0.219995,
+    "y0": -0.01653,
+    "y1": 1.024934
+   },
+   "crown": [
+    -0.001853,
+    0.494236,
+    0.003351
+   ],
+   "crownR": 0.43034,
+   "trunkR": 0.0114,
+   "lods": [
+    {
+     "tubeOffset": 251108,
+     "tubes": 98,
+     "cardOffset": 257892,
+     "cards": 1029,
+     "verts": 10650,
+     "tris": 9334
+    },
+    {
+     "tubeOffset": 276416,
+     "tubes": 44,
+     "cardOffset": 278484,
+     "cards": 300,
+     "verts": 2414,
+     "tris": 1872
+    }
+   ]
+  },
+  {
+   "species": "buna",
+   "si": 2,
+   "variant": 0,
+   "href": 21.5,
+   "bounds": {
+    "R": 0.430842,
+    "y0": -0.02025,
+    "y1": 1.07655
+   },
+   "crown": [
+    -0.002136,
+    0.738111,
+    -0.001218
+   ],
+   "crownR": 0.341611,
+   "trunkR": 0.0135,
+   "lods": [
+    {
+     "tubeOffset": 283884,
+     "tubes": 61,
+     "cardOffset": 293336,
+     "cards": 1049,
+     "verts": 13053,
+     "tris": 13586
+    },
+    {
+     "tubeOffset": 312220,
+     "tubes": 24,
+     "cardOffset": 314692,
+     "cards": 330,
+     "verts": 2809,
+     "tris": 2448
+    }
+   ]
+  },
+  {
+   "species": "buna",
+   "si": 2,
+   "variant": 1,
+   "href": 21.5,
+   "bounds": {
+    "R": 0.368147,
+    "y0": -0.0225,
+    "y1": 1.088605
+   },
+   "crown": [
+    -0.001514,
+    0.721952,
+    0.003023
+   ],
+   "crownR": 0.333576,
+   "trunkR": 0.015,
+   "lods": [
+    {
+     "tubeOffset": 320632,
+     "tubes": 62,
+     "cardOffset": 328772,
+     "cards": 844,
+     "verts": 11929,
+     "tris": 13364
+    },
+    {
+     "tubeOffset": 343964,
+     "tubes": 28,
+     "cardOffset": 346516,
+     "cards": 330,
+     "verts": 2825,
+     "tris": 2448
+    }
+   ]
+  },
+  {
+   "species": "buna",
+   "si": 2,
+   "variant": 2,
+   "href": 21.5,
+   "bounds": {
+    "R": 0.385025,
+    "y0": -0.01875,
+    "y1": 1.091801
+   },
+   "crown": [
+    0.00326,
+    0.725877,
+    0.001572
+   ],
+   "crownR": 0.334413,
+   "trunkR": 0.0125,
+   "lods": [
+    {
+     "tubeOffset": 352456,
+     "tubes": 55,
+     "cardOffset": 360432,
+     "cards": 929,
+     "verts": 12396,
+     "tris": 13582
+    },
+    {
+     "tubeOffset": 377156,
+     "tubes": 24,
+     "cardOffset": 379616,
+     "cards": 330,
+     "verts": 2799,
+     "tris": 2430
+    }
+   ]
+  },
+  {
+   "species": "buna",
+   "si": 2,
+   "variant": 3,
+   "href": 21.5,
+   "bounds": {
+    "R": 0.364285,
+    "y0": -0.024,
+    "y1": 1.08232
+   },
+   "crown": [
+    0.000429,
+    0.720233,
+    -0.006823
+   ],
+   "crownR": 0.328579,
+   "trunkR": 0.016,
+   "lods": [
+    {
+     "tubeOffset": 385556,
+     "tubes": 162,
+     "cardOffset": 399260,
+     "cards": 821,
+     "verts": 12616,
+     "tris": 13590
+    },
+    {
+     "tubeOffset": 414040,
+     "tubes": 32,
+     "cardOffset": 416672,
+     "cards": 330,
+     "verts": 2838,
+     "tris": 2442
+    }
+   ]
+  },
+  {
+   "species": "mizunara",
+   "si": 3,
+   "variant": 0,
+   "href": 19.5,
+   "bounds": {
+    "R": 0.455486,
+    "y0": -0.0225,
+    "y1": 1.088895
+   },
+   "crown": [
+    0.004257,
+    0.721597,
+    -0.00234
+   ],
+   "crownR": 0.361002,
+   "trunkR": 0.015,
+   "lods": [
+    {
+     "tubeOffset": 422612,
+     "tubes": 129,
+     "cardOffset": 435356,
+     "cards": 880,
+     "verts": 12725,
+     "tris": 13600
+    },
+    {
+     "tubeOffset": 451196,
+     "tubes": 39,
+     "cardOffset": 454076,
+     "cards": 320,
+     "verts": 2836,
+     "tris": 2444
+    }
+   ]
+  },
+  {
+   "species": "mizunara",
+   "si": 3,
+   "variant": 1,
+   "href": 19.5,
+   "bounds": {
+    "R": 0.448748,
+    "y0": -0.0255,
+    "y1": 1.085866
+   },
+   "crown": [
+    -0.005821,
+    0.70818,
+    0.003023
+   ],
+   "crownR": 0.369569,
+   "trunkR": 0.017,
+   "lods": [
+    {
+     "tubeOffset": 459836,
+     "tubes": 174,
+     "cardOffset": 474236,
+     "cards": 774,
+     "verts": 12457,
+     "tris": 13598
+    },
+    {
+     "tubeOffset": 488168,
+     "tubes": 34,
+     "cardOffset": 490936,
+     "cards": 320,
+     "verts": 2818,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "mizunara",
+   "si": 3,
+   "variant": 2,
+   "href": 19.5,
+   "bounds": {
+    "R": 0.424657,
+    "y0": -0.021,
+    "y1": 1.101109
+   },
+   "crown": [
+    0.002733,
+    0.726832,
+    0.003604
+   ],
+   "crownR": 0.351173,
+   "trunkR": 0.014,
+   "lods": [
+    {
+     "tubeOffset": 496696,
+     "tubes": 53,
+     "cardOffset": 503888,
+     "cards": 813,
+     "verts": 10972,
+     "tris": 12034
+    },
+    {
+     "tubeOffset": 518524,
+     "tubes": 35,
+     "cardOffset": 521324,
+     "cards": 320,
+     "verts": 2823,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "mizunara",
+   "si": 3,
+   "variant": 3,
+   "href": 19.5,
+   "bounds": {
+    "R": 0.43414,
+    "y0": -0.02775,
+    "y1": 1.087667
+   },
+   "crown": [
+    0.004245,
+    0.717974,
+    -0.009124
+   ],
+   "crownR": 0.350725,
+   "trunkR": 0.0185,
+   "lods": [
+    {
+     "tubeOffset": 527084,
+     "tubes": 213,
+     "cardOffset": 542900,
+     "cards": 647,
+     "verts": 12091,
+     "tris": 13590
+    },
+    {
+     "tubeOffset": 554548,
+     "tubes": 29,
+     "cardOffset": 557216,
+     "cards": 320,
+     "verts": 2798,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "momiji",
+   "si": 4,
+   "variant": 0,
+   "href": 9.5,
+   "bounds": {
+    "R": 0.548555,
+    "y0": -0.0189,
+    "y1": 1.061931
+   },
+   "crown": [
+    0.005701,
+    0.667853,
+    -0.004109
+   ],
+   "crownR": 0.386298,
+   "trunkR": 0.014,
+   "lods": [
+    {
+     "tubeOffset": 562976,
+     "tubes": 181,
+     "cardOffset": 577024,
+     "cards": 899,
+     "verts": 13049,
+     "tris": 13600
+    },
+    {
+     "tubeOffset": 593208,
+     "tubes": 48,
+     "cardOffset": 596436,
+     "cards": 300,
+     "verts": 2802,
+     "tris": 2436
+    }
+   ]
+  },
+  {
+   "species": "momiji",
+   "si": 4,
+   "variant": 1,
+   "href": 9.5,
+   "bounds": {
+    "R": 0.589224,
+    "y0": -0.020925,
+    "y1": 1.058562
+   },
+   "crown": [
+    -0.006873,
+    0.676645,
+    -0.000617
+   ],
+   "crownR": 0.394582,
+   "trunkR": 0.0155,
+   "lods": [
+    {
+     "tubeOffset": 601836,
+     "tubes": 204,
+     "cardOffset": 616188,
+     "cards": 857,
+     "verts": 12955,
+     "tris": 13600
+    },
+    {
+     "tubeOffset": 631616,
+     "tubes": 53,
+     "cardOffset": 634980,
+     "cards": 300,
+     "verts": 2831,
+     "tris": 2448
+    }
+   ]
+  },
+  {
+   "species": "momiji",
+   "si": 4,
+   "variant": 2,
+   "href": 9.5,
+   "bounds": {
+    "R": 0.5969,
+    "y0": -0.01755,
+    "y1": 1.073015
+   },
+   "crown": [
+    0.003105,
+    0.668343,
+    -0.007281
+   ],
+   "crownR": 0.410933,
+   "trunkR": 0.013,
+   "lods": [
+    {
+     "tubeOffset": 640380,
+     "tubes": 59,
+     "cardOffset": 648016,
+     "cards": 899,
+     "verts": 10895,
+     "tris": 11078
+    },
+    {
+     "tubeOffset": 664200,
+     "tubes": 35,
+     "cardOffset": 666784,
+     "cards": 300,
+     "verts": 2619,
+     "tris": 2238
+    }
+   ]
+  },
+  {
+   "species": "momiji",
+   "si": 4,
+   "variant": 3,
+   "href": 9.5,
+   "bounds": {
+    "R": 0.530796,
+    "y0": -0.02295,
+    "y1": 1.071378
+   },
+   "crown": [
+    -0.005669,
+    0.675402,
+    0.006127
+   ],
+   "crownR": 0.361616,
+   "trunkR": 0.017,
+   "lods": [
+    {
+     "tubeOffset": 672184,
+     "tubes": 250,
+     "cardOffset": 688056,
+     "cards": 690,
+     "verts": 12160,
+     "tris": 13120
+    },
+    {
+     "tubeOffset": 700476,
+     "tubes": 51,
+     "cardOffset": 703776,
+     "cards": 300,
+     "verts": 2821,
+     "tris": 2448
+    }
+   ]
+  },
+  {
+   "species": "akamatsu",
+   "si": 5,
+   "variant": 0,
+   "href": 18,
+   "bounds": {
+    "R": 0.311786,
+    "y0": -0.0162,
+    "y1": 0.975127
+   },
+   "crown": [
+    0.001372,
+    0.75318,
+    0.001642
+   ],
+   "crownR": 0.219107,
+   "trunkR": 0.012,
+   "lods": [
+    {
+     "tubeOffset": 709176,
+     "tubes": 78,
+     "cardOffset": 714684,
+     "cards": 882,
+     "verts": 9721,
+     "tris": 9092
+    },
+    {
+     "tubeOffset": 730560,
+     "tubes": 48,
+     "cardOffset": 733020,
+     "cards": 280,
+     "verts": 2426,
+     "tris": 1972
+    }
+   ]
+  },
+  {
+   "species": "akamatsu",
+   "si": 5,
+   "variant": 1,
+   "href": 18,
+   "bounds": {
+    "R": 0.329118,
+    "y0": -0.01782,
+    "y1": 0.97952
+   },
+   "crown": [
+    0.000988,
+    0.753188,
+    0.002554
+   ],
+   "crownR": 0.234985,
+   "trunkR": 0.0132,
+   "lods": [
+    {
+     "tubeOffset": 738060,
+     "tubes": 97,
+     "cardOffset": 744548,
+     "cards": 1008,
+     "verts": 11222,
+     "tris": 10504
+    },
+    {
+     "tubeOffset": 762692,
+     "tubes": 55,
+     "cardOffset": 765400,
+     "cards": 280,
+     "verts": 2490,
+     "tris": 2026
+    }
+   ]
+  },
+  {
+   "species": "akamatsu",
+   "si": 5,
+   "variant": 2,
+   "href": 18,
+   "bounds": {
+    "R": 0.311328,
+    "y0": -0.01512,
+    "y1": 0.989473
+   },
+   "crown": [
+    -0.005031,
+    0.796025,
+    0.006758
+   ],
+   "crownR": 0.200473,
+   "trunkR": 0.0112,
+   "lods": [
+    {
+     "tubeOffset": 770440,
+     "tubes": 18,
+     "cardOffset": 772384,
+     "cards": 843,
+     "verts": 7922,
+     "tris": 6918
+    },
+    {
+     "tubeOffset": 787560,
+     "tubes": 17,
+     "cardOffset": 788572,
+     "cards": 280,
+     "verts": 2026,
+     "tris": 1558
+    }
+   ]
+  },
+  {
+   "species": "akamatsu",
+   "si": 5,
+   "variant": 3,
+   "href": 18,
+   "bounds": {
+    "R": 0.305136,
+    "y0": -0.01917,
+    "y1": 0.967928
+   },
+   "crown": [
+    0.000893,
+    0.756266,
+    0.007422
+   ],
+   "crownR": 0.212567,
+   "trunkR": 0.0142,
+   "lods": [
+    {
+     "tubeOffset": 793612,
+     "tubes": 85,
+     "cardOffset": 799392,
+     "cards": 909,
+     "verts": 10151,
+     "tris": 9550
+    },
+    {
+     "tubeOffset": 815756,
+     "tubes": 60,
+     "cardOffset": 818576,
+     "cards": 280,
+     "verts": 2517,
+     "tris": 2038
+    }
+   ]
+  },
+  {
+   "species": "yanagi",
+   "si": 6,
+   "variant": 0,
+   "href": 10.5,
+   "bounds": {
+    "R": 0.485803,
+    "y0": -0.03255,
+    "y1": 1.04412
+   },
+   "crown": [
+    0.000506,
+    0.655047,
+    0.006563
+   ],
+   "crownR": 0.434766,
+   "trunkR": 0.021,
+   "lods": [
+    {
+     "tubeOffset": 823616,
+     "tubes": 221,
+     "cardOffset": 838452,
+     "cards": 540,
+     "verts": 11403,
+     "tris": 13152
+    },
+    {
+     "tubeOffset": 848172,
+     "tubes": 62,
+     "cardOffset": 851980,
+     "cards": 260,
+     "verts": 2727,
+     "tris": 2444
+    }
+   ]
+  },
+  {
+   "species": "yanagi",
+   "si": 6,
+   "variant": 1,
+   "href": 10.5,
+   "bounds": {
+    "R": 0.552954,
+    "y0": -0.0372,
+    "y1": 1.037281
+   },
+   "crown": [
+    -0.003966,
+    0.678851,
+    -0.010346
+   ],
+   "crownR": 0.453144,
+   "trunkR": 0.024,
+   "lods": [
+    {
+     "tubeOffset": 856660,
+     "tubes": 236,
+     "cardOffset": 872672,
+     "cards": 452,
+     "verts": 11358,
+     "tris": 13600
+    },
+    {
+     "tubeOffset": 880808,
+     "tubes": 72,
+     "cardOffset": 884852,
+     "cards": 260,
+     "verts": 2773,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "yanagi",
+   "si": 6,
+   "variant": 2,
+   "href": 10.5,
+   "bounds": {
+    "R": 0.55765,
+    "y0": -0.02945,
+    "y1": 1.030549
+   },
+   "crown": [
+    -0.012484,
+    0.65102,
+    0.010111
+   ],
+   "crownR": 0.474146,
+   "trunkR": 0.019,
+   "lods": [
+    {
+     "tubeOffset": 889532,
+     "tubes": 215,
+     "cardOffset": 905148,
+     "cards": 560,
+     "verts": 11689,
+     "tris": 13598
+    },
+    {
+     "tubeOffset": 915228,
+     "tubes": 54,
+     "cardOffset": 918900,
+     "cards": 260,
+     "verts": 2700,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "yanagi",
+   "si": 6,
+   "variant": 3,
+   "href": 10.5,
+   "bounds": {
+    "R": 0.535311,
+    "y0": -0.041075,
+    "y1": 1.038707
+   },
+   "crown": [
+    -0.001932,
+    0.661319,
+    -0.003501
+   ],
+   "crownR": 0.450628,
+   "trunkR": 0.0265,
+   "lods": [
+    {
+     "tubeOffset": 923580,
+     "tubes": 231,
+     "cardOffset": 939168,
+     "cards": 481,
+     "verts": 11431,
+     "tris": 13596
+    },
+    {
+     "tubeOffset": 947828,
+     "tubes": 68,
+     "cardOffset": 951780,
+     "cards": 260,
+     "verts": 2756,
+     "tris": 2450
+    }
+   ]
+  },
+  {
+   "species": "hannoki",
+   "si": 7,
+   "variant": 0,
+   "href": 13.5,
+   "bounds": {
+    "R": 0.40526,
+    "y0": -0.01725,
+    "y1": 1.142522
+   },
+   "crown": [
+    -0.003187,
+    0.717693,
+    0.00261
+   ],
+   "crownR": 0.356532,
+   "trunkR": 0.0115,
+   "lods": [
+    {
+     "tubeOffset": 956460,
+     "tubes": 53,
+     "cardOffset": 963556,
+     "cards": 783,
+     "verts": 9965,
+     "tris": 10482
+    },
+    {
+     "tubeOffset": 977652,
+     "tubes": 40,
+     "cardOffset": 980624,
+     "cards": 300,
+     "verts": 2744,
+     "tris": 2400
+    }
+   ]
+  },
+  {
+   "species": "hannoki",
+   "si": 7,
+   "variant": 1,
+   "href": 13.5,
+   "bounds": {
+    "R": 0.40428,
+    "y0": -0.0192,
+    "y1": 1.124921
+   },
+   "crown": [
+    0.009161,
+    0.732923,
+    -0.005115
+   ],
+   "crownR": 0.352992,
+   "trunkR": 0.0128,
+   "lods": [
+    {
+     "tubeOffset": 986024,
+     "tubes": 50,
+     "cardOffset": 992796,
+     "cards": 680,
+     "verts": 9281,
+     "tris": 10184
+    },
+    {
+     "tubeOffset": 1005036,
+     "tubes": 44,
+     "cardOffset": 1008172,
+     "cards": 300,
+     "verts": 2788,
+     "tris": 2442
+    }
+   ]
+  },
+  {
+   "species": "hannoki",
+   "si": 7,
+   "variant": 2,
+   "href": 13.5,
+   "bounds": {
+    "R": 0.413156,
+    "y0": -0.0162,
+    "y1": 1.125665
+   },
+   "crown": [
+    -0.001465,
+    0.708407,
+    0.001084
+   ],
+   "crownR": 0.361926,
+   "trunkR": 0.0108,
+   "lods": [
+    {
+     "tubeOffset": 1013572,
+     "tubes": 35,
+     "cardOffset": 1018832,
+     "cards": 928,
+     "verts": 10273,
+     "tris": 10082
+    },
+    {
+     "tubeOffset": 1035536,
+     "tubes": 31,
+     "cardOffset": 1037872,
+     "cards": 300,
+     "verts": 2559,
+     "tris": 2178
+    }
+   ]
+  },
+  {
+   "species": "hannoki",
+   "si": 7,
+   "variant": 3,
+   "href": 13.5,
+   "bounds": {
+    "R": 0.402631,
+    "y0": -0.0207,
+    "y1": 1.133915
+   },
+   "crown": [
+    -0.008501,
+    0.730915,
+    -0.00404
+   ],
+   "crownR": 0.344422,
+   "trunkR": 0.0138,
+   "lods": [
+    {
+     "tubeOffset": 1043272,
+     "tubes": 51,
+     "cardOffset": 1050004,
+     "cards": 687,
+     "verts": 9427,
+     "tris": 10380
+    },
+    {
+     "tubeOffset": 1062372,
+     "tubes": 47,
+     "cardOffset": 1065544,
+     "cards": 300,
+     "verts": 2798,
+     "tris": 2442
+    }
+   ]
+  }
+ ]
+}

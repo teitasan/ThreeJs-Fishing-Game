@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab: trees（森：焼き込みの木・インポスター・樹冠シェル）</title>
+<!-- 相対 URL（assets/…・importmap）をリポジトリの根から解決する -->
+<base href="../">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="lab/_kit/lab.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/",
+    "postprocessing": "./vendor/postprocessing/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="lab-status">lab: loading</div>
+<script type="module">
+/* trees の lab（docs/nextgen/modules/trees.md）。trees だけ担当の実装、残りは core のスタブ。
+   追加の URL：&chars=0（釣り人と魚を置かない。影の中心 = カメラ：本編で森を歩くときと同じ。森の中の証拠はこれで撮る） */
+import { bootLabPage } from './lab/_kit/page.js';
+
+bootLabPage({ modules: ['trees'], characters: new URLSearchParams(location.search).get('chars') !== '0' });
+</script>
+</body>
+</html>
