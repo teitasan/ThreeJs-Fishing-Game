@@ -76,20 +76,24 @@ export function icosphere(detail) {
 export function rockShapeFn(seed, k) {
   const rnd = mulberry32(stream(seed >>> 0, `hardscape-rock-${k}`));
   const s1 = (rnd() * 1e9) | 0, s2 = (rnd() * 1e9) | 0, s3 = (rnd() * 1e9) | 0;
-  const e = [1, 0.7 + 0.35 * rnd(), 0.85 + 0.3 * rnd()];
-  const lump = 0.12 + 0.08 * rnd();
-  /* 節理の欠け：4–7 枚の面（上と横が多い）。kSoft が丸まり（風化）の幅 */
+  const e = [1, 0.8 + 0.3 * rnd(), 0.8 + 0.35 * rnd()];
+  const lump = 0.16 + 0.1 * rnd();
+  /* 節理の欠け：6–10 枚の面（横と上が多い）+ 6 割の形で平らな頂。kSoft が角の丸まり（風化・侵食）の幅 */
   const planes = [];
-  const np = 4 + Math.floor(rnd() * 4);
+  const np = 6 + Math.floor(rnd() * 5);
   for (let i = 0; i < np; i++) {
-    const th = rnd() * Math.PI * 2, y = -0.15 + 1.05 * rnd();
+    const th = rnd() * Math.PI * 2, y = -0.2 + 0.95 * rnd();
     const r = Math.sqrt(Math.max(0, 1 - y * y));
-    planes.push({ n: [Math.cos(th) * r, y, Math.sin(th) * r], d: 0.55 + 0.3 * rnd() });
+    planes.push({ n: [Math.cos(th) * r, y, Math.sin(th) * r], d: 0.48 + 0.32 * rnd() });
   }
-  const kSoft = 0.05 + 0.06 * rnd();
+  if (rnd() < 0.6) {
+    const tx = (rnd() - 0.5) * 0.5, tz = (rnd() - 0.5) * 0.5, l = Math.hypot(tx, 1, tz);
+    planes.push({ n: [tx / l, 1 / l, tz / l], d: (0.5 + 0.25 * rnd()) * e[1] });
+  }
+  const kSoft = 0.022 + 0.04 * rnd();
   const sp = (s) => 0.5 * (s + Math.sqrt(s * s + kSoft * kSoft));
   return (p) => {
-    const r = 1 + lump * fbm3(p[0] * 1.3, p[1] * 1.3, p[2] * 1.3, s1, 4) + 0.035 * fbm3(p[0] * 4.2, p[1] * 4.2, p[2] * 4.2, s2, 3);
+    const r = 1 + lump * fbm3(p[0] * 1.0, p[1] * 1.0, p[2] * 1.0, s1, 4) + 0.06 * fbm3(p[0] * 2.4, p[1] * 2.4, p[2] * 2.4, s2 + 7, 3) + 0.03 * fbm3(p[0] * 5.0, p[1] * 5.0, p[2] * 5.0, s2, 3);
     let q = [p[0] * r * e[0], p[1] * r * e[1], p[2] * r * e[2]];
     for (const pl of planes) {
       const s = q[0] * pl.n[0] + q[1] * pl.n[1] + q[2] * pl.n[2] - pl.d;

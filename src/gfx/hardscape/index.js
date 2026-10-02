@@ -464,7 +464,9 @@ export class HardscapeModule extends NgModule {
     const nn = Number.isFinite(night) ? night : 0;
     const d = Math.max(0, Number.isFinite(dt) ? dt : 0);
     const target = smooth(0.3, 0.7, nn);
-    this.lamp += (target - this.lamp) * (1 - Math.exp(-d * 2));
+    /* 撮影中（__gfxCapture：時間が止まり dt = 0）は目標へ即座に（撮影の再現性。post の水中の係数と同じ扱い） */
+    if (globalThis.__gfxCapture) this.lamp = target;
+    else this.lamp += (target - this.lamp) * (1 - Math.exp(-d * 2));
     const L = this.lamp * this._flick;
     const col = this._lampColor || [1, 0.54, 0.18];
     const light = this.ctx.gfx?.rig?.lamp;

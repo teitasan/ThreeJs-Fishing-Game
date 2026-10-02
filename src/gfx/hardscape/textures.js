@@ -13,16 +13,16 @@ import { NG_NOISE_GLSL } from '../core/glsl/noise.glsl.js';
 const WOOD_COMMON = NG_NOISE_GLSL + /* glsl */ `
 /* 板 c（0..3）の点（s 横 m、t 長さ m）。t は 4m で周期 */
 float ngHsH(float c, float s, float t) { return ngHash12(vec2(c * 7.13 + s, t)); }
-struct NgHsWood { float h; float late; float knot; float crack; float dirt; float lichen; };
+struct NgHsWood { float h; float late; float knot; float crack; float dirt; float lichen; float fiber; float edge; };
 NgHsWood ngHsWoodAt(float c, float s, float t) {
   NgHsWood o;
   float r0 = ngHash12(vec2(c, 1.7)), r1 = ngHash12(vec2(c, 3.1)), r2 = ngHash12(vec2(c, 5.9));
   const float TP = 6.2831853 / 4.0;
   /* 板目：髄の位置が板の幅の外を緩く彷徨う（筍杢のアーチ） */
   float s0 = -0.06 + 0.32 * r0 + 0.035 * sin(t * TP * (1.0 + floor(r1 * 2.0)) + r2 * 6.28) + 0.012 * sin(t * TP * 3.0 + r0 * 9.0);
-  float d = 0.025 + 0.09 * r1 + 0.02 * sin(t * TP * 2.0 + r0 * 4.0);
+  float d = 0.02 + 0.08 * r1 + 0.035 * sin(t * TP * 2.0 + r0 * 4.0) + 0.012 * sin(t * TP * 5.0 + r2 * 3.0);
   float rho = sqrt((s - s0) * (s - s0) + d * d);
-  float ringW = 0.0042 + 0.0022 * r2;
+  float ringW = 0.0048 + 0.0035 * r2;
   float ring = rho / ringW + 0.6 * ngFbmP(vec2(s * 23.0, t * 3.0), vec2(1e4, 12.0), 3) + 0.25 * ngVNoise2P(vec2(s * 140.0, t * 6.0), vec2(1e4, 24.0));
   /* 節：板ごとに 0–3 個。年輪が節の周りで歪む */
   o.knot = 0.0;
@@ -37,7 +37,7 @@ NgHsWood ngHsWoodAt(float c, float s, float t) {
     o.knot = max(o.knot, 1.0 - smoothstep(0.75, 1.05, dk));
   }
   float f = fract(ring);
-  o.late = smoothstep(0.58, 0.78, f) * (1.0 - smoothstep(0.9, 1.0, f));
+  o.late = smoothstep(0.5, 0.74, f) * (1.0 - smoothstep(0.86, 0.99, f));
   /* 干割れ：木目に沿う細い線。長さはノイズで途切れる */
   o.crack = 0.0;
   for (int k = 0; k < 3; k++) {
@@ -52,7 +52,10 @@ NgHsWood ngHsWoodAt(float c, float s, float t) {
   o.dirt = ngFbmP(vec2(s * 6.0 + c * 13.0, t * 1.5), vec2(1e4, 6.0), 4);
   o.lichen = smoothstep(0.72, 0.8, ngFbmP(vec2(s * 30.0 + c * 7.0, t * 7.5), vec2(1e4, 30.0), 3)) * step(0.45, r2);
   float fine = ngVNoise2P(vec2(s * 900.0, t * 40.0), vec2(1e5, 160.0));
-  o.h = 0.55 + 0.22 * o.late + 0.06 * fine - 0.65 * o.crack - 0.12 * o.knot * (1.0 - o.knot);
+  /* 繊維：横に細かく縦に長い筋（風化で毛羽立った早材） */
+  o.fiber = ngVNoise2P(vec2(s * 1400.0, t * 22.0), vec2(1e5, 88.0)) * 0.6 + ngVNoise2P(vec2(s * 520.0, t * 9.0), vec2(1e5, 36.0)) * 0.4;
+  o.edge = smoothstep(0.0, 0.014, min(s, 0.2 - s));
+  o.h = 0.52 + 0.26 * o.late + 0.05 * fine + 0.06 * o.fiber - 0.65 * o.crack - 0.12 * o.knot * (1.0 - o.knot) - 0.2 * (1.0 - o.edge);
   return o;
 }
 void ngHsCoord(vec2 uv, out float c, out float s, out float t) {
@@ -72,13 +75,15 @@ void main() {
   float r0 = ngHash12(vec2(c, 41.0));
   /* 新しい杉（赤身）→ 風化した灰銀。板ごとの風化の進み + しみ */
   vec3 fresh = vec3(0.30, 0.17, 0.095);
-  vec3 silver = vec3(0.305, 0.300, 0.288);
-  float weather = clamp(0.72 + 0.22 * r0 + 0.25 * (w.dirt - 0.5), 0.0, 1.0);
+  vec3 silver = vec3(0.315, 0.305, 0.29);
+  float weather = clamp(0.62 + 0.3 * r0 + 0.3 * (w.dirt - 0.5), 0.0, 1.0);
   vec3 col = mix(fresh, silver, weather);
-  col *= 0.9 + 0.2 * w.dirt;
-  col *= mix(1.0, 0.8, w.late);                                  // 晩材の灰の筋
-  col = mix(col, col * vec3(0.92, 0.86, 0.78), (1.0 - weather) * w.late);
-  col = mix(col, vec3(0.13, 0.085, 0.05), w.knot * 0.85);         // 節
+  col *= 0.86 + 0.28 * w.dirt;
+  col *= 0.9 + 0.2 * w.fiber;                                      // 繊維の毛羽
+  col *= mix(1.06, 0.66, w.late);                                  // 晩材：浮いた暗い灰褐の筋、早材は晒されて明るい
+  col = mix(col, col * vec3(0.95, 0.86, 0.74), w.late * (0.35 + 0.65 * (1.0 - weather)));
+  col *= mix(0.62, 1.0, w.edge);                                   // 板の縁に溜まる汚れ
+  col = mix(col, vec3(0.085, 0.068, 0.052), w.knot * 0.9);         // 節
   col = mix(col, vec3(0.36, 0.37, 0.31), w.lichen * 0.7);          // 地衣
   col *= 1.0 - 0.72 * w.crack;                                     // 干割れの奥
   float rough = clamp(0.8 + 0.1 * w.dirt - 0.12 * w.knot + 0.1 * w.crack - 0.05 * w.late, 0.55, 0.97);
@@ -95,7 +100,7 @@ void main() {
   float h0 = ngHsWoodAt(c, s, t).h;
   float hx = ngHsWoodAt(c, min(s + es, 0.1999), t).h - ngHsWoodAt(c, max(s - es, 0.0), t).h;
   float hy = ngHsWoodAt(c, s, t + et).h - ngHsWoodAt(c, s, t - et).h;
-  const float relief = 0.0016;        // 凹凸の高さ m（早材が痩せる 1–2mm）
+  const float relief = 0.0022;        // 凹凸の高さ m（早材が痩せる 1–2mm）
   vec3 n = normalize(vec3(-hx * relief / (2.0 * es), -hy * relief / (2.0 * et), 1.0));
   float ao = clamp(0.45 + 0.75 * h0, 0.25, 1.0);
   gl_FragColor = vec4(n * 0.5 + 0.5, ao);
@@ -109,7 +114,8 @@ float ngHsGran(vec2 p, out float lum) {
   float m = w.z;
   float grain = m < 0.16 ? 0.05 : m < 0.36 ? 0.42 : m < 0.62 ? 0.22 : m < 0.8 ? 0.29 : 0.19;
   float big = ngFbmP(p * 4.0, vec2(4.0), 4);
-  lum = grain * (0.85 + 0.3 * big);
+  /* 風化した花崗岩：粒の対比は半分に（表面が灰色に曇る）+ 大きなむら */
+  lum = mix(0.235, grain, 0.45) * (0.8 + 0.4 * big);
   float edge = smoothstep(0.0, 0.18, w.y - w.x);
   return 0.35 * edge + 0.4 * big + 0.25 * ngFbmP(p * 24.0, vec2(24.0), 3);
 }

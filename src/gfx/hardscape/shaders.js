@@ -37,7 +37,7 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
   vec3 alb = diffuseColor.rgb;
   float rough = sampledDiffuseColor.a;
-  float por = 0.75;
+  float por = 0.36;      // 濡れで ×0.5（パレットの杉材の濡れ）
   float wetX = 0.0;
   float cav = texture2D(normalMap, vNormalMapUv).a;
   vec2 dd = P.xz - ngHsDock.xy;
@@ -62,8 +62,8 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
     alb = mix(alb, vec3(0.15, 0.07, 0.03), clamp(rust * 0.7 + streak * 0.4, 0.0, 0.8) * up);
     alb = mix(alb, vec3(0.045, 0.04, 0.035), head);
     rough = mix(rough, 0.45, head);
-    /* 隙間の側面：下ほど暗い（隣の板と桁に挟まれる） */
-    float side = 1.0 - smoothstep(0.5, 0.85, abs(Gn.y));
+    /* 隙間の側面（板の長い側面＝法線が桟橋の向き）：下ほど暗い（隣の板と桁に挟まれる）。木口は外に開くので暗くしない */
+    float side = (1.0 - smoothstep(0.5, 0.85, abs(Gn.y))) * smoothstep(0.6, 0.85, abs(dot(Gn.xz, ngHsDock2.xy)));
     cav *= mix(1.0, mix(0.22, 1.0, smoothstep(Y - 0.032, Y - 0.004, P.y)), side);
   } else if (k < 1.5) {
     alb *= vec3(0.9, 0.87, 0.83) * (0.82 + 0.3 * tone);
@@ -80,7 +80,7 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
     /* 白く晒された木（流木・立ち枯れ） */
     float l = dot(alb, vec3(0.2126, 0.7152, 0.0722));
     alb = mix(alb, vec3(l) * vec3(1.62, 1.6, 1.52), 0.8) * (0.92 + 0.16 * tone);
-    por = 0.6;
+    por = 0.3;
   } else if (k < 5.5) {
     /* 縄：3 本撚り */
     float tw = 0.5 + 0.5 * sin(vMapUv.x * 4.0 * 6.2831853 * 3.0 * 4.17 + vMapUv.y * 4.0 * 260.0);
@@ -105,9 +105,10 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
     rough = 0.6 + 0.3 * n;
     por = 0.2;
   }
-  /* 桟橋の下：床が空を塞ぐ（環境光だけ減らす。直射は影マップ） */
+  /* 桟橋の下：床が空を塞ぐ（環境光だけ減らす。直射は影マップ）。下向きの面ほど・床に近いほど強く、横からは空が見える */
   float under = inFoot * (1.0 - step(Y - 0.03, P.y)) * (1.0 - step(2.5, k));
-  cav *= mix(1.0, 0.4, under);
+  float occl = (Gn.y < -0.3 ? 0.66 : 0.38) * (1.0 - 0.55 * smoothstep(0.0, 1.8, Y - 0.03 - P.y));
+  cav *= 1.0 - under * occl;
   /* 受け梁のボルトから垂れる錆の筋（梁の面と杭） */
   if (k > 0.5 && k < 2.5) {
     float am = mod(L - 0.25 - al + 1.2, 2.4) - 1.2;
@@ -124,7 +125,7 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
     float sub = 1.0 - smoothstep(wl - 0.025, wl + 0.025, P.y);
     float splash = (1.0 - smoothstep(wl, wl + 0.3, P.y)) * (1.0 - sub);
     float n = ngFbm(vec2(P.x + P.z, P.y) * 3.0, 3);
-    float algae = sub * clamp(0.65 + 0.5 * (n - 0.5), 0.0, 1.0) * (1.0 - 0.5 * smoothstep(-3.0, -9.0, P.y));
+    float algae = sub * clamp(0.65 + 0.5 * (n - 0.5), 0.0, 1.0) * (1.0 - 0.5 * smoothstep(-3.0, -9.0, P.y)) * (k > 3.5 ? 0.45 : 1.0);
     vec3 aCol = mix(vec3(0.035, 0.05, 0.02), vec3(0.075, 0.085, 0.035), n);
     float silt = sub * smoothstep(-0.8, -2.5, P.y) * (0.35 + 0.5 * smoothstep(0.0, 0.7, Gn.y));
     alb = mix(alb, aCol, algae);
@@ -221,13 +222,18 @@ export const ROCK_FRAG_NORMAL = /* glsl */ `
   alb *= 0.9 + 0.2 * ngVNoise2(P.xz * 0.35 + o);
   float rough = 0.8 + 0.12 * (1.0 - A.b);
   float cav = vNgRockV.x;
+  /* 雨の筋（急な面を縦に流れた汚れ）と、根元の土の跳ね */
+  float steep = 1.0 - smoothstep(0.35, 0.7, abs(G.y));
+  float stk = ngFbm(vec2((P.x + P.z) * 3.2 + sd * 7.0, P.y * 0.3), 3);
+  alb *= mix(1.0, 0.72 + 0.4 * stk, steep);
+  alb *= mix(0.62, 1.0, smoothstep(0.0, 0.16, vNgRockV.y + 0.04 * (stk - 0.5)));
   /* 地衣（乾いた面の淡い斑） */
   float dry = smoothstep(0.32, 0.9, P.y);
   alb = mix(alb, vec3(0.33, 0.35, 0.29), A.a * 0.55 * dry * (1.0 - 0.3 * type));
   /* 苔：上向きの面（樹冠の陰と水辺で厚く = moss）。窪みの縁から乗る */
   float mn = ngFbm(P.xz * 1.7 + o, 4);
-  float mU = smoothstep(0.38, 0.82, G.y + 0.45 * (mn - 0.5) + 0.25 * (1.0 - cav));
-  float mossA = mU * moss * dry * smoothstep(0.25, 0.6, mn + 0.3 * moss);
+  float mU = smoothstep(0.12, 0.62, G.y + 0.5 * (mn - 0.5) + 0.3 * (1.0 - cav));
+  float mossA = mU * dry * smoothstep(0.42, 0.62, mn * 0.7 + 0.55 * moss);
   vec3 mCol = mix(vec3(0.045, 0.075, 0.022), vec3(0.085, 0.115, 0.035), ngVNoise2(P.xz * 9.0));
   alb = mix(alb, mCol, mossA);
   rough = mix(rough, 0.95, mossA);

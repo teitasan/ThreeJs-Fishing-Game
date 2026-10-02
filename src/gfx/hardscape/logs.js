@@ -18,7 +18,7 @@ import { mulberry32, stream } from '../../world/rng.js';
  */
 export function addSnag(g, s, baseY, seed, idx) {
   const rnd = mulberry32(stream(seed >>> 0, `hardscape-snag-${idx}`));
-  const rb = 0.42 * s.r;
+  const rb = 0.36 * s.r;
   /* 傾き：上端のずれは 0.3r まで（当たりの円から出ない） */
   const lean = Math.min(0.12, (0.3 * s.r) / Math.max(s.h, 0.1));
   const ld = [Math.sin(s.rot) * lean, Math.cos(s.rot) * lean];
@@ -51,14 +51,14 @@ export function addSnag(g, s, baseY, seed, idx) {
   const cc = g.v(top[0] - (ax[0] / al) * 0.2 * s.r, top[1] - (ax[1] / al) * 0.2 * s.r, top[2] - (ax[2] / al) * 0.2 * s.r, 0.1, 0.1, [K.BLEACHED, tone, 1, 0]);
   for (let j = 0; j < segs; j++) g.tri(cc, last + j, last + j + 1);
   /* 枝：2–4 本、上 45% から。水平の届きは r − 幹の半径 */
-  const nb = 2 + Math.floor(rnd() * 3);
+  const nb = 3 + Math.floor(rnd() * 3);
   for (let b = 0; b < nb; b++) {
-    const t = 0.5 + 0.42 * rnd();
+    const t = 0.42 + 0.5 * rnd();
     const th = rnd() * Math.PI * 2;
     const rt = rFn(t, th);
     const c = [p0[0] + ax[0] * t, p0[1] + ax[1] * t, p0[2] + ax[2] * t];
     const up = 0.5 + 0.6 * rnd();
-    const reach = Math.max(0.15, (s.r * 0.92 - rt - Math.hypot(ld[0], ld[1]) * s.h * t));
+    const reach = Math.max(0.15, (s.r * 1.08 - rt * 0.4 - Math.hypot(ld[0], ld[1]) * s.h * t));
     const len = reach / Math.cos(Math.atan(up));
     const d = [Math.cos(th), up, Math.sin(th)];
     const dl = Math.hypot(...d);
@@ -66,8 +66,17 @@ export function addSnag(g, s, baseY, seed, idx) {
     const br = rt * (0.28 + 0.15 * rnd());
     const s0 = [c[0] - (d[0] / dl) * rt * 0.6, c[1] - (d[1] / dl) * rt * 0.6, c[2] - (d[2] / dl) * rt * 0.6];
     g.log(s0, e, (tt) => br * (1 - 0.75 * tt) + 0.004, 7, 5, [K.BLEACHED, tone, 0, 0], [rnd() * 0.75, rnd() * 4], false, true);
+    /* 小枝 1 本（枝の 55–80% から上へ）。届きは親の枝の内側 */
+    const tt = 0.55 + 0.25 * rnd();
+    const c2 = [s0[0] + (e[0] - s0[0]) * tt, s0[1] + (e[1] - s0[1]) * tt, s0[2] + (e[2] - s0[2]) * tt];
+    const th2 = th + (rnd() - 0.5) * 1.6;
+    const l2 = len * (0.3 + 0.2 * rnd());
+    const d2 = [Math.cos(th2) * 0.5, 1.0, Math.sin(th2) * 0.5], dl2 = Math.hypot(...d2);
+    const e2 = [c2[0] + (d2[0] / dl2) * l2, c2[1] + (d2[1] / dl2) * l2, c2[2] + (d2[2] / dl2) * l2];
+    const rr = Math.hypot(e2[0] - s.x, e2[2] - s.z);
+    if (rr < s.r * 1.1 && e2[1] < top[1] - 0.02) g.log(c2, e2, (q) => br * 0.45 * (1 - 0.8 * q) + 0.003, 5, 3, [K.BLEACHED, tone, 0, 0], [rnd() * 0.75, rnd() * 4], false, true);
   }
-  return { top: baseY + s.h, maxR: s.r * 0.92 };
+  return { top: baseY + s.h, maxR: s.r * 1.1 };
 }
 
 /**
