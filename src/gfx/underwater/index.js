@@ -62,6 +62,7 @@ export class UnderwaterModule extends NgModule {
     this.plankton = new Plankton(ctx, this.root, ctx.lake?.seed ?? 1);
     this.plankton.setCount(this.q.plankton);
     this.fx = new UnderwaterFx(ctx, this);
+    this.fx.blue.value = await ctx.forge.blueNoise();
     ctx.services.post.registerDebugView('underwater-rays', /* glsl */ `
       uniform sampler2D tNgUwRaysDbg;
       vec4 ngDebug(vec2 uv) { vec4 r = texture(tNgUwRaysDbg, uv); return vec4(clamp(0.5 + r.rgb * 2.0, 0.0, 1.0), 1.0); }`,
