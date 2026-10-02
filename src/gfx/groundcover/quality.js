@@ -97,3 +97,43 @@ export function gcCellOf(i, n, c, camX, camZ) {
   const ix = i % side, iz = Math.floor(i / side);
   return { gx: Math.floor(camX / c) + ix - n, gz: Math.floor(camZ / c) + iz - n };
 }
+
+/**
+ * 視錐台を view の深さ depth で切った 8 隅の xz の外接矩形（純関数。three に依らない）
+ * @param {{isPerspectiveCamera?:boolean, fov:number, aspect:number, near:number, matrixWorld:{elements:ArrayLike<number>}, position:{x:number,z:number}}} cam
+ * @param {number} depth m
+ * @returns {{minX:number, maxX:number, minZ:number, maxZ:number}|null} 透視でなければ null
+ */
+export function gcFootprint(cam, depth) {
+  if (!cam || !cam.isPerspectiveCamera || !Number.isFinite(cam.fov)) return null;
+  const e = cam.matrixWorld.elements;
+  const ty = Math.tan((cam.fov * Math.PI) / 360), tx = ty * (cam.aspect || 1);
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const d of [Math.max(cam.near || 0.1, 0.01), Math.max(depth, 0.1)]) {
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+      const x = sx * tx * d, y = sy * ty * d, z = -d;
+      const wx = e[0] * x + e[4] * y + e[8] * z + e[12];
+      const wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+      if (wx < minX) minX = wx;
+      if (wx > maxX) maxX = wx;
+      if (wz < minZ) minZ = wz;
+      if (wz > maxZ) maxZ = wz;
+    }
+  }
+  return { minX, maxX, minZ, maxZ };
+}
+
+/**
+ * リングの «窓»：リング（セル c、半数 n、カメラ中心）の中で足跡の外接矩形に入るセルの範囲
+ * @returns {{ox:number, oz:number, w:number, h:number}} 番号はリングの中（0..2n−1）。w·h = 描く株の数
+ */
+export function gcWindow(cam, c, n, depth, margin = 1.5) {
+  const side = 2 * n;
+  const fp = gcFootprint(cam, depth);
+  if (!fp || ![fp.minX, fp.maxX, fp.minZ, fp.maxZ].every(Number.isFinite)) return { ox: 0, oz: 0, w: side, h: side };
+  const gx0 = Math.floor(cam.position.x / c) - n, gz0 = Math.floor(cam.position.z / c) - n;
+  const cl = (v) => Math.max(0, Math.min(side - 1, v));
+  const ix0 = cl(Math.floor((fp.minX - margin) / c) - gx0), ix1 = cl(Math.floor((fp.maxX + margin) / c) - gx0);
+  const iz0 = cl(Math.floor((fp.minZ - margin) / c) - gz0), iz1 = cl(Math.floor((fp.maxZ + margin) / c) - gz0);
+  return { ox: ix0, oz: iz0, w: Math.max(0, ix1 - ix0 + 1), h: Math.max(0, iz1 - iz0 + 1) };
+}

@@ -1,13 +1,15 @@
 /* ===========================================================
    groundcover の計算パス（株の «表»）
    -----------------------------------------------------------
-   テクセル 1 つ = 株 1 つ。毎フレーム prepare で全画面 1 回（high 32k テクセル ≈ 0.02ms）。
+   テクセル 1 つ = 株 1 つ。毎フレーム prepare で全画面 1 回（high 36k 株 × 3 帯 ≈ 0.05ms）。
    ここで株ごとの重い処理（地形の高さ・地面の種類・根元の色・風・踏み倒し・遠くの山の影・視錐台）を
    «株に 1 回» だけ済ませ、頂点シェーダは texelFetch 3 回で読む（頂点に属性なし・インスタンスの属性なし）。
-   出力（MRT、RGBA32F）：
-     A = (x, y, z, 大きさ)          大きさ 0 = この株は無い（頂点で退化）
-     B = (根元の色 rgb（線形）, 種類) 種類は GC_KIND
+   RT は RGBA32F の 1 枚で、横に 3 つの帯（x = 0..255 / 256..511 / 512..767）。MRT を使わない
+   （ngShaderMaterial の gl_FragColor のまま。各画素は同じ株を計算して自分の帯の値だけを出す。頂点のサンプラーも 1 枚）：
+     A = (x, y, z, 大きさ)              大きさ 0 = この株は無い（頂点で退化）
+     B = (根元の色 rgb（線形）, 種類 + 0.9·縮み) 種類は GC_KIND。縮み 0..1（距離の帯で消える途中）
      C = (曲げ x, 曲げ z, 突風 0..1, floor(空の見え·255) + 0.99·山の影)
+   リングの «窓»：視錐台の足跡の外接矩形（CPU、ngGcReg4 = (ox, oz, w, h)）だけを並べる（描く株の数 = w·h）
    =========================================================== */
 import { NG_FRAME_GLSL } from '../core/frame.js';
 import { NG_HEIGHTFIELD_GLSL } from '../core/glsl/heightfield.glsl.js';
@@ -58,8 +60,6 @@ void ngGcWeights(vec3 p, out vec4 wA, out vec4 wB) {
 }
 
 export const GC_CLUMP_VS = /* glsl */ `// ngmod:groundcover:gc-clump
-precision highp float;
-in vec3 position;
 void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }
 `;
 
@@ -72,7 +72,6 @@ export function gcClumpFS(weightsGLSL) {
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-#define NG_FRAME
 ${NG_FRAME_GLSL}
 ${NG_NOISE_GLSL}
 ${NG_HEIGHTFIELD_GLSL}
@@ -87,14 +86,13 @@ uniform sampler2D ngGcFarAlb;
 uniform vec4 ngGcReg[NG_GC_MAXR];    // x = 最初の行, y = 行数, z = セル m, w = 半数 n
 uniform vec4 ngGcReg2[NG_GC_MAXR];   // x = r0, y = r1, z = 外の帯, w = 内の帯
 uniform vec4 ngGcReg3[NG_GC_MAXR];   // x = 系（0 草・1 笹シダ・2 小物）, y = 段の密度, z = 型板（0 近・1 遠）
+uniform vec4 ngGcReg4[NG_GC_MAXR];   // 窓：x = ox, y = oz（セルの番号）, z = 幅 w, w = 高さ h
 uniform float ngGcNReg;
 uniform vec3 ngGcCam;
 uniform vec4 ngGcPlanes[6];          // 視錐台の面（法線 xyz、距離 w。three の Frustum）
 uniform vec4 ngGcTrample[NG_GC_NTR]; // xy = 踏んだ所、z = 半径、w = 強さ 0..1
 uniform float ngGcLod;
-layout(location = 0) out vec4 ngOutA;
-layout(location = 1) out vec4 ngOutB;
-layout(location = 2) out vec4 ngOutC;
+vec4 ngOutA, ngOutB, ngOutC;
 
 bool ngGcVisible(vec3 c, float r) {
   for (int i = 0; i < 6; i++) if (dot(ngGcPlanes[i].xyz, c) + ngGcPlanes[i].w < -r) return false;
@@ -103,8 +101,15 @@ bool ngGcVisible(vec3 c, float r) {
 
 void ngGcCull() { ngOutA = vec4(0.0); ngOutB = vec4(0.0); ngOutC = vec4(0.0); }
 
+void ngGcMain(ivec2 px);
 void main() {
-  ivec2 px = ivec2(gl_FragCoord.xy);
+  ivec2 q = ivec2(gl_FragCoord.xy);
+  int band = q.x / NG_GC_W;
+  ngGcMain(ivec2(q.x - band * NG_GC_W, q.y));
+  gl_FragColor = band == 0 ? ngOutA : (band == 1 ? ngOutB : ngOutC);
+}
+
+void ngGcMain(ivec2 px) {
   float row = float(px.y);
   int k = -1;
   for (int j = 0; j < NG_GC_MAXR; j++) {
@@ -112,13 +117,14 @@ void main() {
     if (row >= ngGcReg[j].x && row < ngGcReg[j].x + ngGcReg[j].y) k = j;
   }
   if (k < 0) { ngGcCull(); return; }
-  vec4 R = ngGcReg[k], R2 = ngGcReg2[k], R3 = ngGcReg3[k];
+  vec4 R = ngGcReg[k], R2 = ngGcReg2[k], R3 = ngGcReg3[k], R4 = ngGcReg4[k];
   float c = R.z;
-  int n = int(R.w + 0.5), side = 2 * n;
+  int n = int(R.w + 0.5);
+  int ww = max(int(R4.z + 0.5), 1);
   int i = (px.y - int(R.x + 0.5)) * NG_GC_W + px.x;
-  if (i >= side * side) { ngGcCull(); return; }
+  if (i >= ww * int(R4.w + 0.5)) { ngGcCull(); return; }
   float sys = R3.x;
-  vec2 cell = floor(ngGcCam.xz / c) + vec2(float(i % side - n), float(i / side - n));
+  vec2 cell = floor(ngGcCam.xz / c) + vec2(float(int(R4.x + 0.5) + i % ww - n), float(int(R4.y + 0.5) + i / ww - n));
   vec2 so = vec2(sys * 1013.0 + 17.0, sys * 577.0 + 3.0);
   vec2 hj = ngHash22(cell + so);
   vec2 xz = (cell + 0.12 + 0.76 * hj) * c;
@@ -207,7 +213,7 @@ void main() {
   float hf = ngHfShadowFar(vec3(xz.x, y + 0.3, xz.y));
   float sky = 1.0 - 0.62 * clamp(cn.x, 0.0, 1.0);
   ngOutA = vec4(xz.x, y, xz.y, H * sc);
-  ngOutB = vec4(max(root, vec3(0.0)), kind);
+  ngOutB = vec4(max(root, vec3(0.0)), kind + 0.9 * clamp(sc, 0.0, 1.0));
   ngOutC = vec4(bend, max(W.w, tr * 2.0), floor(clamp(sky, 0.0, 1.0) * 255.0) + 0.99 * clamp(hf, 0.0, 1.0));
 }
 `;
