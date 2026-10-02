@@ -112,6 +112,9 @@ export class TerrainModule extends NgModule {
     const mesh = new T.Mesh(geo, mat);
     mesh.name = 'ng-terrain-cdlod';
     mesh.frustumCulled = false;
+    /* 森・岩・桟橋の後に描く（地形の画素の多くは木の後ろ。早期の深度で捨てさせる）：1440p の forest-floor 3.9 → 2.7ms、
+       dock-3p の全体 6.2 → 4.0ms（M1・中央値）。5 未満なので late 扱いにはならない（ngOwned でもある） */
+    mesh.renderOrder = 3;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     ngAttachDepth(mesh);

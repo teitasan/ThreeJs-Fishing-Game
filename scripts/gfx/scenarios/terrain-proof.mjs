@@ -204,9 +204,11 @@ export default async function (h) {
       out.all = stat(all);
       return out;
     }, cams.err);
+    /* ヒートマップは debug/ へ（art-metrics の対象から外す：平らな色は banding の判定に掛かる） */
+    fs.mkdirSync(path.join(h.out, 'debug'), { recursive: true });
     for (let k = 0; k < R.heightErr.maps.length; k++) {
       const m = R.heightErr.maps[k];
-      fs.writeFileSync(path.join(h.out, `${tier}-height-err-${k}.png`), encodePNG({ width: m.w, height: m.h, data: Uint8Array.from(m.data) }));
+      fs.writeFileSync(path.join(h.out, 'debug', `${tier}-height-err-${k}.png`), encodePNG({ width: m.w, height: m.h, data: Uint8Array.from(m.data) }));
     }
     delete R.heightErr.maps;
     console.log('  heightErr near', JSON.stringify(R.heightErr.near), 'all', JSON.stringify(R.heightErr.all));
