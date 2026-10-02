@@ -153,15 +153,7 @@ export class SkyModule extends NgModule {
     ngOwn(this.root, NG_LAYER.WORLD);
     this.ctx.scene.add(this.root);
     this._canopyMap();
-    this.ctx.services.provide('sky', {
-      skyViewTex: this.rtView.texture,
-      skyViewMips: Math.log2(SKY_W) | 0,
-      transmittanceTex: this.rtTrans.texture,
-      cloudPanoTex: this.rtPano.texture,
-      sampleSky: (d) => this.rig.sampleSky(+d.x || 0, +d.y || 0, +d.z || 0),
-      keyColor: this.key.color,
-      cloudShadowAt: (x, z) => cloudShadow(this.ctx.frame.data, { x: +x || 0, y: 0, z: +z || 0 }),
-    });
+    this._provide();
     /* 最初の 1 枚を全部描いてプログラムを作っておく */
     this.ready = true;
     this.full = true;
@@ -201,6 +193,19 @@ export class SkyModule extends NgModule {
     progress?.(0.85);
   }
 
+  _provide() {
+    /* services.provide は «差し替え»（渡さなかった項目は既定の 1×1 に戻る）。雲パノラマを作り直すときも全項目を渡す */
+    this.ctx.services.provide('sky', {
+      skyViewTex: this.rtView.texture,
+      skyViewMips: Math.log2(SKY_W) | 0,
+      transmittanceTex: this.rtTrans.texture,
+      cloudPanoTex: this.rtPano.texture,
+      sampleSky: (d) => this.rig.sampleSky(+d.x || 0, +d.y || 0, +d.z || 0),
+      keyColor: this.key.color,
+      cloudShadowAt: (x, z) => cloudShadow(this.ctx.frame.data, { x: +x || 0, y: 0, z: +z || 0 }),
+    });
+  }
+
   _allocPano() {
     const T = this.ctx.THREE;
     const [w, h] = this.q.pano;
@@ -212,7 +217,7 @@ export class SkyModule extends NgModule {
     this.U.uPrev.value = this.rtPano.texture;
     this.U.uStrip.value = this.rtStrip.texture;
     this.full = true;
-    if (this.ctx.services.sky && this.ready) this.ctx.services.provide('sky', { cloudPanoTex: this.rtPano.texture });
+    if (this.ready) this._provide();
     this.texBytes = (256 * 64 + 32 * 32 + SKY_W * SKY_H * 2.34 + w * h + w * Math.ceil(h / this.q.strips)) * 8
       + 64 ** 3 * 4 + 256 * 256 * 1.34 + 32 ** 3 * 4 + 2048 * 2048 + 512 * 512 * 4 * 1.34 + 512 * 256 * 4 * 1.34;
   }
