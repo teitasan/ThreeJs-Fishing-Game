@@ -392,6 +392,9 @@ export class PostModule extends NgModule {
     this._reading = true;
     let p;
     try { p = r.readRenderTargetPixelsAsync(this.meterOut, 0, 0, 1, 1, this._meterBuf); } catch (e) { this._reading = false; return; }
+    /* three r180 は待つ間 PIXEL_PACK_BUFFER を束ねたままにする（他の同期の readPixels が INVALID_OPERATION になり、
+       深度の読み戻しなどが 0 を返す）。sky の読み戻しと同じく、要求の直後に外す */
+    try { const gl = r.getContext(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch (e) { /* 無視 */ }
     Promise.resolve(p).then(() => { this._reading = false; this._onMeter(usedAdapt, night); }, () => { this._reading = false; });
   }
 
