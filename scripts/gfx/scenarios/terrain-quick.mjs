@@ -4,6 +4,7 @@
    =========================================================== */
 import fs from 'node:fs';
 import path from 'node:path';
+import { camsInPage } from './terrain-proof.mjs';
 
 export default async function (h) {
   const tier = process.env.TIER || 'high';
@@ -16,7 +17,10 @@ export default async function (h) {
     return { stub: m?._ngStub ?? null, stats: m?.stats?.() ?? null, load: L.gfx.loadStats?.modules?.terrain ?? null };
   });
   console.log('boot', JSON.stringify(boot));
-  for (const [cam, hour, weather, view, dbg] of shots) {
+  /* '@名前' は terrain-proof の計算した視点（@ridge・@air70・@trail・@cliff …） */
+  const cams = await h.eval(camsInPage);
+  for (const [cam0, hour, weather, view, dbg] of shots) {
+    const cam = cam0.startsWith('@') ? cams[cam0.slice(1)] : cam0;
     const r = await h.eval(({ cam, hour, weather, view, dbg }) => {
       const L = window.__lab;
       L.cam(cam); L.setHour(Number(hour)); L.setWeather(weather, { instant: true }); L.view(view || null);
@@ -24,8 +28,8 @@ export default async function (h) {
       L.freeze(10); L.tick(20);
       return { nan: L.nanCheck(), st: L.gfx.modules.get('terrain')?.stats?.() };
     }, { cam, hour, weather, view, dbg });
-    await h.shot(`${tier}-${cam}-${hour}-${weather}${dbg ? '-dbg' + dbg : ''}${view ? '-' + view : ''}`);
-    console.log(cam, hour, weather, JSON.stringify(r));
+    await h.shot(`${tier}-${cam0.replace('@', '')}-${hour}-${weather}${dbg ? '-dbg' + dbg : ''}${view ? '-' + view : ''}`);
+    console.log(cam0, hour, weather, JSON.stringify(r));
   }
   const audit = await h.eval(() => {
     const a = window.__lab.programAudit();

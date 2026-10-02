@@ -197,20 +197,24 @@ export const RIDGE_VERT_BEGIN = /* glsl */ `
 `;
 export const RIDGE_FRAG_PARS = NG_NOISE_GLSL + /* glsl */ `
 varying float ngRidgeSun;
+float ngRidgeCanopy = 1.0;
 vec3 ngRidgeAlbedo(vec3 P, vec3 Nw) {
   vec2 xz = P.xz;
   float slope = sqrt(max(1.0 - Nw.y * Nw.y, 0.0)) / max(Nw.y, 0.05);
   float a = ngVNoise2(xz / 210.0), b = ngVNoise2(xz / 75.0 + 5.3), c = ngVNoise2(xz / 31.0 + 1.7);
-  vec3 conifer = vec3(0.024, 0.040, 0.025), broad = vec3(0.050, 0.078, 0.030), pine = vec3(0.038, 0.050, 0.028);
+  /* 遠目の樹冠の «見かけのアルベド»：葉 1 枚より暗い（樹冠どうしの影と隙間）。palette のスギ (0.03, 0.054, 0.031) の 0.7 倍前後 */
+  vec3 conifer = vec3(0.019, 0.032, 0.021), broad = vec3(0.036, 0.056, 0.025), pine = vec3(0.030, 0.038, 0.022);
   /* 植林の帯は谷筋から中腹に（斑の閾値を標高で動かす） */
   float plant = smoothstep(0.40, 0.50, a + 0.12 * (b - 0.5) - 0.0003 * (P.y - 250.0));
   vec3 col = mix(broad * (0.8 + 0.4 * c), conifer * (0.85 + 0.3 * c), plant);
   float ridgeTop = smoothstep(0.55, 0.75, b) * smoothstep(250.0, 600.0, P.y);
   col = mix(col, pine, ridgeTop * 0.6);
   /* 初夏の明るい新緑の斑（季節で） */
-  col = mix(col, vec3(0.085, 0.125, 0.038), smoothstep(0.7, 0.85, c) * (1.0 - plant) * smoothstep(0.3, 0.5, ngSeason));
-  float rock = smoothstep(0.85, 1.25, slope + 0.35 * (c - 0.5)) + smoothstep(820.0, 1000.0, P.y + 120.0 * (b - 0.5)) * 0.5;
-  col = mix(col, vec3(0.19, 0.185, 0.17) * (0.8 + 0.3 * b), clamp(rock, 0.0, 0.85));
+  col = mix(col, vec3(0.060, 0.090, 0.030), smoothstep(0.7, 0.85, c) * (1.0 - plant) * smoothstep(0.3, 0.5, ngSeason));
+  /* 露岩は急な崖だけ（日本の 1000m 級の山は頂まで森。高さで白くしない） */
+  float rock = smoothstep(1.05, 1.45, slope + 0.35 * (c - 0.5));
+  col = mix(col, vec3(0.15, 0.145, 0.135) * (0.8 + 0.3 * b), clamp(rock, 0.0, 0.7));
+  ngRidgeCanopy = 1.0 - clamp(rock, 0.0, 0.7);
   return col;
 }
 vec3 ngRidgeBump(vec3 P, vec3 Nw, float footprint) {
@@ -233,4 +237,15 @@ export const RIDGE_FRAG_NORMAL = /* glsl */ `
 }
 `;
 /* key（平行光 0 番）の直達だけに山の陰を掛ける（空の光は残す） */
-export const RIDGE_FRAG_LIGHTS = 'reflectedLight.directDiffuse *= ngRidgeSun; reflectedLight.directSpecular *= ngRidgeSun;';
+/* 樹冠の BRDF（遠目）：日向の樹冠と樹冠の影が画素の中で混ざる。光と視線が揃うほど影が隠れて明るい（ホットスポット）。
+   空の光は樹冠の隙間の奥まで届かない分だけ減らす */
+export const RIDGE_FRAG_LIGHTS = /* glsl */ `
+{
+  vec3 ngRv = normalize( cameraPosition - vNgWorld );
+  float ngHot = pow( max( dot( ngRv, ngKeyDir ), 0.0 ), 3.0 );
+  float ngCan = mix( 1.0, mix( 0.48, 0.92, ngHot ), ngRidgeCanopy );
+  reflectedLight.directDiffuse *= ngRidgeSun * ngCan;
+  reflectedLight.directSpecular *= ngRidgeSun * ngCan;
+  reflectedLight.indirectDiffuse *= mix( 1.0, 0.72, ngRidgeCanopy );
+}
+`;

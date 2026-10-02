@@ -91,12 +91,13 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   vec3 bw = bed.rgb / max(bed.r + bed.g + bed.b, 1e-3);           // mud, sand, rock（lake.bedAt）
   float beach = 1.0 - smoothstep(1.2 + 2.5 * nP, 3.0 + 5.0 * nP, sd + (nF - 0.5) * 1.4);
   /* 湖畔の開けた帯（汀線から ~60m）より上の斜面は、木がまばらでも林床（日本の山は森に覆われる。草地は湖畔だけ） */
-  float upland = smoothstep(35.0, 95.0, sd + 40.0 * (nM - 0.5));
+  /* 草地は湖畔の緩い所（汀線から ~20–50m・傾斜 < 25°）だけ。それより上・急な所は木がまばらでも林床 */
+  float upland = max(smoothstep(20.0, 55.0, sd + 30.0 * (nM - 0.5)), smoothstep(0.38, 0.62, slope + 0.2 * (nP - 0.5)));
   float forest = max(smoothstep(0.08, 0.42, cn.x + (nP - 0.5) * 0.25), upland);
   float moist = smoothstep(0.42, 0.72, nM + 0.22 * (1.0 - smoothstep(4.0, 25.0, sd)));
   /* 日本の山は 40° 近くまで森に覆われる：露岩は急な崖（> 45°）と、樹冠の無い所の急斜面だけ */
   float forest0 = max(smoothstep(0.08, 0.42, cn.x), upland);
-  float rock = smoothstep(0.95, 1.45, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.6 * forest0);
+  float rock = smoothstep(1.05, 1.55, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.8 * forest0);
   rock = max(rock, smoothstep(0.7, 1.1, slope + (nP - 0.5) * 0.4) * (1.0 - forest0) * smoothstep(8.0, 20.0, sd) * 0.8);
   rock = max(rock, smoothstep(150.0, 190.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.35, 0.6, slope + (nF - 0.5) * 0.2));
   float tr = trail * (1.0 - rock) * smoothstep(0.2, 1.0, sd);
@@ -151,6 +152,7 @@ float ngTerrRo = 0.9;
 float ngTerrAo = 1.0;
 float ngTerrSkyOcc = 1.0;
 float ngTerrF0 = 0.04;
+float ngTerrCan = 0.0;   // 遠景（farAlbedo）の樹冠の割合 × 遠景の重み：樹冠の BRDF に使う
 
 /* 平面の細部の法線を地形の法線へ «勾配の足し算» で載せる（t は接空間：x = 世界 x、y = 世界 z） */
 vec3 ngTerrAddDetail(vec3 Ng, vec2 t) {
@@ -256,7 +258,8 @@ vec3 ngTerrShade(vec3 P) {
   vec4 m1 = texture(ngTerrMacro, xz * (1.0 / 23.0));
   vec4 m2 = texture(ngTerrMacro, xz * (1.0 / 97.0) + 0.37);
   vec4 m3 = texture(ngTerrMacro, xz * (1.0 / 431.0) + 0.71);
-  vec3 farC = texture(ngTerrFar, ngFarMapUV(xz)).rgb;
+  vec4 farT = texture(ngTerrFar, ngFarMapUV(xz));
+  vec3 farC = farT.rgb;
   float w[8];
   ngTerrWeights(P, Ng, sd, bed, cn, ngTerrTrailAt(xz, ngTerrDock), w);
   float weed = ngTerrWeedAt(xz) * (1.0 - smoothstep(-0.6, 0.0, P.y));
@@ -335,6 +338,7 @@ vec3 ngTerrShade(vec3 P) {
     N = normalize(mix(N, Np, pud));
     ngTerrF0 = mix(ngTerrF0, 0.02, pud);
   }
+  ngTerrCan = farT.a * farK * (1.0 - under);
   ngTerrNW = N;
   ngTerrRo = clamp(ro, 0.02, 1.0);
   ngTerrAo = ao;
@@ -383,6 +387,12 @@ export const TERRAIN_FRAG_NORMAL = 'normal = normalize( ( viewMatrix * vec4( ngT
 export const TERRAIN_FRAG_ROUGH = 'roughnessFactor = ngTerrRo;';
 export const TERRAIN_FRAG_LIGHTS = /* glsl */ `
 reflectedLight.indirectSpecular += ngTerrSkySpec( vNgWorld, ngTerrNW, ngTerrRo, ngTerrF0 ) * ngTerrSkyOcc;
+if ( ngTerrCan > 0.0 ) {
+  /* 遠目の樹冠の BRDF（ridges.js と同じ式）：日向と樹冠の影が画素の中で混ざる。光と視線が揃うと明るい */
+  float ngHot = pow( max( dot( normalize( cameraPosition - vNgWorld ), ngKeyDir ), 0.0 ), 3.0 );
+  reflectedLight.directDiffuse *= mix( 1.0, mix( 0.48, 0.92, ngHot ), ngTerrCan );
+  reflectedLight.indirectDiffuse *= mix( 1.0, 0.72, ngTerrCan );
+}
 `;
 export const TERRAIN_FRAG_AO = /* glsl */ `
 reflectedLight.indirectDiffuse *= ngTerrAo * ( ngTerrSkyOcc * 0.6 + 0.4 );

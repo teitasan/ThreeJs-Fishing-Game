@@ -18,7 +18,7 @@ const ID = 'terrain';
 const list = (v, def) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : def);
 
 /* ブラウザの中で使うカメラ（湖の座標から組む） */
-function camsInPage() {
+export function camsInPage() {
   const L = window.__lab, lake = L.lake, D = L.dock, hf = L.gfx.heightfield;
   const g = (x, z) => Math.max(hf.heightAt(x, z), 0);
   const dir = { x: D.dockDir.x, z: D.dockDir.z };

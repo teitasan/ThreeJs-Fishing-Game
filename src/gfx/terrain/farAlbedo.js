@@ -70,7 +70,15 @@ void main() {
   c *= 1.0 - under * 0.8 * poro * 0.48;
   vec4 cc = texture(ngTerrCanopyCol, ngFarMapUV(xz));
   float a = smoothstep(0.12, 0.7, cn.x) * 0.85 * cc.a;
-  gl_FragColor = vec4(mix(c, cc.rgb, a), a);
+  /* 林床の層（林床・苔）は遠目には樹冠で覆われて見える（木の本数に依らず «森の色の塊»。art §地形・遠景）。
+     植林の暗い帯と広葉樹の明るい斑は遠景の稜線と同じ式 */
+  float fw = clamp((w[0] + w[1]) * 1.15, 0.0, 1.0) * (1.0 - under);
+  float na = ngVNoise2(xz / 210.0), nb = ngVNoise2(xz / 75.0 + 5.3), nc = ngVNoise2(xz / 31.0 + 1.7);
+  float plant = smoothstep(0.40, 0.50, na + 0.12 * (nb - 0.5) - 0.0003 * (y - 250.0));
+  vec3 gen = mix(vec3(0.036, 0.056, 0.025) * (0.8 + 0.4 * nc), vec3(0.019, 0.032, 0.021) * (0.85 + 0.3 * nc), plant);
+  vec3 can = cc.a > 0.05 ? mix(gen, cc.rgb, smoothstep(0.05, 0.4, cc.a)) : gen;
+  float a2 = max(a, fw * 0.82);
+  gl_FragColor = vec4(mix(c, a2 > a ? can : cc.rgb, a2), a2);
 }
 `;
 
