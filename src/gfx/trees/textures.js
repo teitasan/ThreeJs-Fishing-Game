@@ -48,29 +48,38 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     rough = 0.9;
   } else if (L == 2) {
     /* ブナ：灰白の平滑な樹皮、地衣の斑（白・淡緑・黒）と横の皮目 */
+    /* 地衣はドメインワープした fbm の閾値で «縁の不規則な斑»（白っぽい灰・淡い緑灰・暗い痂状）。丸いぼかしにしない */
     float base = ngFbmP(p * vec2(4.0, 2.0), vec2(4.0, 2.0), 4);
-    vec3 w1 = ngWorley2P(p * vec2(5.0, 3.0) + 0.3 * ngFbmP(p * 6.0, vec2(6.0), 2), vec2(5.0, 3.0));
-    float lichW = smoothstep(0.42, 0.18, w1.x) * step(0.45, w1.z);
-    vec3 w2 = ngWorley2P(p * vec2(9.0, 6.0) + 7.3, vec2(9.0, 6.0));
-    float lichG = smoothstep(0.35, 0.12, w2.x) * step(0.6, w2.z);
-    float spot = smoothstep(0.12, 0.04, ngWorley2P(p * vec2(16.0, 10.0) + 2.1, vec2(16.0, 10.0)).x) * step(0.75, ngHash12(floor(p * vec2(16.0, 10.0))));
-    float lent = smoothstep(0.92, 1.0, ngFbmP(vec2(p.x * 3.0, p.y * 40.0), vec2(3.0, 40.0), 2)) ;
-    col = vec3(0.25, 0.245, 0.225) * (0.82 + 0.3 * base);
-    col = mix(col, vec3(0.36, 0.36, 0.33), lichW * 0.7);
-    col = mix(col, vec3(0.24, 0.29, 0.19), lichG * 0.7);
-    col = mix(col, vec3(0.06, 0.06, 0.055), spot * 0.8);
-    col *= 1.0 - lent * 0.35;
-    h = 0.5 + 0.15 * base + 0.25 * lichW + 0.15 * lichG - lent * 0.2;
-    rough = 0.72 - 0.1 * lichW;
+    vec2 wp = p + 0.06 * vec2(ngFbmP(p * vec2(8.0, 4.0), vec2(8.0, 4.0), 3), ngFbmP(p * vec2(8.0, 4.0) + 5.2, vec2(8.0, 4.0), 3));
+    float fa = ngFbmP(wp * vec2(5.0, 2.5), vec2(5.0, 2.5), 5);
+    float fb = ngFbmP(wp * vec2(9.0, 4.0) + 3.7, vec2(9.0, 4.0), 5);
+    float fc = ngFbmP(wp * vec2(14.0, 7.0) + 9.1, vec2(14.0, 7.0), 4);
+    float lichW = smoothstep(0.58, 0.62, fa);
+    float lichG = smoothstep(0.60, 0.64, fb) * (1.0 - lichW);
+    float crust = smoothstep(0.66, 0.70, fc) * (1.0 - lichW) * (1.0 - lichG);
+    float speck = smoothstep(0.1, 0.03, ngWorley2P(p * vec2(40.0, 20.0) + 1.3, vec2(40.0, 20.0)).x) * step(0.8, ngHash12(floor(p * vec2(40.0, 20.0)))) * lichW;
+    float lent = smoothstep(0.92, 1.0, ngFbmP(vec2(p.x * 3.0, p.y * 40.0), vec2(3.0, 40.0), 2));
+    col = vec3(0.27, 0.265, 0.245) * (0.86 + 0.24 * base);
+    col = mix(col, vec3(0.40, 0.40, 0.37) * (0.92 + 0.16 * fc), lichW * 0.85);
+    col = mix(col, vec3(0.27, 0.31, 0.22), lichG * 0.8);
+    col = mix(col, vec3(0.15, 0.15, 0.14), crust * 0.75);
+    col = mix(col, vec3(0.10, 0.09, 0.08), speck * 0.6);
+    col *= 1.0 - lent * 0.3;
+    h = 0.5 + 0.12 * base + 0.12 * lichW + 0.08 * lichG + 0.05 * crust - lent * 0.2;
+    rough = 0.72 - 0.08 * lichW;
   } else if (L == 3) {
     /* ミズナラ：灰褐色の不規則な縦の剥片 */
-    vec2 q = p * vec2(7.0, 3.0);
-    vec3 w = ngWorley2P(q + 0.6 * vec2(ngFbmP(p * 5.0, vec2(5.0), 3), 0.0), vec2(7.0, 3.0));
-    float crack = smoothstep(0.0, 0.16, w.y - w.x);
-    float fl = ngFbmP(p * vec2(20.0, 8.0), vec2(20.0, 8.0), 3);
-    h = crack * (0.7 + 0.3 * fl);
-    col = mix(vec3(0.07, 0.06, 0.05), vec3(0.23, 0.20, 0.16) * (0.85 + 0.3 * w.z), crack);
-    col = mix(col, vec3(0.30, 0.29, 0.26), smoothstep(0.6, 0.9, fl) * crack * 0.5);
+    /* 縦に長い畝が不規則に割れて剥片になる。溝は細い黒線でなく «深く柔らかい» 勾配（鱗に見せない） */
+    vec2 q = p * vec2(9.0, 2.2);
+    q.x += 1.1 * ngFbmP(vec2(p.x * 2.0, p.y * 3.0), vec2(2.0, 3.0), 3);
+    vec3 w = ngWorley2P(q, vec2(9.0, 2.2));
+    float ridge = smoothstep(0.0, 0.38, w.y - w.x);
+    float fib = ngFbmP(vec2(p.x * 70.0, p.y * 6.0), vec2(70.0, 6.0), 3);
+    float fl = ngFbmP(p * vec2(20.0, 8.0), vec2(20.0, 8.0), 4);
+    h = ridge * (0.65 + 0.2 * fl) + 0.15 * fib;
+    vec3 top = mix(vec3(0.21, 0.19, 0.16), vec3(0.27, 0.26, 0.23), smoothstep(0.55, 0.85, fl)) * (0.88 + 0.24 * w.z);
+    col = mix(vec3(0.075, 0.062, 0.05), top, smoothstep(0.05, 0.7, ridge));
+    col *= 0.9 + 0.2 * fib;
     rough = 0.9;
   } else if (L == 4) {
     /* イロハモミジ：灰褐色の滑らかな樹皮、縦の淡い縞 */
@@ -84,16 +93,16 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     /* アカマツ（下）：暗い灰色の厚い亀甲の板、深い割れ目 */
     vec2 q = p * vec2(5.0, 4.0);
     vec3 w = ngWorley2P(q + 0.35 * ngFbmP(p * 6.0, vec2(6.0), 2), vec2(5.0, 4.0));
-    float plate = smoothstep(0.02, 0.2, w.y - w.x);
+    float plate = smoothstep(0.02, 0.34, w.y - w.x);
     float fl = ngFbmP(p * vec2(24.0, 18.0), vec2(24.0, 18.0), 3);
     h = plate * (0.75 + 0.25 * fl);
-    col = mix(vec3(0.05, 0.035, 0.03), mix(vec3(0.17, 0.13, 0.11), vec3(0.24, 0.14, 0.09), w.z) * (0.85 + 0.3 * fl), plate);
+    col = mix(vec3(0.06, 0.045, 0.038), mix(vec3(0.17, 0.13, 0.11), vec3(0.24, 0.14, 0.09), w.z) * (0.85 + 0.3 * fl), smoothstep(0.0, 0.8, plate));
     rough = 0.92;
   } else if (L == 6) {
     /* アカマツ（上）：赤橙の薄い鱗片が剥がれる */
     vec2 q = p * vec2(10.0, 7.0);
     vec3 w = ngWorley2P(q + 0.4 * ngFbmP(p * 8.0, vec2(8.0), 2), vec2(10.0, 7.0));
-    float flake = smoothstep(0.0, 0.1, w.y - w.x);
+    float flake = smoothstep(0.0, 0.22, w.y - w.x);
     float n = ngFbmP(p * vec2(30.0, 12.0), vec2(30.0, 12.0), 3);
     h = flake * 0.6 + 0.4 * n;
     col = mix(vec3(0.16, 0.065, 0.035), vec3(0.32, 0.14, 0.07), flake * (0.7 + 0.3 * w.z));

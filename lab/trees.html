@@ -23,10 +23,10 @@
 <div id="lab-status">lab: loading</div>
 <script type="module">
 /* trees の lab（docs/nextgen/modules/trees.md）。trees だけ担当の実装、残りは core のスタブ。
-   追加の URL：&treeView=lod|collide（LOD の色分け・当たりの重ね表示） */
+   追加の URL：&chars=0（釣り人と魚を置かない。影の中心 = カメラ：本編で森を歩くときと同じ。森の中の証拠はこれで撮る） */
 import { bootLabPage } from './lab/_kit/page.js';
 
-bootLabPage({ modules: ['trees'] });
+bootLabPage({ modules: ['trees'], characters: new URLSearchParams(location.search).get('chars') !== '0' });
 </script>
 </body>
 </html>

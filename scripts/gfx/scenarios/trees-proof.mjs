@@ -46,7 +46,7 @@ export default async function (h) {
   for (const tier of tiers) {
     const c0 = h.counts();
     const log0 = h.logs.length;
-    await h.open(`lab/${process.env.LAB || 'trees'}.html?capture=1&tier=${tier}${process.env.Q || ''}`);
+    await h.open(`lab/${process.env.LAB || 'trees'}.html?capture=1&chars=${process.env.CHARS || '0'}&tier=${tier}${process.env.Q || ''}`);
     await h.waitFor(() => window.__gfxReady === true, undefined, 240);
     const R = (out.tiers[tier] = { shots: {} });
     R.boot = await h.eval((id) => {
@@ -76,20 +76,36 @@ export default async function (h) {
       const sdx = Math.cos(sunA), sdz = 0.34;
       const sl = Math.hypot(sdx, sdz);
       const ux = sdx / sl, uz = sdz / sl;
-      let sugi = -1, sBest = -1e9;
+      const BACK = 15;
+      const cand = [];
       for (let k = 0; k < P.count; k++) {
-        if (P.species[k] > 1 || P.h[k] < 12) continue;
+        if (P.h[k] < 10) continue;
         let open = 0;
         for (let d = 12; d <= 72; d += 10) if (hAt(P.x[k] + ux * d, P.z[k] + uz * d) < 0) open++;
-        if (open < 5) continue;
-        const cx = P.x[k] - ux * 24, cz = P.z[k] - uz * 24;
+        if (open < 4) continue;
+        const cx = P.x[k] - ux * BACK, cz = P.z[k] - uz * BACK;
         if (hAt(cx, cz) < 0.5) continue;
-        const score = P.h[k] + open * 2 - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k])) * 2 + (P.species[k] === 0 ? 6 : 0);
-        if (score > sBest) { sBest = score; sugi = k; }
+        const score = P.h[k] + open * 2 - Math.abs(hAt(cx, cz) - hAt(P.x[k], P.z[k])) * 2 + (P.species[k] === 0 ? 14 : P.species[k] === 1 ? 10 : 0);
+        cand.push([score, k]);
       }
-      if (sugi < 0) sugi = P.species.findIndex((s, k) => s === 0 && P.mustDraw[k]);
+      cand.sort((a, b) => b[0] - a[0]);
+      /* カメラから木までの線分に他の幹が無い（幹 + 1.2m）候補 */
+      let sugi = -1;
+      for (const [, k] of cand.slice(0, 60)) {
+        const ax = P.x[k] - ux * BACK, az = P.z[k] - uz * BACK;
+        let clear = true;
+        for (let j = 0; j < P.count && clear; j++) {
+          if (j === k) continue;
+          const dx = P.x[j] - ax, dz = P.z[j] - az;
+          if (dx * dx + dz * dz > (BACK + 4) ** 2) continue;
+          const t = Math.max(0, Math.min(1, (dx * ux + dz * uz) / BACK));
+          if (Math.hypot(dx - ux * BACK * t, dz - uz * BACK * t) < P.r[j] + 1.2) clear = false;
+        }
+        if (clear) { sugi = k; break; }
+      }
+      if (sugi < 0) sugi = cand.length ? cand[0][1] : P.species.findIndex((s, k) => s === 0 && P.mustDraw[k]);
       const sx = P.x[sugi], sz = P.z[sugi], sy = hAt(sx, sz);
-      const scx = sx - ux * 24, scz = sz - uz * 24;
+      const scx = sx - ux * BACK, scz = sz - uz * BACK;
       /* 林縁への寄り：桟橋の付け根から内陸へ */
       const inland = [-dir.x, -dir.z];
       const base = [L.dock.dockStart.x, L.dock.dockStart.z];
@@ -110,14 +126,14 @@ export default async function (h) {
       return {
         lookup: { pos: [bx, by, bz], target: [bx + 1.5, by + 14, bz + 2.5] },
         interiorDense: { pos: [bx, by, bz], target: [bx + 12, by + 2, bz + 9] },
-        sugi: { pos: [scx, Math.max(hAt(scx, scz), 0) + 1.7, scz], target: [sx, sy + P.h[sugi] * 0.55, sz], k: sugi, h: P.h[sugi] },
+        sugi: { pos: [scx, Math.max(hAt(scx, scz), 0) + 1.6, scz], target: [sx, sy + P.h[sugi] * 0.62, sz], k: sugi, h: P.h[sugi], sp: P.species[sugi] },
         dolly,
         collide: { pos: [kx + 3.2, hAt(kx, kz) + 2.6, kz + 3.2], target: [kx, hAt(kx, kz) + 1.0, kz], k: ck },
         aerialHigh: { pos: [sp.x - dir.x * 120, 230, sp.z - dir.z * 120], target: [-sp.x * 1.4, 40, -sp.z * 1.4] },
         blocks: { pos: [0, 360, 0], target: [1, 0, 0] },
       };
     });
-    R.cams = { sugi: cams.sugi.k, collide: cams.collide.k };
+    R.cams = { sugi: cams.sugi.k, sugiSpecies: cams.sugi.sp, collide: cams.collide.k };
     const shoot = async (name, cam, hour, weather = 'clear', view = null, ticks = 30) => {
       const r = await h.eval(({ cam, hour, weather, view, ticks }) => {
         const L = window.__lab;
