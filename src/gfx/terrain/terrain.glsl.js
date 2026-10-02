@@ -90,11 +90,11 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float under = 1.0 - smoothstep(-0.5, 0.12, sd + (nF - 0.5) * 0.4);
   vec3 bw = bed.rgb / max(bed.r + bed.g + bed.b, 1e-3);           // mud, sand, rock（lake.bedAt）
   float beach = 1.0 - smoothstep(1.2 + 2.5 * nP, 3.0 + 5.0 * nP, sd + (nF - 0.5) * 1.4);
+  /* 湖畔の開けた帯（汀線から ~60m）より上の斜面は、木がまばらでも林床（日本の山は森に覆われる。草地は湖畔だけ） */
+  float upland = smoothstep(35.0, 95.0, sd + 40.0 * (nM - 0.5));
   float forest = max(smoothstep(0.08, 0.42, cn.x + (nP - 0.5) * 0.25), upland);
   float moist = smoothstep(0.42, 0.72, nM + 0.22 * (1.0 - smoothstep(4.0, 25.0, sd)));
   /* 日本の山は 40° 近くまで森に覆われる：露岩は急な崖（> 45°）と、樹冠の無い所の急斜面だけ */
-  /* 湖畔の開けた帯（汀線から ~60m）より上の斜面は、木がまばらでも林床（日本の山は森に覆われる。草地は湖畔だけ） */
-  float upland = smoothstep(35.0, 95.0, sd + 40.0 * (nM - 0.5));
   float forest0 = max(smoothstep(0.08, 0.42, cn.x), upland);
   float rock = smoothstep(0.95, 1.45, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.6 * forest0);
   rock = max(rock, smoothstep(0.7, 1.1, slope + (nP - 0.5) * 0.4) * (1.0 - forest0) * smoothstep(8.0, 20.0, sd) * 0.8);
