@@ -29,7 +29,7 @@ export default async function (h) {
   expect(out.boot.hardscape.present && out.boot.hardscape.stub === false, 'hardscape が本物でない');
   await h.tick(300);
 
-  const place = (o) => h.eval(({ back, pitch, clock, fp, weather, yawOff, under }) => {
+  const place = (o) => h.eval(({ back, start, pitch, clock, fp, weather, yawOff, under }) => {
     const g = window.__game;
     const end = g.terrain.dockEnd, dir = g.terrain.dockDir;
     g.env.setWeather?.(weather || 'clear', { instant: true });
@@ -48,7 +48,8 @@ export default async function (h) {
     }
     g.underwaterCam = false;
     g.fs = 'idle';
-    g.pos.set(end.x - dir.x * back, 0, end.z - dir.z * back);
+    if (start != null) { const s0 = g.terrain.dockStart; g.pos.set(s0.x + dir.x * start, 0, s0.z + dir.z * start); }
+    else g.pos.set(end.x - dir.x * back, 0, end.z - dir.z * back);
     g.yaw = Math.atan2(dir.x, dir.z) + (yawOff || 0);
     g.pitch = pitch;
     g._setFirstPerson?.(fp, true);
@@ -59,6 +60,7 @@ export default async function (h) {
     ['noon-fp-down', { back: 1.6, pitch: -0.45, clock: 12.5, fp: true }],
     ['noon-shore', { back: 1.6, pitch: -0.05, clock: 13, fp: true, yawOff: Math.PI * 0.75 }],
     ['deck-back-fp', { back: 6, pitch: -0.32, clock: 15, fp: true, yawOff: Math.PI }],
+    ['boat-fp', { start: 8.5, pitch: -0.32, clock: 9.5, fp: true, yawOff: -Math.PI * 0.72 }],
     ['dusk-3p', { back: 3.2, pitch: -0.05, clock: 18.3, fp: false }],
     ['night-fp', { back: 1.6, pitch: -0.05, clock: 22.5, fp: true }],
     ['night-lamp-fp', { back: 20, pitch: -0.1, clock: 22.5, fp: true, yawOff: Math.PI }],
@@ -66,7 +68,9 @@ export default async function (h) {
     ['rain-deck-fp', { back: 4, pitch: -0.55, clock: 11, fp: true, weather: 'rain', yawOff: Math.PI }],
     ['under-dock', { clock: 12.5, under: true }],
   ];
+  const only = process.env.ONLY ? process.env.ONLY.split(',') : null;
   for (const [name, o] of views) {
+    if (only && !only.some((k) => name.startsWith(k))) continue;
     await place(o);
     await h.tick(60);
     await h.sleep(200);
@@ -76,6 +80,8 @@ export default async function (h) {
       let bad = null;
       if (rt.texture.type === gfx.THREE.HalfFloatType) {
         const buf = new Uint16Array(rt.width * rt.height * 4);
+        /* sky の非同期の読み戻しが PIXEL_PACK を束ねたままのことがある（同期の readPixels が INVALID_OPERATION） */
+        try { const gl = gfx.renderer.getContext(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch (e) { /* 無視 */ }
         gfx.renderer.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
         bad = 0;
         for (let k = 0; k < buf.length; k += 4) if (((buf[k] & 0x7c00) === 0x7c00) || ((buf[k + 1] & 0x7c00) === 0x7c00) || ((buf[k + 2] & 0x7c00) === 0x7c00)) bad++;
@@ -96,10 +102,13 @@ export default async function (h) {
     const gfx = window.__ngGfx, m = gfx.modules.get('hardscape'), g = window.__game;
     const b = m.boat, o = b.userData.base;
     const sy = g.water.surfaceY ? g.water.surfaceY(o.x, o.z) : null;
-    return { boatY: b.position.y, baseY: o.y, surfaceY: sy, pitch: b.rotation.x, roll: b.rotation.z };
+    const beach = m._beach || null;
+    const ground = beach ? m._groundAt(o.x, o.z) : null;
+    return { boatY: b.position.y, baseY: o.y, surfaceY: sy, pitch: b.rotation.x, roll: b.rotation.z, beached: !!beach, ground };
   });
   console.log('boat', JSON.stringify(out.boat));
-  if (out.boat.surfaceY != null) expect(Math.abs(out.boat.boatY - out.boat.baseY - out.boat.surfaceY) < 0.06, `小舟の上下が水面とずれる ${JSON.stringify(out.boat)}`);
+  if (out.boat.beached) expect(out.boat.boatY > out.boat.ground - 0.2 && out.boat.boatY < out.boat.ground + 0.3, `浜の舟が地面に載っていない ${JSON.stringify(out.boat)}`);
+  else if (out.boat.surfaceY != null) expect(Math.abs(out.boat.boatY - out.boat.baseY - out.boat.surfaceY) < 0.06, `小舟の上下が水面とずれる ${JSON.stringify(out.boat)}`);
 
   out.health = await h.eval(() => {
     const gfx = window.__ngGfx, s = gfx.safety;

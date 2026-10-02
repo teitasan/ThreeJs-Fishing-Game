@@ -22,7 +22,7 @@ import { waveHeight, shoalGain } from '../../waveField.js?v=20260828-lakescale1'
 import { ngBlackbody } from '../post/grade.js';
 import { GeoBuilder, WOOD_KIND, tubePositions } from './geo.js';
 import { buildDock, DOCK_DIM, dockContractReport } from './dock.js';
-import { buildBoat, BOAT_DIM, boatContractReport } from './boat.js';
+import { buildBoat, BOAT_DIM, boatContractReport, boatBottomY, boatBottomB } from './boat.js';
 import { buildRockShapes, ROCK_SHAPES } from './rocks.js';
 import { addSnag, addDriftwood } from './logs.js';
 import { bakeHardscapeTextures } from './textures.js';
@@ -78,6 +78,10 @@ export class HardscapeModule extends NgModule {
     const cc = boat0.circles || [];
     const boatP = { ...boat0, yaw: cc.length === 2 ? Math.atan2(cc[1].x - cc[0].x, cc[1].z - cc[0].z) : boat0.yaw };
     this.lampPos = lamp; this.boatP = boatP;
+    /* 浜に引き揚げた舟：placement の位置が陸（シードによっては浅瀬の手前）だと、y=0.05 の舟の腹が砂に埋まる。
+       竜骨の下の地面に載せ、地面の傾きに沿わせ、少し片舷へ傾ける（当たりの円は placement のまま） */
+    this._beach = this._beachPose(boatP, groundAt);
+    if (this._beach) boatP.y = this._beach.y;
 
     /* ---- マテリアル ---- */
     const u = {
@@ -208,6 +212,29 @@ export class HardscapeModule extends NgModule {
     ctx.services.water.addDamper(this.piles);
     this._lampColor = ngBlackbody(2200);
     progress?.(1);
+  }
+
+  /* 竜骨の下（艫〜舳先 9 点 × 3 列）の地面と船底の差から、浜に載った姿勢を出す。水に浮くなら null */
+  _beachPose(b, groundAt) {
+    const c = Math.cos(b.yaw), s = Math.sin(b.yaw);
+    const W = (lx, lz) => [b.x + lx * c + lz * s, b.z - lx * s + lz * c];
+    let need = -Infinity, gF = 0, gA = 0, gP = 0, gS = 0;
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8, lz = (t * 2 - 1) * BOAT_DIM.HALF_L, bot = boatBottomY(t), hb = boatBottomB(t);
+      for (const lx of [-hb, 0, hb]) {
+        const [x, z] = W(lx, lz), g = groundAt(x, z);
+        if (Number.isFinite(g)) need = Math.max(need, g - bot);
+      }
+    }
+    if (!(need > b.y + 0.02)) return null;
+    const L = BOAT_DIM.HALF_L * 0.8;
+    { const [x, z] = W(0, L); gF = groundAt(x, z); }
+    { const [x, z] = W(0, -L); gA = groundAt(x, z); }
+    { const [x, z] = W(-0.4, 0); gP = groundAt(x, z); }
+    { const [x, z] = W(0.4, 0); gS = groundAt(x, z); }
+    const pitch = Math.atan2(gF - gA, 2 * L), roll = Math.atan2(gS - gP, 0.8) + 0.07;
+    /* 砂に 5cm めり込ませる（宙に浮かない） */
+    return { y: need - 0.05, pitch: -Math.max(-0.2, Math.min(0.2, pitch)), roll: Math.max(-0.25, Math.min(0.25, roll)) };
   }
 
   /* 船の座標 → 世界（休止の姿勢 + heave / pitch / roll） */
@@ -396,7 +423,14 @@ export class HardscapeModule extends NgModule {
       const hb = H(0, 1.25), hs = H(0, -1.25), hp = H(-0.45, 0), hst = H(0.45, 0);
       const heave = (hb + hs + hp + hst) * 0.25;
       const pitch = Math.atan2(hb - hs, 2.5), roll = Math.atan2(hst - hp, 0.9);
-      if (Number.isFinite(heave) && Number.isFinite(pitch) && Number.isFinite(roll)) {
+      if (this._beach) {
+        const B = this._beach;
+        if (!this._pose) {
+          b.position.y = B.y;
+          b.rotation.set(B.pitch, o.yaw, B.roll, 'YXZ');
+          this._pose = { y: B.y, pitch: B.pitch, roll: B.roll };
+        }
+      } else if (Number.isFinite(heave) && Number.isFinite(pitch) && Number.isFinite(roll)) {
         b.position.y = o.y + heave;
         b.rotation.set(-pitch * 0.85, o.yaw, roll * 0.85, 'YXZ');
         this._pose = { y: o.y + heave, pitch: -pitch * 0.85, roll: roll * 0.85 };
