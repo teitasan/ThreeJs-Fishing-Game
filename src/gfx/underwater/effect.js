@@ -84,13 +84,24 @@ void main() {
   float wY = ngUwRay.w;
   /* 水面より上の区間は数えない（水中のカメラから水面の向こう） */
   if (dir.y > 1e-4) Lmax = min(Lmax, max((wY - ngUwCam.y) / dir.y, 0.0));
+  /* 引く分 = fog チャンク（ngWaterSegment）が足した key の等方の内散乱の [0, Lmax] の分を «同じ式» で：
+     (1 − T)·σs·iso/σt·e^(−kd·dAvg)（dAvg = 区間の両端の深さの平均、cw なし）。
+     自前の積分（各点の本当の深さ）で引くと、深い斜面を見下ろす長い光路で core の値より大きく引いて黒く潰れた */
+  vec3 sub = vec3(0.0);
+  {
+    vec3 Pb = ngUwCam + dir * dist;
+    if (Pb.y < wY + 0.05) {
+      float dAvg = max(wY - 0.5 * (ngUwCam.y + Pb.y), 0.0);
+      sub = ngSigmaS * iso * (1.0 - exp(-st * Lmax)) / max(st, vec3(1e-4)) * exp(-kd * dAvg);
+    }
+  }
   vec3 acc = vec3(0.0);
   int N = int(ngUwRay.x + 0.5);
   if (N <= 0) {
     /* 解析の光暈：カメラの深さの下向き光で一様に（影・筋なし） */
     float d0 = max(wY - ngUwCam.y, 0.0);
     vec3 Td = exp(-kd * d0 / cw);
-    acc = ngSigmaS * Td * (ph - iso) * (1.0 - exp(-st * Lmax)) / max(st, vec3(1e-4));
+    acc = ngSigmaS * Td * ph * (1.0 - exp(-st * Lmax)) / max(st, vec3(1e-4)) - sub;
   } else {
     /* ステップは近くに密（s = Lmax·u²）：光の筋が読めるのはカメラから数 m。
        始点を画素ごとにずらす（ブルーノイズ。交互の勾配ノイズは格子の模様が見えた）。合成で 5 タップにならす */
@@ -107,9 +118,9 @@ void main() {
       float V = ngUwShadow1(P) * ngUwFocus(P, depth);
       /* 平均は物理のまま（σs で ph − iso）。影と筋の «揺らぎ» (V − 1) は懸濁物の前方散乱 σp = 0.14/m が
          作るものとして別に足す（σs 0.03 の澄んだ水の等方の値では横から見た筋が 2% 未満で消えるため。art の判断） */
-      acc += W * (ph - iso + (0.14 / max(ngSigmaS, 1e-3)) * ph * (V - 1.0));
+      acc += W * (ph + (0.14 / max(ngSigmaS, 1e-3)) * ph * (V - 1.0));
     }
-    acc *= ngSigmaS;
+    acc = acc * ngSigmaS - sub;
   }
   vec3 L = ngUwKeyE * acc;
   if (ngUwRay.y < 0.0) {   // 開発用：5m 先の点の焦点と影
@@ -208,7 +219,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
         float w = exp(-abs(R.a - z) / (0.08 * z + 0.25)) * (i == 0 ? 2.0 : 1.0) + 1e-3;
         rs += R.rgb * w; rw += w;
       }
-      col += rs / rw;
+      /* 補正は負にもなる（影の中の光柱の «抜け»）。画素の 3 割より下へは削らない（近似の誤差で黒く潰さない） */
+      col = max(col + rs / rw, col * 0.3);
     }
     /* レンズの周辺減光（水のマスク越しの見え方。控えめ） */
     vec2 c = uv - 0.5;

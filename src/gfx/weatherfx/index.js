@@ -132,7 +132,7 @@ export class WeatherFxModule extends NgModule {
     return {
       draws: a.draws + b.draws + c.draws, tris: a.tris + b.tris + c.tris, instances: a.instances + b.instances + c.instances,
       texBytes: 2 * 256 * 256 * 4 * 1.33, programs: 5, fireflies: +this.act.fireflies.toFixed(2), motes: +this.act.motes.toFixed(2),
-      impulses: this.act.impulsesSent, envRain: !!this._envRain,
+      impulses: this.act.impulsesSent, envRain: !!this._envRain, mistD: +(this._st.mist.density || 0).toFixed(5),
     };
   }
 
