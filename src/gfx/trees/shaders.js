@@ -421,8 +421,14 @@ const TREE_FS_AO = /* glsl */ `
   float occ = vNgTInfo.z * (ngTLeaf > 0.5 ? (1.0 - 0.55 * vNgTInfo.w) : ngTN.b);
   /* 幹の根元の接地の陰（地面が空を半分隠す）：地上 0 → 0.9m */
   if (ngTLeaf < 0.5) occ = max(occ * mix(0.45, 1.0, smoothstep(0.0, 0.9, vNgTInst.w * vNgTInst.z)), 0.45);
+  vec3 ngIrrRaw = reflectedLight.indirectDiffuse / max(material.diffuseColor, vec3(1e-3));
   reflectedLight.indirectDiffuse *= occ * ngCanAmb;
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
+  /* 調べ物 9 = アルベド、10 = 間接の遮り（occ × 樹冠の下の空の見え）、11 = 遮る前の間接の照度 × 0.3、12 = 樹皮・葉のテクスチャの色 × 0.5 をそのまま出す（9 もアルベド × 0.5） */
+  if (ngTreeMisc.w > 8.5) {
+    reflectedLight.directDiffuse = vec3(0.0); reflectedLight.directSpecular = vec3(0.0); reflectedLight.indirectSpecular = vec3(0.0);
+    reflectedLight.indirectDiffuse = ngTreeMisc.w > 11.5 ? ngTA.rgb * 0.5 : ngTreeMisc.w > 10.5 ? ngIrrRaw * 0.3 : ngTreeMisc.w > 9.5 ? occ * ngCanAmb : material.diffuseColor * 0.5;
+  }
 }
 `;
 
