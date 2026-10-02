@@ -39,6 +39,21 @@ function camsInPage() {
     const px = a.x - Math.cos(a.a) * back, pz = a.z - Math.sin(a.a) * back;
     c[k] = { pos: [px, g(px, pz) + hgt, pz], target: [b.x, g(b.x, b.z), b.z] };
   }
+  /* 近寄り：浜（汀線から 1.5m）・草地・崖（急斜面を探す） */
+  for (const [k, da, i0, i1] of [['beach', 0.5, -0.5, 3.5], ['beach2', 2.2, -0.5, 3.5], ['meadow', 3.0, 14, 19]]) {
+    const p = shore(da, i0), q = shore(da + 0.004, i1);
+    c[k] = { pos: [p.x, g(p.x, p.z) + 1.5, p.z], target: [q.x, g(q.x, q.z), q.z] };
+  }
+  let best = null;
+  for (let r = 200; r < 440; r += 6) for (let t = 0; t < 6.283; t += 0.02) {
+    const x = Math.cos(t) * r, z = Math.sin(t) * r;
+    const s = Math.abs(hf.heightAt(x + 1, z) - hf.heightAt(x - 1, z)) / 2 + Math.abs(hf.heightAt(x, z + 1) - hf.heightAt(x, z - 1)) / 2;
+    if (!best || s > best.s) best = { s, x, z, t, r };
+  }
+  if (best) {
+    const bx = Math.cos(best.t) * (best.r - 22), bz = Math.sin(best.t) * (best.r - 22);
+    c.cliff = { pos: [bx, g(bx, bz) + 2.5, bz], target: [best.x, g(best.x, best.z), best.z], slope: best.s };
+  }
   /* 高さの誤差を測る歩ける帯の視点（目の高さから 35° 見下ろす） */
   c.err = [];
   for (const da of [0.15, 0.9, 1.7, 2.6, 3.4, 4.3, 5.2]) {
@@ -92,6 +107,7 @@ export default async function (h) {
     if (full && tier === 'high') {
       for (let k = 0; k < 4; k++) await shoot(`shore-low-strip${k}`, { cam: 'shore-low', hour: 13, t: 40 + k * 0.9, frames: 6 });
       await shoot('forest-floor-1530', { cam: 'forest-floor', hour: 15.5 });
+      for (const k of ['beach', 'beach2', 'meadow', 'cliff']) if (cams[k]) await shoot(`close-${k}`, { cam: cams[k], hour: 14 });
       await shoot('air20', { cam: cams.air20, hour: 14.5 });
       await shoot('air200', { cam: cams.air200, hour: 14.5 });
       await shoot('ridge-0600', { cam: cams.ridge, hour: 6.0 });

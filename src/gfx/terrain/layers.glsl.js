@@ -168,8 +168,8 @@ void ngTbBlades(vec2 uv, float N, float lift, float s, float dry, inout vec3 col
     if (hh <= h) continue;
     h = hh;
     float k = fract(r.x * 17.9 + r.w);
-    vec3 g = k < 0.5 ? vec3(0.062, 0.112, 0.030) : vec3(0.095, 0.140, 0.040);
-    vec3 dr = mix(vec3(0.20, 0.175, 0.095), vec3(0.135, 0.115, 0.065), fract(r.y * 5.7));
+    vec3 g = k < 0.5 ? vec3(0.055, 0.105, 0.028) : vec3(0.088, 0.138, 0.036);
+    vec3 dr = mix(vec3(0.175, 0.155, 0.082), vec3(0.120, 0.105, 0.060), fract(r.y * 5.7));
     vec3 bc = step(fract(r.z * 23.1), dry) > 0.5 ? dr : g;
     col = bc * (0.65 + 0.45 * (t / L)) * (0.85 + 0.3 * (1.0 - abs(o) / wid));
   }
@@ -241,22 +241,22 @@ vec4 ngTbMoss(vec2 uv) {
 }
 vec4 ngTbMeadow(vec2 uv) {
   float n1 = ngTbFbm(uv, 8.0, 1.0, 4), n2 = ngTbVN(uv * 300.0, 300.0, 2.0);
-  vec3 col = mix(vec3(0.050, 0.040, 0.026), vec3(0.085, 0.066, 0.042), n1) * (0.8 + 0.4 * n2);
+  vec3 col = mix(vec3(0.040, 0.036, 0.022), vec3(0.068, 0.060, 0.034), n1) * (0.8 + 0.4 * n2);
   float h = 0.08 * n1;
-  ngTbStones(uv, 90.0, 0.0, 3.0, 0.18, 0.25, col, h);
-  float dry = 0.12 + 0.45 * smoothstep(0.4, 0.8, ngTbFbm(uv, 4.0, 4.0, 3));
-  ngTbBlades(uv, 110.0, 0.10, 5.0, dry, col, h);
-  ngTbBlades(uv, 85.0, 0.30, 6.0, dry * 0.8, col, h);
-  ngTbBlades(uv, 64.0, 0.50, 7.0, dry * 0.6, col, h);
-  /* クローバーの塊（三つ葉の丸） */
+  ngTbStones(uv, 90.0, 0.0, 3.0, 0.05, 0.2, col, h);
+  float dry = 0.10 + 0.40 * smoothstep(0.4, 0.8, ngTbFbm(uv, 4.0, 4.0, 3));
+  ngTbBlades(uv, 96.0, 0.08, 5.0, dry, col, h);
+  ngTbBlades(uv, 72.0, 0.24, 6.0, dry * 0.85, col, h);
+  ngTbBlades(uv, 56.0, 0.40, 7.0, dry * 0.7, col, h);
+  ngTbBlades(uv, 42.0, 0.56, 10.0, dry * 0.55, col, h);
   vec4 cl = ngTbWorley(uv * 20.0, 20.0, 8.0, 0.8);
-  if (cl.z > 0.7) {
+  if (cl.z > 0.72) {
     vec2 q = fract(uv * 160.0) - 0.5;
     float a = atan(q.y, q.x);
     float leaf = smoothstep(0.42, 0.36, length(q) / (0.55 + 0.45 * abs(cos(a * 1.5))));
     float m = leaf * smoothstep(0.42, 0.2, cl.x) * step(0.3, ngTbH1(floor(uv * 160.0), 160.0, 9.0));
-    col = mix(col, vec3(0.050, 0.098, 0.028) * (0.85 + 0.3 * n2), m);
-    h = mix(h, 0.85, m);
+    col = mix(col, vec3(0.045, 0.092, 0.026) * (0.85 + 0.3 * n2), m);
+    h = mix(h, 0.8, m);
   }
   return vec4(col, clamp(h, 0.0, 1.0));
 }
@@ -277,7 +277,7 @@ vec4 ngTbSand(vec2 uv) {
   float grain = ngTbVN(uv * 800.0, 800.0, 4.0);
   float h = rip * amp * 0.65 + grain * 0.12 + 0.2 * ngTbFbm(uv, 8.0, 5.0, 3);
   vec3 sand = vec3(0.325, 0.282, 0.210), silt = vec3(0.215, 0.192, 0.152);
-  vec3 col = mix(silt, sand, smoothstep(0.1, 0.8, rip * amp + 0.45 * (1.0 - amp)));
+  vec3 col = mix(mix(silt, sand, 0.5), sand, smoothstep(0.1, 0.8, rip * amp + 0.45 * (1.0 - amp)));
   col *= 0.86 + 0.26 * grain;
   float dk = step(0.975, ngTbH1(floor(uv * 1000.0), 1000.0, 7.0));
   float lt = step(0.985, ngTbH1(floor(uv * 1000.0), 1000.0, 8.0));
@@ -286,44 +286,51 @@ vec4 ngTbSand(vec2 uv) {
   return vec4(col, clamp(h, 0.0, 1.0));
 }
 vec4 ngTbMud(vec2 uv) {
-  float n = ngTbFbm(uv, 4.0, 1.0, 5), m = ngTbFbm(uv, 28.0, 2.0, 3);
-  vec3 col = mix(vec3(0.096, 0.086, 0.068), vec3(0.138, 0.122, 0.096), n) * (0.9 + 0.2 * m);
-  float h = n * 0.55 + m * 0.2;
+  float n = ngTbFbm(uv, 4.0, 1.0, 5), m = ngTbFbm(uv, 28.0, 2.0, 3), gr = ngTbVN(uv * 600.0, 600.0, 5.0);
+  vec3 col = mix(vec3(0.088, 0.080, 0.064), vec3(0.132, 0.118, 0.094), n) * (0.88 + 0.24 * m) * (0.94 + 0.12 * gr);
+  float h = n * 0.55 + m * 0.2 + gr * 0.04;
   vec4 w = ngTbWorley(uv * 46.0, 46.0, 3.0, 0.9);
-  float hole = step(0.62, w.z);
-  float pit = smoothstep(0.13, 0.03, w.x) * hole;
-  float rim = smoothstep(0.24, 0.14, w.x) * smoothstep(0.06, 0.14, w.x) * hole;
-  h += rim * 0.10 - pit * 0.28;
-  col *= 1.0 - pit * 0.5;
-  ngTbLeaves(uv, 22.0, 0.45, h + 0.02, 6.0, 0.3, 1.0, col, h);
-  ngTbTwigs(uv, 6.0, h + 0.02, 7.0, 0.3, 0.014, vec3(0.07, 0.06, 0.045), vec3(0.05, 0.045, 0.035), col, h);
+  float hole = step(0.8, w.z);
+  float pit = smoothstep(0.11, 0.03, w.x) * hole;
+  float rim = smoothstep(0.2, 0.12, w.x) * smoothstep(0.05, 0.12, w.x) * hole;
+  h += rim * 0.05 - pit * 0.15;
+  col *= 1.0 - pit * 0.3;
+  ngTbLeaves(uv, 26.0, 0.32, h + 0.02, 6.0, 0.14, 1.0, col, h);
+  ngTbTwigs(uv, 6.0, h + 0.02, 7.0, 0.12, 0.012, vec3(0.07, 0.06, 0.045), vec3(0.05, 0.045, 0.035), col, h);
   return vec4(col, clamp(h, 0.0, 1.0));
 }
 vec4 ngTbRock(vec2 uv) {
-  float b = ngTbFbm(uv, 3.0, 1.0, 6);
-  vec4 wa = ngTbWorley(uv * 5.0, 5.0, 2.0, 0.9), wb = ngTbWorley(uv * 17.0, 17.0, 3.0, 0.9);
-  float crackA = 1.0 - smoothstep(0.0, 0.05, wa.y - wa.x);
-  float crackB = 1.0 - smoothstep(0.0, 0.035, wb.y - wb.x);
-  float fine = ngTbFbm(uv, 40.0, 4.0, 4);
-  float h = 0.42 * b + 0.22 * wa.z + 0.12 * wb.z + 0.18 * fine - 0.32 * crackA - 0.14 * crackB + 0.2;
-  vec3 base = vec3(0.196, 0.190, 0.178) * (0.78 + 0.38 * b) * (0.9 + 0.2 * wa.z);
-  base *= mix(vec3(1.0), vec3(1.06, 1.0, 0.9), wb.z);
-  base *= 0.9 + 0.2 * fine;
-  float sp = step(0.93, ngTbH1(floor(uv * 720.0), 720.0, 3.0));
+  /* 安山岩：歪めた座標の節理（一部の境だけが割れる）・細かい割れ・鉄の錆の暖色・地衣類はまばら */
+  vec2 wq = vec2(ngTbFbm(uv, 4.0, 11.0, 4), ngTbFbm(uv, 4.0, 12.0, 4)) - 0.5;
+  vec2 u2 = uv + wq * 0.09;
+  float b = ngTbFbm(u2, 3.0, 1.0, 6);
+  vec4 wa = ngTbWorley(u2 * 4.0, 4.0, 2.0, 1.0);
+  float sel = step(0.42, fract((wa.z + wa.w) * 7.31));
+  float crackA = (1.0 - smoothstep(0.0, 0.03 + 0.03 * b, wa.y - wa.x)) * sel;
+  vec4 wb = ngTbWorley(u2 * 13.0, 13.0, 3.0, 1.0);
+  float crackB = (1.0 - smoothstep(0.0, 0.018, wb.y - wb.x)) * step(0.62, fract((wb.z + wb.w) * 5.13)) * 0.7;
+  float fine = ngTbFbm(uv, 48.0, 4.0, 4);
+  float grit = ngTbVN(uv * 700.0, 700.0, 6.0);
+  float h = 0.42 * b + 0.14 * wa.z + 0.2 * fine + 0.06 * grit + 0.22 - 0.3 * crackA - 0.12 * crackB;
+  vec3 base = vec3(0.172, 0.166, 0.156) * (0.76 + 0.42 * b) * (0.93 + 0.14 * wa.z) * (0.9 + 0.2 * fine) * (0.93 + 0.14 * grit);
+  base *= mix(vec3(1.0), vec3(1.10, 1.0, 0.86), smoothstep(0.45, 0.8, ngTbFbm(uv, 2.0, 9.0, 3)) * 0.8);
+  float sp = step(0.955, ngTbH1(floor(uv * 720.0), 720.0, 3.0));
   float sd = step(0.95, ngTbH1(floor(uv * 640.0), 640.0, 4.0));
-  base = mix(base, vec3(0.33, 0.32, 0.30), sp * 0.6) * (1.0 - sd * 0.45);
-  base = mix(base, vec3(0.045, 0.055, 0.030), crackA * 0.85);
-  base *= 1.0 - crackB * 0.4;
+  base = mix(base, vec3(0.30, 0.29, 0.27), sp * 0.5) * (1.0 - sd * 0.4);
+  base = mix(base, vec3(0.040, 0.046, 0.032), crackA * 0.8);
+  base *= 1.0 - crackB * 0.35;
   float lf = ngTbFbm(uv, 6.0, 6.0, 4);
   vec4 wl = ngTbWorley(uv * 28.0, 28.0, 7.0, 0.9);
-  float lichen = smoothstep(0.56, 0.6, lf + 0.05 * fine) * (1.0 - crackA);
-  float spots = smoothstep(0.30, 0.2, wl.x) * step(0.5, wl.z) * smoothstep(0.42, 0.55, lf);
+  float lichen = smoothstep(0.62, 0.66, lf + 0.05 * fine) * (1.0 - crackA);
+  float spots = smoothstep(0.26, 0.17, wl.x) * step(0.72, wl.z) * smoothstep(0.5, 0.6, lf);
   lichen = max(lichen, spots);
-  vec3 lc = mix(vec3(0.29, 0.31, 0.245), vec3(0.355, 0.36, 0.325), wl.z);
-  float orange = step(0.92, wl.z) * smoothstep(0.25, 0.12, wl.x);
-  lc = mix(lc, vec3(0.36, 0.22, 0.065), orange);
-  base = mix(base, lc * (0.85 + 0.3 * fine), lichen * 0.88);
-  return vec4(base, clamp(h + lichen * 0.04, 0.0, 1.0));
+  vec3 lc = mix(vec3(0.225, 0.235, 0.19), vec3(0.27, 0.27, 0.245), wl.z);
+  lc = mix(lc, vec3(0.30, 0.19, 0.06), step(0.95, wl.z) * smoothstep(0.22, 0.1, wl.x));
+  base = mix(base, lc * (0.85 + 0.3 * fine), lichen * 0.8);
+  /* 苔の縁取り（窪みと割れ目に暗い緑） */
+  float hollow = smoothstep(0.42, 0.25, h);
+  base = mix(base, vec3(0.045, 0.065, 0.028), hollow * 0.45 * smoothstep(0.45, 0.6, ngTbFbm(uv, 5.0, 13.0, 3)));
+  return vec4(base, clamp(h + lichen * 0.03, 0.0, 1.0));
 }
 vec4 ngTbTrail(vec2 uv) {
   float n = ngTbFbm(uv, 5.0, 1.0, 5), m = ngTbFbm(uv, 32.0, 2.0, 3), g = ngTbVN(uv * 520.0, 520.0, 3.0);

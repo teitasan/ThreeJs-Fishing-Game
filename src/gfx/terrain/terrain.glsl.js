@@ -67,6 +67,9 @@ export function terrainWeightsGLSL() {
   return NG_NOISE_GLSL + /* glsl */ `
 #ifndef NG_LIB_TERR_WEIGHTS
 #define NG_LIB_TERR_WEIGHTS
+/* 汀線距離と底質は near の地図（±260m）の外で折り返して読まれうるので、外は «遠い陸» と縁の底質へ寄せる */
+float ngTerrShoreD(vec2 xz) { return mix(300.0, ngShoreD(xz), smoothstep(0.0, 10.0, ngNearInset(xz))); }
+vec4 ngTerrBed(vec2 xz) { return ngBed(clamp(xz, ngHfNear.xy + 2.0, ngHfNear.xy + (ngHfNear.w - 1.0) / ngHfNear.z - 2.0)); }
 /* 桟橋の付け根から内陸へ 30m の踏み跡（dock.xy = 付け根、dock.zw = 内陸の向き）と、付け根の踏み荒らし */
 float ngTerrTrailAt(vec2 xz, vec4 dock) {
   vec2 d = xz - dock.xy;
@@ -87,10 +90,12 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float under = 1.0 - smoothstep(-0.5, 0.12, sd + (nF - 0.5) * 0.4);
   vec3 bw = bed.rgb / max(bed.r + bed.g + bed.b, 1e-3);           // mud, sand, rock（lake.bedAt）
   float beach = 1.0 - smoothstep(1.2 + 2.5 * nP, 3.0 + 5.0 * nP, sd + (nF - 0.5) * 1.4);
-  float forest = smoothstep(0.08, 0.42, cn.x + (nP - 0.5) * 0.25);
+  float forest = max(smoothstep(0.08, 0.42, cn.x + (nP - 0.5) * 0.25), upland);
   float moist = smoothstep(0.42, 0.72, nM + 0.22 * (1.0 - smoothstep(4.0, 25.0, sd)));
   /* 日本の山は 40° 近くまで森に覆われる：露岩は急な崖（> 45°）と、樹冠の無い所の急斜面だけ */
-  float forest0 = smoothstep(0.08, 0.42, cn.x);
+  /* 湖畔の開けた帯（汀線から ~60m）より上の斜面は、木がまばらでも林床（日本の山は森に覆われる。草地は湖畔だけ） */
+  float upland = smoothstep(35.0, 95.0, sd + 40.0 * (nM - 0.5));
+  float forest0 = max(smoothstep(0.08, 0.42, cn.x), upland);
   float rock = smoothstep(0.95, 1.45, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.6 * forest0);
   rock = max(rock, smoothstep(0.7, 1.1, slope + (nP - 0.5) * 0.4) * (1.0 - forest0) * smoothstep(8.0, 20.0, sd) * 0.8);
   rock = max(rock, smoothstep(150.0, 190.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.35, 0.6, slope + (nF - 0.5) * 0.2));
@@ -138,6 +143,8 @@ uniform vec4 ngTerrFlats[4];         // 藻場（x, z, r, 強さ）
 varying vec3 ngTerrVInfo;
 const float ngTerrTile[8] = ${arr(TERRAIN_TILE_M)};
 const float ngTerrPoro[8] = ${arr(TERRAIN_POROSITY)};
+/* hex の回転の上限（rad）。向きのある模様（砂の波紋・泥・踏み跡）は回しすぎると継ぎ目が «く» の字に見える */
+const float ngTerrHexRot[8] = float[8](3.1416, 3.1416, 3.1416, 3.1416, 0.22, 1.2, 3.1416, 0.8);
 
 vec3 ngTerrNW = vec3(0.0, 1.0, 0.0);   // 世界の法線（normal の口で使う）
 float ngTerrRo = 0.9;
@@ -154,10 +161,10 @@ vec3 ngTerrAddDetail(vec3 Ng, vec2 t) {
 vec2 ngTerrUnpackN(vec4 B) { return B.xy * 2.0 - 1.0; }
 
 /* hex-tiling（Mikkelsen 2022）を A・B の 2 枚へ同じ格子・同じ回転で。法線は回転を戻す */
-void ngTerrHex(float L, vec2 uv, vec2 dx, vec2 dy, out vec4 A, out vec4 B) {
+void ngTerrHex(float L, float rs, vec2 uv, vec2 dx, vec2 dy, out vec4 A, out vec4 B) {
   vec3 w; vec2 v1, v2, v3;
   ngHexGrid(uv, w, v1, v2, v3);
-  mat2 r1 = ngHexRot(v1, 3.1416), r2 = ngHexRot(v2, 3.1416), r3 = ngHexRot(v3, 3.1416);
+  mat2 r1 = ngHexRot(v1, rs), r2 = ngHexRot(v2, rs), r3 = ngHexRot(v3, rs);
   vec2 c1 = v1 / 3.46410162, c2 = v2 / 3.46410162, c3 = v3 / 3.46410162;
   vec2 u1 = r1 * (uv - c1) + c1 + ngHash22(v1), u2 = r2 * (uv - c2) + c2 + ngHash22(v2), u3 = r3 * (uv - c3) + c3 + ngHash22(v3);
   vec4 a1 = textureGrad(ngTerrA, vec3(u1, L), r1 * dx, r1 * dy);
@@ -197,7 +204,7 @@ void ngTerrSample(int Li, vec3 P, vec3 Ng, int mode, vec3 dX3, vec3 dY3, out vec
   vec2 uv = P.xz * s;
   vec4 B;
   if (mode == 1) {
-    ngTerrHex(L, uv, dPx * s, dPy * s, A, B);
+    ngTerrHex(L, ngTerrHexRot[Li], uv, dPx * s, dPy * s, A, B);
   } else {
     /* 2 スケール：0.31 倍に縮め 1.1rad 回した 2 枚目を重ねる（繰り返しの周期を 1 桁延ばす） */
     mat2 R = mat2(0.4536, 0.8912, -0.8912, 0.4536);
@@ -239,8 +246,8 @@ vec3 ngTerrShade(vec3 P) {
   vec2 xz = P.xz;
   vec3 dPx = dFdx(P), dPy = dFdy(P);
   vec3 Ng = ngTerrainN(xz);
-  float sd = ngShoreD(xz);
-  vec4 bed = ngBed(xz);
+  float sd = ngTerrShoreD(xz);
+  vec4 bed = ngTerrBed(xz);
   vec2 cn = ngCanopyAt(xz);
   float slope = sqrt(max(1.0 - Ng.y * Ng.y, 0.0)) / max(Ng.y, 0.05);
   float dist = distance(cameraPosition, P);
@@ -290,6 +297,8 @@ vec3 ngTerrShade(vec3 P) {
     ro = mix(mix(R1.x, R2.x, t), 0.9, farK);
     ao = mix(mix(R1.y, R2.y, t), 1.0, farK);
   }
+  /* 乾いた浜の砂は波紋を弱く（風紋ほど）。水中・濡れた所は強いまま */
+  N = normalize(mix(N, Ng, w[4] * smoothstep(-0.02, 0.15, P.y) * 0.85));
   /* 藻場：有機物の堆積で暗く緑褐色に */
   alb = mix(alb, alb * vec3(0.55, 0.62, 0.45), weed * 0.75);
   /* 水中の底は常に濡れている（砂ほど暗い） */
@@ -346,6 +355,8 @@ vec3 ngTerrShade(vec3 P) {
       alb = mix(c0, c1, k) * 0.5;
     } else if (dbg < 2.5) {
       alb = ngTerrDebugCol(float(i1)) * 0.4;
+    } else if (dbg > 4.5) {
+      alb = farC;
     } else if (dbg > 3.5) {
       alb = vec3(clamp(sd / 20.0, 0.0, 1.0), cn.x, clamp(-sd / 20.0, 0.0, 1.0)) * 0.4;
     } else {
@@ -394,7 +405,7 @@ export function terrainCoverRules(start, inland) {
 float ngGroundKind(vec3 p) {
   vec2 xz = p.xz;
   float w[8];
-  ngTerrWeights(p, ngTerrainN(xz), ngShoreD(xz), ngBed(xz), ngCanopyAt(xz),
+  ngTerrWeights(p, ngTerrainN(xz), ngTerrShoreD(xz), ngTerrBed(xz), ngCanopyAt(xz),
     ngTerrTrailAt(xz, vec4(${v(start.x)}, ${v(start.z)}, ${v(inland.x)}, ${v(inland.z)})), w);
   int best = 0; float bw = -1.0;
   for (int i = 0; i < 8; i++) if (w[i] > bw) { bw = w[i]; best = i; }

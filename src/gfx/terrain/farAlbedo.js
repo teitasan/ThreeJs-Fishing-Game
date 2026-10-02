@@ -34,12 +34,22 @@ void main() {
   vec2 xz = ngHfMapXf.z + vUv / ngHfMapXf.w;
   float y = ngTerrainH(xz);
   vec3 Ng = ngTerrainN(xz);
-  float sd = ngShoreD(xz);
+  float sd = ngTerrShoreD(xz);
   vec2 cn = ngCanopyAt(xz);
   float w[8];
-  ngTerrWeights(vec3(xz.x, y, xz.y), Ng, sd, ngBed(xz), cn, ngTerrTrailAt(xz, ngTerrDock), w);
+  ngTerrWeights(vec3(xz.x, y, xz.y), Ng, sd, ngTerrBed(xz), cn, ngTerrTrailAt(xz, ngTerrDock), w);
   vec3 c = vec3(0.0);
-  for (int i = 0; i < 8; i++) { vec3 a = textureLod(ngTerrA, vec3(0.5, 0.5, float(i)), ngTerrMaxLod).rgb; c += w[i] * a * a; }
+  /* 層の平均色：16² の段を 4×4 で読む（最後の 1×1 の段に頼らない） */
+  for (int i = 0; i < 8; i++) {
+    if (w[i] < 1e-3) continue;
+    vec3 a = vec3(0.0);
+    for (int k = 0; k < 16; k++) {
+      vec2 q = (vec2(float(k & 3), float(k >> 2)) + 0.5) * 0.25;
+      vec3 t = textureLod(ngTerrA, vec3(q, float(i)), ngTerrMaxLod - 4.0).rgb;
+      a += t * t;
+    }
+    c += w[i] * a / 16.0;
+  }
   float veg = w[0] * 0.4 + w[1] + w[2];
   vec4 m1 = textureLod(ngTerrMacro, xz * (1.0 / 23.0), 3.0);
   vec4 m2 = textureLod(ngTerrMacro, xz * (1.0 / 97.0) + 0.37, 1.0);
