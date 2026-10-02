@@ -64,10 +64,13 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     float speck = smoothstep(0.1, 0.03, ngWorley2P(p * vec2(40.0, 20.0) + 1.3, vec2(40.0, 20.0)).x) * step(0.8, ngHash12(floor(p * vec2(40.0, 20.0)))) * lichW;
     float lent = smoothstep(0.92, 1.0, ngFbmP(vec2(p.x * 3.0, p.y * 40.0), vec2(3.0, 40.0), 2));
     /* ブナの樹皮の反射率は 0.2–0.3（地衣の白でも 0.32 まで。前の 0.40 は岩より明るく、昼の林縁で幹が白く浮いた） */
-    col = vec3(0.215, 0.21, 0.195) * (0.86 + 0.24 * base);
-    col = mix(col, vec3(0.31, 0.31, 0.29) * (0.92 + 0.16 * fc), lichW * 0.85);
-    col = mix(col, vec3(0.20, 0.225, 0.17), lichG * 0.65);
-    col = mix(col, vec3(0.16, 0.155, 0.145), crust * 0.5);
+    /* 斑どうしの差は控えめ（前は 0.215 ↔ 0.31 の硬い斑が 3 層重なり迷彩柄に見えた）。細かい白い痂状の点を増やして «近くで見ると細かい» へ */
+    float dots = smoothstep(0.62, 0.7, ngFbmP(wp * vec2(28.0, 56.0) + 4.4, vec2(28.0, 56.0), 3));
+    col = vec3(0.225, 0.218, 0.2) * (0.88 + 0.2 * base);
+    col = mix(col, vec3(0.285, 0.282, 0.262) * (0.94 + 0.12 * fc), lichW * 0.6);
+    col = mix(col, vec3(0.215, 0.228, 0.185), lichG * 0.45);
+    col = mix(col, vec3(0.18, 0.172, 0.16), crust * 0.4);
+    col = mix(col, vec3(0.30, 0.30, 0.285), dots * 0.5);
     col = mix(col, vec3(0.10, 0.09, 0.08), speck * 0.6);
     col *= 1.0 - lent * 0.3;
     h = 0.5 + 0.12 * base + 0.12 * lichW + 0.08 * lichG + 0.05 * crust - lent * 0.2;
@@ -84,7 +87,8 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     float fl = ngFbmP(p * vec2(20.0, 8.0), vec2(20.0, 8.0), 4);
     h = ridge * (0.65 + 0.2 * fl) + 0.15 * fib;
     vec3 top = mix(vec3(0.21, 0.19, 0.16), vec3(0.27, 0.26, 0.23), smoothstep(0.55, 0.85, fl)) * (0.88 + 0.24 * w.z);
-    col = mix(vec3(0.075, 0.062, 0.05), top, smoothstep(0.05, 0.7, ridge));
+    /* 溝も 0.1 前後（3 倍の差は林内で黒い蛇の鱗に見えた） */
+    col = mix(vec3(0.105, 0.088, 0.07), top, smoothstep(0.0, 0.6, ridge));
     col *= 0.9 + 0.2 * fib;
     rough = 0.9;
   } else if (L == 4) {
@@ -122,7 +126,7 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     float b = abs(sin((q.x - q.y * 0.8 + 0.5 * ngFbmP(p * 4.0 + 3.0, vec2(4.0), 2)) * 3.14159));
     float ridge = smoothstep(0.15, 0.6, min(a, b) + 0.3 * ngFbmP(p * vec2(30.0, 6.0), vec2(30.0, 6.0), 2));
     h = ridge;
-    col = mix(vec3(0.08, 0.07, 0.06), vec3(0.20, 0.18, 0.15), ridge) * (0.9 + 0.2 * ngFbmP(p * 10.0, vec2(10.0), 2));
+    col = mix(vec3(0.105, 0.092, 0.078), vec3(0.20, 0.18, 0.15), ridge) * (0.9 + 0.2 * ngFbmP(p * 10.0, vec2(10.0), 2));
     rough = 0.9;
   } else {
     /* ハンノキ：灰褐色の滑らかな樹皮、横長の皮目 */
