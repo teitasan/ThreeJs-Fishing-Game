@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab: terrain（地形と湖底）</title>
+<!-- 相対 URL（assets/…・importmap）をリポジトリの根から解決する -->
+<base href="../">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="lab/_kit/lab.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/",
+    "postprocessing": "./vendor/postprocessing/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="lab-status">lab: loading</div>
+<script type="module">
+/* terrain の lab。terrain だけ担当者の index.js、残りは core のスタブ（または合流済みの本物） */
+import { bootLabPage } from './lab/_kit/page.js';
+/* ?stub=1 は terrain もスタブで起動する（置き換え前との重さの比べ：terrain-bench の STUB=1） */
+bootLabPage({ modules: new URLSearchParams(location.search).get('stub') === '1' ? [] : ['terrain'] });
+</script>
+</body>
+</html>
