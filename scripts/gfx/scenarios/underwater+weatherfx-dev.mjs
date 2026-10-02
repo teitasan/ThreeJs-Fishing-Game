@@ -12,6 +12,7 @@ export default async function (h) {
   if (process.env.NORAYS) await h.eval(() => { window.__ngUwNoRays = true; });
   if (process.env.UWDBG) await h.eval((d) => { window.__ngUwDbg = Number(d); }, process.env.UWDBG);
   if (process.env.PROBE) await h.eval((p) => { window.__probeUv = p.split(',').map(Number); }, process.env.PROBE);
+  if (process.env.PRE) await h.page.evaluate(process.env.PRE);
   const boot = await h.eval(() => {
     const L = window.__lab, g = L.gfx;
     const r = {};
@@ -70,6 +71,7 @@ export default async function (h) {
       return {
         nan: L.nanCheck(), uw: L.stats().uw, fx: fx ? { active: fx.active, rays: fx.raysOn, steps: fx.steps, P: fx.u.uP.value.toArray(), men: fx.u.uMen.value.toArray(), cs: fx.raysU.ngUwCs.value.toArray().map((v) => +v.toFixed(3)), keyE: fx.raysU.ngUwKeyE.value.toArray().map((v) => +v.toFixed(3)) } : null,
         post: post?.stats?.()?.underwaterEffect ?? null,
+        wfx: L.gfx.modules.get('weatherfx')?.stats?.() ?? null,
         rays: (() => {
           if (!fx?.raysOn) return null;
           const rt = fx.rt, n = rt.width * rt.height * 4, buf = new Uint16Array(n);

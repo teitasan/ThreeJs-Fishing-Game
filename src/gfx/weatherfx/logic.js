@@ -8,7 +8,7 @@
    - 水面への雨粒の衝撃：フレーム番号と粒の番号のハッシュで決まる点（マルチで一致）
    =========================================================== */
 
-export const RAIN = Object.freeze({ R: 25, H: 20, below: 7, vMin: 6.0, vSpan: 3.0, windCarry: 0.75 });
+export const RAIN = Object.freeze({ R: 25, RN: 9, nearFrac: 0.5, H: 20, below: 7, vMin: 6.0, vSpan: 3.0, windCarry: 0.75 });
 
 const fract = (x) => x - Math.floor(x);
 const wrap = (v, lo, span) => lo + (((v - lo) % span) + span) % span;
@@ -23,12 +23,13 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
  * @returns {{x:number,y:number,z:number,v:number}}
  */
 export function rainDrop(s, t, cam, w) {
-  const { R, H, below, vMin, vSpan } = RAIN;
+  const { H, below, vMin, vSpan } = RAIN;
+  const R = fract(s[3] * 37.13) < RAIN.nearFrac ? RAIN.RN : RAIN.R;   // 半分は内側の円柱
   const v = vMin + vSpan * s[3];
   const x = wrap(s[0] * 2 * R + w.x * t, cam.x - R, 2 * R);
   const z = wrap(s[1] * 2 * R + w.z * t, cam.z - R, 2 * R);
   const y = wrap(s[2] * H - v * t, cam.y - below, H);
-  return { x, y, z, v };
+  return { x, y, z, v, R };
 }
 
 /**

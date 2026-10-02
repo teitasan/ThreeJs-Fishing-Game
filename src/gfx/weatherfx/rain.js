@@ -66,13 +66,16 @@ void main() {
   vec3 c = cameraPosition;
   vec4 W0 = ngWindAt(c.xz);
   vec2 w = W0.xy * W0.z * ngRnDock2.z;
+  /* 半分の粒は内側の円柱（半径 ${fx(RAIN.RN)}m）：画面に効くのは近くの筋なので、近くを濃く */
+  float Ri = fract(aSeed.w * 37.13) < ${fx(RAIN.nearFrac)} ? ${fx(RAIN.RN)} : R;
   vec3 P;
-  P.x = c.x - R + mod(aSeed.x * 2.0 * R + w.x * t - (c.x - R), 2.0 * R);
-  P.z = c.z - R + mod(aSeed.y * 2.0 * R + w.y * t - (c.z - R), 2.0 * R);
+  P.x = c.x - Ri + mod(aSeed.x * 2.0 * Ri + w.x * t - (c.x - Ri), 2.0 * Ri);
+  P.z = c.z - Ri + mod(aSeed.y * 2.0 * Ri + w.y * t - (c.z - Ri), 2.0 * Ri);
   P.y = c.y - BELOW + mod(aSeed.z * H - v * t - (c.y - BELOW), H);
   /* 雨の強さで本数を間引く（弱い雨 = 少ない粒）・円柱の外は描かない */
   float pick = fract(aSeed.x * 91.7 + aSeed.z * 13.1 + aSeed.w * 7.3);
-  float keep = step(pick, ngRnA.y) * step(length(P.xz - c.xz), R);
+  float rh = length(P.xz - c.xz);
+  float keep = step(pick, ngRnA.y) * step(rh, Ri);
   /* 地面・水面より下、桟橋の下、樹冠の下（密度の確率） */
   float gy = ngTerrainH(P.xz);
   keep *= step(max(gy, 0.0), P.y);
@@ -90,18 +93,20 @@ void main() {
   vec3 side = cross(ax, vd);
   float sl = length(side);
   side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);
-  float len = spd * (1.0 / 60.0) * 1.6;
+  /* 長さ：1/40s のシャッター相当（映画の雨の見え方）。幅は 1.6mm を 1.1 画素で下限、覆う割合は平方根で圧縮
+     （物理の面積比のままだと 10m 先の筋の α が 0.02 で雨が見えない。遠くほど «粒の重なり» で太く見えるのを近似） */
+  float len = spd * (1.0 / 40.0) * 1.15;
   float pxW = dist / max(ngRnA.z, 1.0);
   float wW = max(0.0016, pxW * 1.1);
-  float cover = 0.0016 / wW;
+  float cover = sqrt(0.0016 / wW);
   vec3 pos = P + ax * (position.y - 0.5) * len + side * position.x * wW;
   vQ = position.xy;
   vec4 mvPosition = viewMatrix * vec4(pos, 1.0);
   gl_Position = keep > 0.5 ? projectionMatrix * mvPosition : vec4(2.0, 2.0, 2.0, 1.0);
   /* 近すぎる粒（レンズの前を横切る）と円柱の上下の縁は薄く */
   float near = smoothstep(0.35, 1.4, dist);
-  float edge = smoothstep(0.0, 1.5, P.y - (c.y - BELOW)) * (1.0 - smoothstep(H - 3.0, H, P.y - (c.y - BELOW)));
-  vA = keep * near * edge * cover * mix(0.16, 0.34, aSeed.w);
+  float edge = smoothstep(0.0, 1.5, P.y - (c.y - BELOW)) * (1.0 - smoothstep(H - 3.0, H, P.y - (c.y - BELOW))) * (1.0 - smoothstep(0.8 * Ri, Ri, rh));
+  vA = keep * near * edge * cover * mix(0.20, 0.42, aSeed.w);
   vCol = ngRnLight(P, vd);
   #include <fog_vertex>
 }
@@ -190,14 +195,19 @@ void main() {
   float r = 0.25 + 0.75 * sqrt(u);
   float hc = 0.75 * sin(3.14159 * min(u * 1.3, 1.0));
   float x = vQ.x, y = vQ.y;
-  float wall = smoothstep(0.16, 0.0, abs(abs(x) - r * 0.9)) * step(y, hc) * (0.4 + 0.6 * y / max(hc, 0.05));
+  /* 縁は柔らかく（ガウス）：数画素の板で硬い縁を出すと «白い括弧» の記号に見える */
+  float dw = abs(abs(x) - r * 0.85) / 0.14;
+  float wall = exp(-dw * dw) * smoothstep(hc + 0.08, hc - 0.12, y) * (0.25 + 0.75 * clamp(y / max(hc, 0.05), 0.0, 1.0));
   float drops = 0.0;
   for (int i = 0; i < 5; i++) {
     float fi = float(i);
     vec2 dp = vec2((fi - 2.0) * 0.42 * r, hc + 0.12 + 0.25 * u * (1.0 - abs(fi - 2.0) * 0.3));
-    drops += smoothstep(0.11, 0.03, length(vec2(x, y) - dp));
+    vec2 dd = (vec2(x, y) - dp) / 0.07;
+    drops += exp(-dot(dd, dd)) * 0.7;
   }
-  float a = clamp(wall + drops, 0.0, 1.0) * (1.0 - smoothstep(0.55, 1.0, u)) * vA * 0.55;
+  /* 足もとの濡れた輪（地面に寝た明るい楕円。見下ろすと王冠より目立つ） */
+  float ring = exp(-pow((length(vec2(x, y * 5.0)) - r) / 0.12, 2.0)) * step(y, 0.12);
+  float a = clamp(wall + drops + ring * 0.5, 0.0, 1.0) * (1.0 - smoothstep(0.45, 1.0, u)) * vA * 0.32;
   if (a < 1e-3) discard;
   gl_FragColor = vec4(vCol * 1.3, 1.0);
   #include <fog_fragment>
@@ -238,9 +248,10 @@ void main() {
   float az = atan(vDir.z, vDir.x) / 6.2831853;
   vec2 wd = ngWindDir * ngWindSpeed;
   /* 縦に流れる筋（下へ 9m/s、風で横へ）。2 つの尺度 */
-  vec2 uv = vec2(az * ngRnRadius / 7.0 + ngRnA.x * dot(wd, vec2(-vDir.z, vDir.x)) / 7.0, (vH + ngRnA.x * 9.0) / 26.0);
+  /* 1 周期 = 横 18m・縦 26m（ノイズは横 24 セル = 幕の筋 0.75m。細かすぎると遠景に «櫛» の模様が出る） */
+  vec2 uv = vec2(az * ngRnRadius / 18.0 + ngRnA.x * dot(wd, vec2(-vDir.z, vDir.x)) / 18.0, (vH + ngRnA.x * 9.0) / 26.0);
   float n = texture(ngRnNoise, uv).r * 0.65 + texture(ngRnNoise, uv * vec2(2.3, 1.7) + 0.37).g * 0.35;
-  float a = rain * (0.07 + 0.11 * n) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(30.0, 55.0, vH));
+  float a = rain * (0.08 + 0.07 * n) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(30.0, 55.0, vH));
   /* 地形に刺さる縁を消す（不透明の深度との差でソフト） */
   float zs = texture(ngSceneDepth, gl_FragCoord.xy * ngScreen.zw).r;
   float zf = gl_FragCoord.z / gl_FragCoord.w;
@@ -283,7 +294,8 @@ export class Rain {
       key: 'weatherfx-rain', module: 'weatherfx', lights: false, fog: true,
       uniforms: { ...this.u, ...ctx.heightfield.uniforms, ngSceneColor: ctx.pipeline.uniforms.ngSceneColor, ngScreen: ctx.pipeline.uniforms.ngScreen },
       vertexShader: STREAK_VS, fragmentShader: STREAK_FS,
-      transparent: true, depthWrite: false, depthTest: true, blending: T.CustomBlending,
+      /* 両面：筋の四角の巻き方は (side, ax) で決まり、視線に対して裏になる（片面だと 1 本も描かれない） */
+      transparent: true, depthWrite: false, depthTest: true, side: T.DoubleSide, blending: T.CustomBlending,
       blendSrc: T.OneFactor, blendDst: T.OneMinusSrcAlphaFactor, blendEquation: T.AddEquation,
     });
     this.streakMesh = this._mesh(T, this.streaks, this.streakMat, 'ng-wfx-rain', root);
