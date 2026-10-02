@@ -279,6 +279,7 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
   float pw = 0.35 * (1.0 - muL);
   float T = 1.0, tW = 0.0, wS = 0.0;
   vec3 Lc = vec3(0.0);
+  float nsw = smoothstep(0.7, 1.0, uCloud.w) * smoothstep(0.3, 0.8, uLight.w);
   if (uMode.w > 0.5) {
     /* low：雲の層の中ほどで 1 回だけ読む 2D の層 */
     float tm = t0 + 0.5 * len;
@@ -290,13 +291,13 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
     T = exp(-tau);
     vec3 amb = mix(uAmbBot, uAmbTop, 0.6) * mix(1.0, 0.45, uLight.w);
     Lc = (E * ngCloudMS(ph, tauL) * mix(1.0, 1.0 - exp(-2.5 * (tauL + 0.15)), pw) + amb) * (1.0 - T);
+    if (nsw > 0.0) Lc *= mix(1.0, mix(1.45, 0.55, ngSkyNimboField(P.xz)), nsw);
     tW = tm; wS = 1.0;
   } else {
     /* 段数は «層の中の道のり / 目標の歩幅»（近い所 45m → 遠い所 0.5km）を 16..uMode.x に。
        空の所は 2 倍の歩幅で進み、雲に当たったら半歩戻って細かく（Schneider 2015）。
        光の向きは uMode.y − 1 回の形の密度 + 1 回の被覆だけの遠い見積もり（2.4km 先まで） */
     float NMAX = uMode.x;
-    float nsw = smoothstep(0.7, 1.0, uCloud.w) * smoothstep(0.3, 0.8, uLight.w);
     float nimbo = 0.5;
     if (nsw > 0.0) {
       vec3 Pb = vec3(0.0, r0, 0.0) + d * t0;
