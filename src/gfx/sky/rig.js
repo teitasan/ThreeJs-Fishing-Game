@@ -24,7 +24,9 @@ export const NIGHT_FLOOR = Object.freeze([0.00024, 0.00040, 0.00084]);
     月の空の項・月の key・雲を照らす月の光に掛ける */
 /** 月が照らす空の明るさの倍率（key の月光はそのまま）。物理の比のままだと露出 ×22 の夜空が «昼の空を暗くしただけ»
  *  の明るい青になる（天頂 ≈ 2.5 × #0b1426）。空だけ半分にして、月明かりの地面と暗い夜空の対比を作る */
-export const MOON_SKY = 0.38;
+export const MOON_SKY = 0.55;
+/** 夜の地面への空の光の上乗せ（SH・AMB だけ。rig.step の _nf） */
+export const NIGHT_FILL = 1.0;
 /** 月が照らす空の項の色（key の MOON_TINT とは別）。Rayleigh がすでに青くするので、ここで青を重ねると AgX の後で R が 0 に潰れた
  *  «青のベタ塗り» になる（23:30 の天頂 #011e45）。ほぼ中立にして、表示で #0b1426 に近い色度（リニア 0.70, 0.99, 1.98）に */
 export const MOON_SKY_TINT = Object.freeze((() => { const c = [0.97, 1.0, 1.06]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
@@ -273,6 +275,9 @@ export class SkyRig {
     const sunSky = smooth(-0.40, -0.05, s[1]), moonSky = smooth(-0.40, -0.05, -s[1]);
     const p = this.p;
     const gTw = this.twilightGain(s[1]);
+    /* 夜の «月明かりの埋め»：地面が受ける空の光（SH・AMB）だけを夜に NIGHT_FILL 倍。見える夜空（#0b1426 の暗さ）は変えずに、
+       影の森・岸が黒く潰れない（art-metrics の crush・真夜中 / 真昼の比）。−3° より上（ブルーアワー）は 1 */
+    this._nf = 1 + NIGHT_FILL * smooth(-0.05, -0.20, s[1]);
     p.eS0 = this.Etop * sunSky;
     for (let k = 0; k < 3; k++) {
       p.eS[k] = this.Etop * this.sunCol[k] * sunSky * gTw[k];
@@ -318,6 +323,23 @@ export class SkyRig {
       this.rr = (this.rr + 1) % n;
     }
     this._filled = true;
+    /* 雲の環境光（上 = 空の半球照度 / π × 0.55 + 夜の底、下 = 地面の照り返し）。厚い甲板では色度を中立へ */
+    const amb = () => {
+      const up = this.skyUp;
+      for (let k = 0; k < 3; k++) p.ambTop[k] = (Math.max(up[k], upT[k]) / Math.PI) * 0.55 + NIGHT_FLOOR[k];
+      for (let k = 0; k < 3; k++) p.ambBot[k] = ATMO.albedo * (E[k] * Math.max(kd[1], 0) + up[k]) / Math.PI;
+      desat(p.ambTop, dsat, p.ambTop);
+      desat(p.ambBot, dsat, p.ambBot);
+    };
+    /* 跳びでは雲の模型が «前の時刻の» 環境光で光る（_cloudy → SH → 環境光 の輪が 0.25s ごとにしか回らない）。
+       正午から 23:30 へ跳ぶと夜空の照度が 15 倍のまま残り、撮る順で夜の明るさが変わった。跳びでは輪を先に 4 回回す（2 回では 9% 残った） */
+    if (jumped) {
+      for (let it = 0; it < 4; it++) {
+        for (let i = 0; i < n; i++) this._cloudy(i, wp, Tcl, D);
+        this._projectSH(E, kd, wp);
+        amb();
+      }
+    }
     /* 雲を見かけの模型で重ねる（SH・地平・ファサード）。GPU の空が戻っていれば上半球はその値（雲パノラマそのもの） */
     for (let i = 0; i < n; i++) this._cloudy(i, wp, Tcl, D);
     if (this.gpuSky && this.gpuAge < 2) this._fromGpu();
@@ -328,11 +350,7 @@ export class SkyRig {
       this._projectSH(E, kd, wp);
     }
     const up = this.skyUp;
-    /* 雲の上の空（雲の環境光）：空の半球照度 / π × 0.75（雲の中では上の雲が遮る）+ 夜の底 */
-    for (let k = 0; k < 3; k++) p.ambTop[k] = (Math.max(this.skyUp[k], upT[k]) / Math.PI) * 0.55 + NIGHT_FLOOR[k];
-    desat(p.ambTop, dsat, p.ambTop);
-    desat(p.ambBot, dsat, p.ambBot);
-    for (let k = 0; k < 3; k++) p.ambBot[k] = ATMO.albedo * (E[k] * Math.max(kd[1], 0) + up[k]) / Math.PI;
+    amb();
     /* 媒質（core の ngApplyMedium）：Rayleigh・谷の霞（雨で 2 倍以上）・朝霧 */
     const bM = 3.5e-5 * (1 + 1.5 * cloud + 3.5 * rain);
     set4(F, NG.BETA_R, ATMO.betaR[0], ATMO.betaR[1], ATMO.betaR[2], ATMO.HR);
@@ -341,7 +359,8 @@ export class SkyRig {
     set4(F, NG.KEY, kd[0], kd[1], kd[2], night);
     set4(F, NG.KEYRAD, E[0], E[1], E[2], s[1]);
     set4(F, NG.SUN, s[0], s[1], s[2], useSun ? 0 : gate);
-    set4(F, NG.AMB, up[0] / Math.PI, up[1] / Math.PI, up[2] / Math.PI, cloud);
+    const nf = this._nf;
+    set4(F, NG.AMB, up[0] * nf / Math.PI, up[1] * nf / Math.PI, up[2] * nf / Math.PI, cloud);
     /* 雲影と雲（24h 周期の円を回る） */
     const a = (h / 24) * Math.PI * 2;
     set4(F, NG.CLOUDSH, Math.cos(a) * CLOUD_R, Math.sin(a) * CLOUD_R, 1 / 900, wp.shadow);
@@ -350,6 +369,8 @@ export class SkyRig {
     /* 日の出（6:00）の直後に最大：深い薄明（5:30、太陽 −7°）では反対の低い月に照らされた灰白の帯になった */
     const dawn = smooth(5.2, 6.15, h) * (1 - smooth(6.15, 8.0, h));
     const wetTarget = rain > 0.1 ? 1 : 0;
+    /* 跳び（時刻・天候の瞬間の切り替え）では濡れも即座に合わせる：前の雨の濡れが残ると晴れの夜の地面が黒く潰れた（撮影の順で結果が変わった） */
+    if (jumped) { this.wet = wetTarget; this.puddle = wetTarget; }
     this.wet += (wetTarget - this.wet) * (1 - Math.exp(-dt / (wetTarget > this.wet ? 10 : 60)));
     this.puddle += (this.wet - this.puddle) * (1 - Math.exp(-dt / (this.wet > this.puddle ? 25 : 120)));
     if (!Number.isFinite(this.wet)) this.wet = 0;
@@ -501,6 +522,8 @@ export class SkyRig {
       shBasis(d[0], d[1], d[2], b);
       for (let c = 0; c < 9; c++) { sh[c * 3] += L[0] * b[c] * w; sh[c * 3 + 1] += L[1] * b[c] * w; sh[c * 3 + 2] += L[2] * b[c] * w; }
     }
+    const nf = this._nf || 1;
+    if (nf !== 1) for (let c = 0; c < 27; c++) sh[c] *= nf;
   }
 
   /**

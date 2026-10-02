@@ -146,4 +146,21 @@ for (const n of [16, 24, 32]) {
   check(adj === 0, `stripAt(${n}) が隣の帯を続けて描く ${adj}`);
 }
 
+/* 履歴に依らない：跳びの後の夜空の照度・濡れが、前の時刻・天候（正午の晴れ / 夕方の雨 / 夜）に依らない（r3 で正午 → 23:30 が 15 倍明るかった） */
+{
+  const after = (prev) => {
+    const r = new SkyRig();
+    for (const _ of r.buildTwilight()) { /* 最後まで */ }
+    const run = (h, w, k) => { const sd = sunDirAt(h); for (let i = 0; i < k; i++) r.step({ dt: 1 / 60, hour: h, weather: w, sunDir: { x: sd[0], y: sd[1], z: sd[2] }, envTime: h * 3600 + i / 60 }, F); };
+    run(prev[0], prev[1], 30);
+    run(23.5, W.clear, 5);
+    return { up: ngLuminance(...r.skyUp), wet: r.wet };
+  };
+  const ref = after([23.5, W.clear]);
+  for (const prev of [[12.5, W.clear], [18.9, W.rain], [6.2, W.cloudy]]) {
+    const o = after(prev);
+    check(Math.abs(o.up / ref.up - 1) < 0.05 && o.wet < 0.01, `跳びの後の 23:30 の空の照度が履歴に依らない（前 ${prev[0]}：${(o.up / ref.up).toFixed(3)} 倍、濡れ ${o.wet.toFixed(3)}）`);
+  }
+}
+
 done('sky-rig');
