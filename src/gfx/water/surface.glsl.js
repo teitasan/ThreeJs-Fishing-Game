@@ -71,12 +71,12 @@ float ngWaterWindy(float Ug) { return smoothstep(1.5, 4.6, Ug); }
 /* 細かいカスケード（λ 1.7cm–36cm、単位の σ ≈ 0.17）：凪の所は σ ≈ 0.003 の鏡、斑の中は σ ≈ 0.05 */
 float ngWaterFineAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
-  return 0.018 + 0.30 * pt + wy * (0.25 + 0.35 * pt) + 0.5 * rain;
+  return 0.018 + 0.35 * pt + wy * (0.10 + 0.45 * pt) + 0.25 * rain;
 }
 /* 粗いカスケード（λ 36cm–4.5m、単位の σ ≈ 0.08） */
 float ngWaterCoarseAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
-  return 0.05 + 0.16 * pt + wy * 0.45 + 0.25 * rain;
+  return 0.05 + 0.45 * pt + wy * (0.25 + 0.3 * pt) + 0.12 * rain;
 }
 `;
 
@@ -191,6 +191,42 @@ vec2 ngRippleSlope(vec2 p) {
   return g;
 }
 
+
+/* 雨の輪（水面用。core の ngRainRings より大きく、輪の列が 2–3 本走る）。3 層のハッシュセル 0.45/0.8/1.4m、
+   セルごとに 0.6–1.1 秒に 1 滴。輪の波長が画素の足跡の 2 倍より細い層は、平均の勾配から抜いて分散へ（遠くで砂嵐にしない） */
+vec2 ngWaterRain(vec2 xz, float t, float rain, float fp, out float var) {
+  vec2 g = vec2(0.0);
+  var = 0.0;
+  if (rain < 0.01) return g;
+  for (int k = 0; k < 3; k++) {
+    float s = k == 0 ? 0.45 : k == 1 ? 0.8 : 1.4;
+    vec2 q = xz / s + float(k) * 17.3;
+    vec2 cell = floor(q);
+    vec2 h = ngHash22(cell);
+    if (ngHash12(cell + 5.1) > rain * (0.55 + 0.45 * float(k == 0))) continue;
+    float P = 0.6 + 0.5 * h.y;
+    float ph = t / P + h.x;
+    float age = fract(ph);
+    vec2 c = cell + 0.3 + 0.4 * ngHash22(cell + floor(ph));
+    vec2 dv = (q - c) * s;                                   // m
+    float d = length(dv);
+    float r = age * P * 0.32;                                // 0.32 m/s で広がる
+    float lam = 0.03 + 0.035 * age * (0.6 + 0.4 * float(k));
+    float x = d - r;
+    float sig = 1.6 * lam;
+    if (abs(x) > 2.6 * sig || d > 0.5 * s) continue;
+    float A = 0.0016 * (1.0 - age) * (1.0 - age) * (0.7 + 0.3 * float(k)) / (1.0 + 4.0 * r);
+    float kk = 6.2831853 / lam;
+    float env = exp(-(x * x) / (sig * sig));
+    float edge = 1.0 - smoothstep(0.35 * s, 0.5 * s, d);
+    float sl = -A * env * edge * (kk * sin(kk * x) + 2.0 * x / (sig * sig) * cos(kk * x));
+    float fade = smoothstep(0.35 * lam, 0.9 * lam, fp);
+    g += (1.0 - fade) * sl * dv / max(d, 1e-4);
+    var += fade * 0.5 * (A * kk) * (A * kk) * env * edge;
+  }
+  return g;
+}
+
 /* 波紋シミュ（high）：世界に固定した繰り返しの格子（窓の中だけ有効）。中央差分の勾配 */
 vec2 ngSimSlope(vec2 p) {
   if (uSimXf.w < 0.5 || uDbg.w > 1.5) return vec2(0.0);
@@ -268,12 +304,13 @@ void main() {
     var += a2 * a2 * max(f2.z - dot(f2.xy, f2.xy), 0.0);
   }
   sl += sd.x * wd + sd.y * wp;
-  vec2 ring = ngRippleSlope(p) + ngSimSlope(p) + ngRainRings(p, ngEnvTime, rain) * 2.4;
+  float varR = 0.0;
+  vec2 ring = ngRippleSlope(p) + ngSimSlope(p) + ngWaterRain(p, ngEnvTime, rain, fpX, varR);
   sl += ring;
   /* 鏡面の AA：輪・シミュ・雨は画面の微分から «画素に解けない» 勾配の分散（波は上で 1 本ずつ LEAN 済み） */
   vec2 dsx = dFdx(ring), dsy = dFdy(ring);
   float varGeo = min(0.5 * (dot(dsx, dsx) + dot(dsy, dsy)), 0.03);
-  float a2r = 0.0015 * 0.0015 + var + varW + varGeo + 0.004 * rain;
+  float a2r = 0.0015 * 0.0015 + var + varW + varR + varGeo + 0.002 * rain;
   float alpha = sqrt(a2r);
   vec3 N = normalize(vec3(-sl.x, 1.0, -sl.y));
   vec3 col;
@@ -282,6 +319,9 @@ void main() {
     float NoV = max(dot(N, V), 1e-4);
     /* ---- 屈折（sceneColor）と水柱 ---- */
     float sceneZ = texture(ngSceneDepth, suv).r;
+    /* 不透明の深度が水面より手前 = MSAA の縁の画素（桟橋・手すりの輪郭）。水柱を «深い» 扱いにして
+       泡・汀の F → 0 を出さない（以前は輪郭に沿って泡のざらつきが出ていた） */
+    if (sceneZ < vViewZ - 0.02) sceneZ = vViewZ + 50.0;
     float thickZ = max(sceneZ - vViewZ, 0.0);
     float path = thickZ * dist / max(vViewZ, 1e-3);          // 視線に沿った水中の長さ
     float colW = path * max(V.y, 0.02);                       // 水柱（平らな底の近似の深さ）
@@ -378,7 +418,11 @@ void main() {
 
     /* ---- 浅場の散乱（水の体の淡い青緑。日の当たる所だけ少し明るく） ---- */
     float lit = 0.35 + 0.65 * vis;
-    vec3 scat = (1.0 - F) * ngWaterInsc * (0.10 * lit) * smoothstep(0.02, 0.5, colW) * exp(-0.06 * path);
+    /* 浅場の淡い青緑：日の当たる浅い所ほど（0.3–3m の水柱）、底で返った光が水の体を照らす分。
+       色は水の内散乱を緑へ寄せる（赤が先に吸われ、湖の植物プランクトンの緑）。深場は媒質の色に任せる */
+    vec3 tealC = ngWaterInsc * vec3(0.55, 1.18, 0.80);
+    float shallowW = smoothstep(0.05, 0.6, colW) * (0.35 + 0.65 * exp(-colW / 2.5));
+    vec3 scat = (1.0 - F) * tealC * (0.16 * lit) * shallowW * exp(-0.05 * path);
 
     col = mix(refr, refl, F) + (spec + scat) * vSegT;
 
@@ -400,16 +444,20 @@ void main() {
     /* ---- 裏：水中から見上げる。スネルの窓 ---- */
     vec3 n = -N;
     vec3 I = -V;
-    vec3 t = refract(I, n, 1.333);
-    vec3 win;
-    float cosI = max(dot(-I, n), 0.0);
-    if (dot(t, t) < 1e-5) {
-      /* 全反射：水の散乱色と暗い湖底の映り（深いほど暗い） */
-      win = ngWaterInsc * 0.85 + texture(ngSceneColor, suv).rgb * 0.04;
-    } else {
-      float Fr = NG_F0 + (1.0 - NG_F0) * pow(1.0 - cosI, 5.0);
-      Fr = clamp(Fr, 0.0, 1.0);
-      vec3 tt = normalize(t);
+    /* 窓の縁：sinθ_空気 = 1.333·sinθ_水 が 1 に届く所（臨界角 48.6°）。Fresnel は «薄い側» の角（cosT）の Schlick なので
+       縁で連続に 1 へ上がる。縁の幅は粗さと画素の微分で広げる（細波で縁が点々に砕けてちらつかない） */
+    float sinI = length(cross(I, n));
+    float sinT = 1.333 * sinI;
+    float cosT = sqrt(max(1.0 - sinT * sinT, 0.0));
+    float Fr = NG_F0 + (1.0 - NG_F0) * pow(1.0 - cosT, 5.0);
+    float wEdge = 0.012 + 0.6 * alpha + fwidth(sinT);
+    float tir = smoothstep(1.0 - wEdge, 1.0 + wEdge, sinT);
+    /* 全反射の色：水の中を遠くまで見た色（内散乱）に、湖底の暗い映りを少し */
+    vec3 tirC = ngWaterInsc * 0.85 + texture(ngSceneColor, suv).rgb * 0.04;
+    vec3 win = tirC;
+    if (tir < 0.999) {
+      vec3 tt = refract(I, n, 1.333);
+      tt = dot(tt, tt) < 1e-5 ? normalize(vec3(I.x, 0.02, I.z)) : normalize(tt);
       vec2 tuv = ngToScreen(vWorld + tt * 30.0);
       vec3 above = ngSkySpecular(tt, clamp(alpha * 3.0, 0.0, 1.0));
       if (tuv.x > 0.0 && tuv.x < 1.0 && tuv.y > 0.0 && tuv.y < 1.0) {
@@ -417,9 +465,7 @@ void main() {
         vec3 sc = textureLod(ngSceneColor, tuv, clamp(alpha * 20.0, 0.0, ngCopyMips)).rgb;
         if (z > vViewZ * 0.98) above = sc;                     // 手前（水中）の物を拾わない
       }
-      /* 窓の縁（臨界角の近く）は Fresnel で全反射の色へ、縁の明るい輪 */
-      float rim = smoothstep(0.62, 0.745, length(cross(I, n)));
-      win = mix(above, ngWaterInsc * 0.85, Fr) * (1.0 + 0.5 * rim);
+      win = mix(mix(above, tirC, clamp(Fr, 0.0, 1.0)), tirC, tir);
     }
     col = win * vSegT + vSegL;
   }

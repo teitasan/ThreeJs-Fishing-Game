@@ -128,6 +128,8 @@ export default async function (h) {
       }
       if (typeof c === 'string') { const pp = { ...P[c] }; delete pp.hour; delete pp.weather; L.cam(pp); } else L.cam(c);
       L.view(o.view || null);
+      if (!L._fov0) L._fov0 = L.camera.fov;
+      L.camera.fov = o.fov || L._fov0; L.camera.updateProjectionMatrix();
       L.tick(o.settle ?? 90, 1 / 60);
       if (o.pre) (new Function('L', 'm', o.pre))(L, m);
       L.freeze();
@@ -148,7 +150,24 @@ export default async function (h) {
     for (let k = 0; k < 4; k++) { m.addRipple(x, z, 1.0, 2.6); L.tick(48, 1 / 60); }
     m.addRipple(x + 0.9, z - 0.6, 2.2, 3.0); L.tick(30, 1 / 60);`;
 
-  if (set === 'hi') {
+  if (process.env.ONLY) {
+    /* 開発用：ONLY=名前,名前 で full の一部だけ */
+    const want = new Set(process.env.ONLY.split(','));
+    const all = {
+      'rain-rings-close': { cam: 'rel:2.8:0.4:2.7:6.0:0.8:-1.6', hour: 11, weather: 'rain' },
+      'bobber-rings': { cam: 'rel:2.8:0:2.7:6.5:0:-1.4', hour: 10, pre: BOB, settle: 10 },
+      'snell-window': { cam: 'rel:9:3:-2.4:9.05:3:2', hour: 12.5, fov: 115 },
+      'snell-window-oblique': { cam: 'rel:9:3:-1.6:16:3:1.5', hour: 12.5, fov: 75 },
+      'mirror-0900': { cam: 'morning-fp', hour: 9 },
+      'golden-1730': { cam: 'sun:0:4', hour: 17.5 },
+      'noon-fp-down': { cam: 'noon-fp-down', hour: 12.5 },
+      'gust-clear-1000': { cam: 'rel:-2:0:9:60:10:0', hour: 10 },
+      'rain-fp': { cam: 'rain-fp', hour: 11, weather: 'rain' },
+      'moon-1930': { cam: 'moon:0:5', hour: 19.5 },
+      'noon-shore': { cam: 'noon-shore', hour: 13 },
+    };
+    for (const [k, v] of Object.entries(all)) if (want.has(k)) await shot(k, v);
+  } else if (set === 'hi') {
     await shot('hi-golden-1730', { cam: 'sun:0:4', hour: 17.5 });
     await shot('hi-mirror-0900', { cam: 'morning-fp', hour: 9 });
     await shot('hi-noon-fp-down', { cam: 'noon-fp-down', hour: 12.5 });
@@ -165,9 +184,10 @@ export default async function (h) {
     await shot('noon-fp-down', { cam: 'noon-fp-down', hour: 12.5 });
     await shot('noon-shore', { cam: 'noon-shore', hour: 13 });
     await shot('rain-fp', { cam: 'rain-fp', hour: 11, weather: 'rain' });
-    await shot('rain-rings-close', { cam: 'rel:0:0:2.6:3.5:0:0', hour: 11, weather: 'rain' });
-    await shot('bobber-rings', { cam: 'rel:0:0:2.6:7:0:0', hour: 10, pre: BOB, settle: 10 });
-    await shot('snell-window', { cam: 'rel:8:3:-2.2:9:3.6:2', hour: 12.5 });
+    await shot('rain-rings-close', { cam: 'rel:2.8:0.4:2.7:6.0:0.8:-1.6', hour: 11, weather: 'rain' });
+    await shot('bobber-rings', { cam: 'rel:2.8:0:2.7:6.5:0:-1.4', hour: 10, pre: BOB, settle: 10 });
+    await shot('snell-window', { cam: 'rel:9:3:-2.4:9.05:3:2', hour: 12.5, fov: 115 });
+    await shot('snell-window-oblique', { cam: 'rel:9:3:-1.6:16:3:1.5', hour: 12.5, fov: 75 });
     await shot('waterline', { cam: 'waterline', hour: 12.5 });
     await shot('night-lamp-2230', { cam: 'night-fp', hour: 22.5 });
     await shot('dusk-3p', { cam: 'dusk-3p', hour: 18.3 });
@@ -176,11 +196,11 @@ export default async function (h) {
       await shot(`${t}-golden-1730`, { cam: 'sun:0:4', hour: 17.5, tier: t });
       await shot(`${t}-noon-fp-down`, { cam: 'noon-fp-down', hour: 12.5, tier: t });
     }
-    await h.eval(() => window.__lab.setTier('high'));
+    await h.eval(() => { const L = window.__lab; L.setTier('high'); L.camera.fov = L._fov0 || L.camera.fov; L.camera.updateProjectionMatrix(); });
   }
 
   /* 黄金時間のきらめきの時間方向のちらつき（1/60s 離れた 2 枚。露出と DRS は止めたまま時間だけ進める） */
-  for (const t of (set === 'hi' ? ['high'] : set === 'full' ? ['high', 'mid', 'low'] : [])) {
+  for (const t of (process.env.ONLY ? [] : set === 'hi' ? ['high'] : set === 'full' ? ['high', 'mid', 'low'] : [])) {
     await h.eval((t) => {
       const L = window.__lab;
       if (L.gfx.quality.tier !== t) L.setTier(t);
@@ -196,7 +216,7 @@ export default async function (h) {
   }
 
   /* 読み戻し：深場（桟橋の先 + 10m）と浅場（汀線の 2–5m 内側）を 3 段で */
-  if (set !== 'hi') {
+  if (set !== 'hi' && !process.env.ONLY) {
     const sites = await h.eval(() => {
       const L = window.__lab, lake = L.lake, D = L.presets()['dock-fp'];
       const fx = D.target[0] - D.pos[0], fz = D.target[2] - D.pos[2], l = Math.hypot(fx, fz);
