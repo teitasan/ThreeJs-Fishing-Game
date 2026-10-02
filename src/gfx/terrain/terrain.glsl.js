@@ -271,17 +271,32 @@ vec3 ngTerrShade(vec3 P) {
 #endif
   vec3 dPx = dFdx(P), dPy = dFdy(P);
   vec3 Ng = ngTerrainN(xz);
-  float sd = ngTerrShoreD(xz);
-  vec2 cn = ngCanopyAt(xz);
-  float slope = sqrt(max(1.0 - Ng.y * Ng.y, 0.0)) / max(Ng.y, 0.05);
   float dist = distance(cameraPosition, P);
   bool refl = ngPassId > 0.5 && ngPassId < 1.5;
   float farK = refl ? 1.0 : smoothstep(ngTerrParams.z * 0.72, ngTerrParams.z, dist);
+  /* 水に沈んだ底：視線の水中の長さ + 底の深さ（下向きの光の減衰）の光学的厚さが大きい所は素材を読まない（farAlbedo）。
+     高い 1440p の桟橋の構図で地形の 2.7ms の素材のうち 1.9ms が «ほとんど見えない深い底» だった */
+  if (P.y < ngCamWaterY - 0.2) {
+    float camY = cameraPosition.y;
+    float lw = camY > ngCamWaterY ? dist * clamp((ngCamWaterY - P.y) / max(camY - P.y, 1e-3), 0.0, 1.0) : dist;
+    vec3 sig = ngSigmaA + ngSigmaS;
+    float tau = sig.g * (lw + max(ngCamWaterY - P.y, 0.0));   // 緑（輝度の大半）で見る。青は 40m 通るが、斜めの水面の反射と屈折の揺れで底の模様は先に消える
+    farK = max(farK, smoothstep(1.3, 2.1, tau));
+  }
+  vec4 farT = texture(ngTerrFar, ngFarMapUV(xz));
+  vec3 farC = farT.rgb;
+  /* 深い底は farAlbedo だけ（焼き込みに藻場と水中の暗さが入っている。下の本道の farK = 1 の結果と同じ値）。
+     重み・マクロ・藻場・濡れの計算ごと飛ばす（素材の道で farK = 1 にするだけでは 1440p で 1.1ms 残った） */
+  if (farK > 0.999 && P.y < -0.2) {
+    ngTerrCan = 0.0; ngTerrFarK = 0.0; ngTerrNW = Ng; ngTerrRo = 0.9; ngTerrAo = 1.0; ngTerrSkyOcc = 0.0; ngTerrF0 = 0.004;
+    return farC;
+  }
+  float sd = ngTerrShoreD(xz);
+  vec2 cn = ngCanopyAt(xz);
+  float slope = sqrt(max(1.0 - Ng.y * Ng.y, 0.0)) / max(Ng.y, 0.05);
   vec4 m1 = texture(ngTerrCtl, vec3(xz * (1.0 / 23.0), 2.0));
   vec4 m2 = texture(ngTerrCtl, vec3(xz * (1.0 / 97.0) + 0.37, 2.0));
   vec4 m3 = texture(ngTerrCtl, vec3(xz * (1.0 / 431.0) + 0.71, 2.0));
-  vec4 farT = texture(ngTerrFar, ngFarMapUV(xz));
-  vec3 farC = farT.rgb;
 #ifdef NG_TERR_DEBUG
   if (ngTerrParams.w > 90.5 && ngTerrParams.w < 91.5) { ngTerrNW = Ng; return farC + (m1.rgb + m2.rgb + m3.rgb) * 0.001 + vec3(sd, ngTerrBed(xz).x, cn.x) * 0.001; }
 #endif
@@ -348,7 +363,8 @@ vec3 ngTerrShade(vec3 P) {
   if (ngTerrParams.w > 92.5 && ngTerrParams.w < 93.5) { ngTerrNW = N; ngTerrRo = ro; return alb; }
 #endif
   /* 藻場：有機物の堆積で暗く緑褐色に */
-  alb = mix(alb, alb * vec3(0.55, 0.62, 0.45), weed * 0.75);
+  /* 藻場と水中の暗さは farAlbedo に焼き込み済み：遠景の分（farK）には二度掛けしない */
+  alb = mix(alb, alb * vec3(0.55, 0.62, 0.45), weed * 0.75 * (1.0 - farK));
   /* 水中の底は常に濡れている（砂ほど暗い） */
   float under = 1.0 - smoothstep(-0.12, 0.02, P.y);
   float wet = 0.0;
@@ -367,7 +383,7 @@ vec3 ngTerrShade(vec3 P) {
   float rainWet = ngWet * (1.0 - 0.55 * cn.x) * (1.0 - under);
   wet = max(wet, rainWet);
   /* 水中は水と接しているので鏡面は弱い（屈折率の比が小さい）。アルベドだけ濡れの暗さ */
-  alb *= 1.0 - max(wet, under * 0.8) * poro * 0.48;
+  alb *= 1.0 - max(wet, under * 0.8 * (1.0 - farK)) * poro * 0.48;
   ro = mix(ro, 0.12, wet * (0.55 + 0.45 * poro));
   ngTerrF0 = mix(0.04, 0.004, under);
   if (film > 0.0) {
