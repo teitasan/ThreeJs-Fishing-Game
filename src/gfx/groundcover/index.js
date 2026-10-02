@@ -155,7 +155,7 @@ export class GroundcoverModule extends NgModule {
     progress?.(0.4);
 
     /* 3. 藪：葉の房のテクスチャ（forge）と 3 形の幾何 */
-    this.leafTex = forge.bake2D({ w: 256, h: 256, frag: SHRUB_LEAF_FRAG, mips: true, coverageAlpha: 0.5, wrap: 'clamp', anisotropy: 4 });
+    this.leafTex = forge.bake2D({ w: 256, h: 256, frag: SHRUB_LEAF_FRAG, mips: true, wrap: 'clamp', anisotropy: 4 });
     await forge.step();
     const seed = placement?.seed ?? this.ctx.lake?.seed ?? 1;
     this.shrubMat = ngExtendStandard(new T.MeshStandardMaterial({ map: this.leafTex, roughness: 0.6, metalness: 0, side: T.DoubleSide, alphaTest: 0.5 }), {
@@ -329,7 +329,7 @@ export class GroundcoverModule extends NgModule {
 
   restoreGPU() {
     try {
-      const tex = this.ctx.forge.bake2D({ w: 256, h: 256, frag: SHRUB_LEAF_FRAG, mips: true, coverageAlpha: 0.5, wrap: 'clamp', anisotropy: 4 });
+      const tex = this.ctx.forge.bake2D({ w: 256, h: 256, frag: SHRUB_LEAF_FRAG, mips: true, wrap: 'clamp', anisotropy: 4 });
       this.leafTex = tex;
       if (this.shrubMat) { this.shrubMat.map = tex; this.shrubMat.needsUpdate = true; for (const m of this.shrubs) ngAttachDepth(m); }
     } catch (e) { this.ctx.log?.('gc-restore', e); }

@@ -176,6 +176,13 @@ export const SHRUB_FS_SURFACE = /* glsl */ `
   float hh = vShInfo.z;
   vec3 tint = mix(vec3(0.92, 1.0, 0.86), vec3(1.12, 1.05, 0.9), hh);
   if (vShInfo.y > 0.5) diffuseColor.rgb *= tint * mix(0.8, 1.1, smoothstep(0.2, 1.0, vShInfo.x));
+#ifdef USE_MAP
+  /* 遠くの mip で葉が痩せない：mip の段ごとに α を持ち上げる（forge の coverageAlpha は同じテクスチャの段を読みながら書くので
+     «Feedback loop» の警告が出る。docs/nextgen/modules/groundcover.md の依頼）。256² の葉の房 */
+  vec2 dUv = max(abs(dFdx(vMapUv)), abs(dFdy(vMapUv))) * 256.0;
+  float mipL = max(log2(max(max(dUv.x, dUv.y), 1e-5)), 0.0);
+  diffuseColor.a *= 1.0 + 0.28 * mipL;
+#endif
 }
 `;
 export const SHRUB_FS_ROUGH = /* glsl */ `
