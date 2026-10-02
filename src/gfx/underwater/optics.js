@@ -19,7 +19,7 @@ export const UW_IOR = 1.333;
  * @param {number} cosI 入射角の cos（水面の法線と光の向き）
  */
 export function fresnelTransmit(cosI) {
-  const ci = Math.min(1, Math.max(1e-4, cosI));
+  const ci = Number.isFinite(cosI) ? Math.min(1, Math.max(1e-4, cosI)) : 1e-4;   // NaN は «水平の光» として扱う
   const si = Math.sqrt(Math.max(0, 1 - ci * ci));
   const st = si / UW_IOR;
   const ct = Math.sqrt(Math.max(0, 1 - st * st));
