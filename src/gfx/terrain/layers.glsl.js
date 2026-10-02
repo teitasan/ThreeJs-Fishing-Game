@@ -197,15 +197,16 @@ void ngTbStones(vec2 uv, float N, float lift, float s, float dens, float tall, i
   vec4 w = ngTbWorley(p + wp * 0.5, N, s, 0.85);
   if (fract(w.z * 7.77) > dens) return;
   float e = w.y - w.x;
-  float edge = smoothstep(0.03, 0.30, e);
-  float dome = sqrt(edge) * (0.55 + 0.45 * fract(w.z * 3.3)) * tall;
+  /* r4：0.03–0.30 の sqrt は天辺が平らで隙間が細く «石畳» に見えた → 広い帯の円の断面（丸い玉石）と太い隙間 */
+  float edge = smoothstep(0.04, 0.55, e);
+  float dome = sqrt(edge * (2.0 - edge)) * (0.55 + 0.45 * fract(w.z * 3.3)) * tall;
   float hh = lift + dome;
   if (hh <= h || edge <= 0.0) return;
   float k = fract(w.z * 13.37);
   vec3 sc = ngTbStoneColor(k, p, s);
-  sc *= 0.72 + 0.28 * smoothstep(0.0, 0.5, e);                  // 縁は回り込んで暗い
-  col = mix(col, sc, smoothstep(0.02, 0.09, e));
-  h = mix(h, hh, smoothstep(0.02, 0.09, e));
+  sc *= 0.58 + 0.42 * smoothstep(0.04, 0.5, e);                 // 縁は回り込んで暗い
+  col = mix(col, sc, smoothstep(0.04, 0.12, e));
+  h = mix(h, hh, smoothstep(0.04, 0.12, e));
 }
 
 /* ---------------- 層ごとの «形の関数»：vec4(アルベド, 高さ) ---------------- */
@@ -265,7 +266,7 @@ vec4 ngTbCobble(vec2 uv) {
   vec3 col = vec3(0.215, 0.188, 0.150) * (0.72 + 0.4 * g1) * (0.85 + 0.3 * g2);
   float h = 0.06 * g1;
   ngTbStones(uv, 70.0, 0.02, 3.0, 0.9, 0.35, col, h);
-  ngTbStones(uv, 22.0, 0.05, 4.0, 0.88, 0.95, col, h);
+  ngTbStones(uv, 22.0, 0.05, 4.0, 0.76, 0.95, col, h);           // 隙間の砂が見える割合
   ngTbStones(uv, 11.0, 0.10, 5.0, 0.35, 0.9, col, h);
   return vec4(col, clamp(h, 0.0, 1.0));
 }
