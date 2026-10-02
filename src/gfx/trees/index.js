@@ -564,11 +564,11 @@ export class TreesModule extends NgModule {
     this.U.ngTreeLod.value.set(q.lod0, q.lod1, q.fade0, q.fade1);
     this.U.ngImpLod.value.set(q.lod1, q.fade1, q.imp, q.fade1);
     this.U.ngShellLod.value.set(q.shell, q.shellFade, 0, 0);
-    this.U.ngTreePass.value.set(q.lod0 * (q.reflLod ?? 1), q.fade1 * 0.5, q.shadowLod0, 0);
     const a2c = (profile?.msaa | 0) > 0;
     this.U.ngTreeMisc.value.x = a2c ? 1 : 0;
     /* 影を落とす範囲：近景の影の半幅 + 樹高の分（視野の外の木もここまでは影だけ描く） */
     this.shadowR = (profile?.nearShadow?.extent || 48) + 14;
+    this.U.ngTreePass.value.set(q.lod0 * (q.reflLod ?? 1), q.fade1 * 0.5, q.shadowLod0, (profile?.nearShadow?.extent || 48) * 1.42 + 16);
     ngCutout(this.treeMat, profile, 0.5);
     ngCutout(this.impMat, profile, 0.5);
     ngCutout(this.shellMat, profile, 0.5);

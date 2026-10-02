@@ -20,8 +20,8 @@ export const TREES_QUALITY = {
     impFrame: 96, impVariants: 2, reflLod: 0.8, shadowLod0: 16, leaf: [1024, 512], bark: 512, cap0: 420, cap1: 2400, n0: 40, n1: 520,
   },
   high: {
-    lod0: 45, lod1: 140, imp: 420, shell: 380, fade0: 5, fade1: 16, shellFade: 30,
-    impFrame: 128, impVariants: 2, reflLod: 1.0, shadowLod0: 22, leaf: [2048, 1024], bark: 512, cap0: 640, cap1: 3600, n0: 64, n1: 800,
+    lod0: 30, lod1: 100, imp: 420, shell: 380, fade0: 5, fade1: 16, shellFade: 30,
+    impFrame: 128, impVariants: 2, reflLod: 0.6, shadowLod0: 14, leaf: [2048, 1024], bark: 512, cap0: 640, cap1: 3600, n0: 40, n1: 500,
   },
 };
 

@@ -189,6 +189,8 @@ const TREE_VS_BEGIN = /* glsl */ `
     /* 影：LOD0 は ngTreePass.z の内側だけ、外は LOD1（代理・影だけを含む） */
     if (ngLod1 < 0.5) ngKeep = step(ngD, ngTreePass.z);
     else ngKeep = ngFlag > 1.5 ? (ngFlag > 2.5 ? 1.0 : step(ngTreePass.z, ngD)) : step(0.5, ngKeep);
+    /* 近景の影の箱の外の木は頂点から落とす（ngTreePass.w = 箱の対角 + 樹高の分） */
+    if (ngTreePass.w > 0.0 && ngD > ngTreePass.w) ngDrop = true;
   } else if (ngFlag > 1.5) {
     ngDrop = true;
   }
@@ -408,7 +410,7 @@ vec3 ngTr = vec3(0.0);
   float sd = ngTLeaf > 0.5 ? max(ngCan.r, 0.5 + 0.5 * dep) : ngCan.r * below;
   /* 樹冠の下では上向きの反射も樹冠に当たる（空が見えるのは隙間だけ） */
   float under = 1.0 - 0.9 * clamp(ngCan.r * below, 0.0, 1.0);
-  if (!ngCheap) reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, sd) * occ * under * (ngTLeaf > 0.5 ? 0.35 + 0.65 * ngWet : 1.0);
+  if (!ngCheap) reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, sd) * occ * under * (ngTLeaf > 0.5 ? 0.22 + 0.78 * ngWet : 1.0);
 }
 `;
 
@@ -498,6 +500,11 @@ const IMP_VS_BEGIN = /* glsl */ `
   vec3 w;
   if (fr.x >= fr.y) { c1 = gi + vec2(1.0, 0.0); w = vec3(1.0 - fr.x, fr.x - fr.y, fr.y); }
   else { c1 = gi + vec2(0.0, 1.0); w = vec3(1.0 - fr.y, fr.y - fr.x, fr.x); }
+  /* 反射（波で崩れる・半解像度）では 3 フレームのブレンドをやめて一番近いフレームだけ（断片の読みが 6 → 2） */
+  if (ngPassId == NG_PASS_REFLECTION) {
+    if (w.y > w.x && w.y >= w.z) c0 = c1; else if (w.z > w.x && w.z > w.y) c0 = c2;
+    w = vec3(1.0, 0.0, 0.0);
+  }
   /* カメラへ向いた板（球の包み） */
   vec3 up = abs(V.y) > 0.98 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
   vec3 rr = normalize(cross(up, V));
@@ -531,6 +538,7 @@ varying vec2 vNgIH;
 varying float vNgISun;
 vec3 ngImpAt(vec2 cell, vec2 uv) { return vec3((cell + clamp(uv, 0.004, 0.996)) / NG_IMP_N, vNgIInfo.x); }
 vec4 ngImpSample(highp sampler2DArray t) {
+  if (vNgI0.z > 0.9999) return texture(t, ngImpAt(vNgIF.xy, vNgI0.xy));
   return texture(t, ngImpAt(vNgIF.xy, vNgI0.xy)) * vNgI0.z + texture(t, ngImpAt(vNgIF.zw, vNgI1.xy)) * vNgI1.z
        + texture(t, ngImpAt(vNgIF2, vNgI2.xy)) * vNgI2.z;
 }
@@ -598,7 +606,7 @@ const IMP_FS_LIGHTS = /* glsl */ `
   reflectedLight.directDiffuse += ngTr;
   vec3 R = reflect(-Vw, ngINw);
   float nv = clamp(dot(ngINw, Vw), 0.0, 1.0);
-  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, max(ngCan.r, 0.6)) * ao * (0.35 + 0.65 * ngWet) * can;
+  reflectedLight.indirectSpecular += ngTreeSkySpec(R, nv, roughnessFactor, 0.03, max(ngCan.r, 0.6)) * ao * (0.22 + 0.78 * ngWet) * can;
   reflectedLight.indirectDiffuse *= mix(0.45, 1.0, ao) * can;
   if (ngTreeMisc.w > 0.5) ngTreeDbg(reflectedLight, ngTr, ngTreeMisc.w);
 }
