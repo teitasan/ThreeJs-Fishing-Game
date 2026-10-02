@@ -52,7 +52,7 @@ export class WaterModule extends NgModule {
       uFft0: { value: one }, uFft1: { value: one }, uFftL: { value: new T.Vector2(WATER_CASCADES[0].L, WATER_CASCADES[1].L) },
       uSim: { value: one }, uSimXf: { value: new T.Vector4(0, 0, 1, 0) },
       uFoam: { value: one },
-      uTierW: { value: new T.Vector4(0, 4, 800, 0) },
+      uTierW: { value: new T.Vector4(0, 4, 800, 0.0012) },
       uLampPos: { value: new T.Vector3(0, -1000, 0) },
       uDbg: { value: new T.Vector4(0, 0, 0, 0) },
       uLakeBox: { value: new T.Vector4(-600, -600, 600, 600) },
@@ -210,6 +210,9 @@ vec4 ngDebug(vec2 uv) {
     if (passId === 0 && camera) {
       camera.updateMatrixWorld?.();
       this.uniforms.uViewProj.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      const sh = this.ctx.pipeline?.uniforms?.ngScreen?.value?.y || 720;
+      const p11 = camera.projectionMatrix.elements[5];
+      this.uniforms.uTierW.value.w = Number.isFinite(p11) && p11 > 0 ? 2 / (p11 * sh) : 0.0012;
     }
   }
 

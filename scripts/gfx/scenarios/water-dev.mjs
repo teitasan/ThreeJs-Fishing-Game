@@ -10,12 +10,14 @@ export default async function (h) {
   await h.waitFor(() => window.__gfxReady === true, undefined, 180);
   const boot = await h.eval(() => {
     const L = window.__lab, m = L.gfx.modules.get('water');
-    return { stub: m?._ngStub ?? null, stats: m?.stats() ?? null, tier: L.gfx.quality.tier, load: L.gfx.loadStats?.modules?.water };
+    const F = L.gfx.frame?.data;
+    return { stub: m?._ngStub ?? null, stats: m?.stats() ?? null, tier: L.gfx.quality.tier, load: L.gfx.loadStats?.modules?.water, slopeVar: m?.fft?.slopeVar, wind: F ? Array.from(F.slice(44, 48)) : null };
   });
   console.log('boot', JSON.stringify(boot));
-  for (const [name, cam, hour, weather, view] of shots) {
-    const r = await h.eval(({ cam, hour, weather, view }) => {
+  for (const [name, cam, hour, weather, view, dbg] of shots) {
+    const r = await h.eval(({ cam, hour, weather, view, dbg }) => {
       const L = window.__lab;
+      L.gfx.modules.get('water')?.uniforms?.uDbg?.value.fromArray((dbg || '0000').split('').map(Number));
       L.unfreeze();
       L.setHour(Number(hour));
       if (cam.startsWith('{')) L.cam(JSON.parse(cam));
@@ -35,7 +37,7 @@ export default async function (h) {
       L.freeze(10);
       L.tick(4);
       return { nan: L.nanCheck() };
-    }, { cam, hour, weather, view });
+    }, { cam, hour, weather, view, dbg });
     await h.shot(`${tier}-${name}`);
     console.log(name, JSON.stringify(r));
   }

@@ -22,18 +22,61 @@ import { NG_WIND_GLSL } from '../core/glsl/wind.glsl.js';
 import { NG_WAVE_GLSL } from '../core/glsl/wave.glsl.js';
 import { NG_MEDIUM_GLSL } from '../core/glsl/medium.glsl.js';
 import { NG_WATER_F0 } from '../core/palette.js';
+import { W as WAVES, PHASE_W } from '../../waveField.js?v=20260828-lakescale1';
 
 export const RIPPLES = 16;
+
+const PHF = ['ngWavePhA.x', 'ngWavePhA.y', 'ngWavePhA.z', 'ngWavePhA.w', 'ngWavePhB'];
+const f5 = (v) => v.toFixed(6);
+/* ゲームの 5 本の波の勾配を «1 本ずつ» 画素の大きさで LEAN する（ngWaveD と同じ式・同じ core の倍精度の位相）。
+   画素の足跡（視線方向に 1/V.y で伸びる楕円）を波の進む向きへ射影し、波長の 0.25–0.6 倍を越えた波は
+   平均の勾配から抜いて分散 (A·k)²/2 へ移す → 遠くの湖面で解けない波が «鏡のざわつき» ではなく正しい粗さになる */
+const WAVE_LEAN_GLSL = (() => {
+  let body = '';
+  WAVES.forEach((w, i) => {
+    if (i >= PHF.length) return;
+    const lam = (2 * Math.PI) / w.k;
+    body += `  {
+    float ph = (${f5(w.dx)} * p.x + ${f5(w.dz)} * p.y) * ${f5(w.k)} - (${PHF[i]} + (t - ngWaterTime) * ${f5(w.om)}) + phase * ${f5(PHASE_W[i])};
+    float c = cos(ph) * ${f5(w.amp)};
+    vec2 dir = vec2(${f5(w.dx)}, ${f5(w.dz)});
+    float fpa = dot(dir, vh) * fpAlong, fpc = dot(dir, vp) * fpAcross;
+    float fade = smoothstep(${f5(0.22 * lam)}, ${f5(0.6 * lam)}, sqrt(fpa * fpa + fpc * fpc));
+    d += vec2(${f5(w.k * w.dx)} + ${f5(PHASE_W[i])} * pg.x, ${f5(w.k * w.dz)} + ${f5(PHASE_W[i])} * pg.y) * (c * (1.0 - fade));
+    var += fade * ${f5(0.5 * (w.amp * w.k) ** 2)};
+  }
+`;
+  });
+  return /* glsl */ `
+vec2 ngWaterWaveLean(vec2 p, float t, vec2 vh, float fpAlong, float fpAcross, out float var) {
+  float phase = ngWavePhase(p);
+  vec2 pg = ngWavePhaseGrad(p);
+  vec2 vp = vec2(-vh.y, vh.x);
+  vec2 d = vec2(0.0);
+  var = 0.0;
+${body}  return d;
+}
+`;
+})();
 
 /* 風速 → 細波の振幅（基準の風 3.5m/s のスペクトルに掛ける）。毛管の細波は «風が閾値を越えた所» にだけ立つ
    （猫足の斑）。粗いカスケードは湖全体の風で、凪でも少し残る（鏡の歪み） */
 const AMP_GLSL = /* glsl */ `
-float ngWaterFineAmp(float U, float rain) {
-  float on = smoothstep(1.25, 2.6, U);
-  return on * pow(max(U, 0.0) / 3.5, 0.75) * 1.05 + 0.04 + 0.9 * rain;
+/* 突風の斑（猫足）：局所の風速が湖全体の風速をどれだけ越えたか。凪の日も斑の中だけ細波が立つ */
+float ngWaterPatch(float U, float Ug) {
+  return smoothstep(0.06, 0.30, U / max(Ug, 0.3) - 1.0);
 }
-float ngWaterCoarseAmp(float U, float Uglobal, float rain) {
-  return 0.10 + 0.6 * smoothstep(1.2, 4.5, Uglobal) + 0.35 * smoothstep(1.4, 3.0, U) + 0.3 * rain;
+/* 全体の風の強さ（clear 1.4 → 0、cloudy 3.0 → 0.5、rain 5.0 → 1） */
+float ngWaterWindy(float Ug) { return smoothstep(1.5, 4.6, Ug); }
+/* 細かいカスケード（λ 1.7cm–36cm、単位の σ ≈ 0.17）：凪の所は σ ≈ 0.003 の鏡、斑の中は σ ≈ 0.05 */
+float ngWaterFineAmp(float U, float Ug, float rain) {
+  float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
+  return 0.018 + 0.30 * pt + wy * (0.25 + 0.35 * pt) + 0.5 * rain;
+}
+/* 粗いカスケード（λ 36cm–4.5m、単位の σ ≈ 0.08） */
+float ngWaterCoarseAmp(float U, float Ug, float rain) {
+  float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
+  return 0.05 + 0.16 * pt + wy * 0.45 + 0.25 * rain;
 }
 `;
 
@@ -82,7 +125,7 @@ void main() {
 }
 `;
 
-export const WATER_FS = NG_SKYSPEC_GLSL + NG_WAVE_GLSL + AMP_GLSL + /* glsl */ `
+export const WATER_FS = NG_SKYSPEC_GLSL + NG_WAVE_GLSL + WAVE_LEAN_GLSL + AMP_GLSL + /* glsl */ `
 #include <common>
 #include <packing>
 #include <lights_pars_begin>
@@ -105,7 +148,7 @@ uniform vec2 uFftL;
 uniform sampler2D uSim;
 uniform vec4 uSimXf;          // x, z = 窓の中心（m）、z = 1/窓の一辺（1/m）、w = 有効なら 1
 uniform sampler2D uFoam;
-uniform vec4 uTierW;          // x = 微細なきらめき, y = 反射の mip 段, z = 反射の px/rad, w = 予備
+uniform vec4 uTierW;          // x = 微細なきらめき, y = 反射の mip 段, z = 反射の px/rad, w = 描くカメラの 1 画素の角 rad
 uniform vec4 uRipple[${RIPPLES}];   // x, z, 開始時刻, 大きさ（生きている物だけを先頭に詰める）
 uniform float uRippleDur[${RIPPLES}];
 uniform int uRippleN;
@@ -192,12 +235,20 @@ void main() {
 
   /* ---- 法線 ---- */
   /* ゲームの 5 本の波（縦の変位はそのまま）。法線では凪の日ほど弱める：湖にうねりは無く、鏡の歪みが強すぎる */
-  vec2 sl = uDbg.y > 1.5 ? vec2(0.0) : ngWaveD(p, uTime) * uWind * vShoal * mix(0.4, 1.0, smoothstep(1.5, 5.0, ngWindSpeed));
+  /* 画素の足跡（m）：縦の画角の 1 画素の角 × 距離、視線方向は 1/V.y で伸びる */
+  float pxAng = uTierW.w;
+  float fpX = dist * pxAng;
+  float fpL = fpX / max(V.y, 0.03);
+  vec2 vh = normalize(-Vv.xz + vec2(1e-5, 0.0));
+  float waveS = uWind * vShoal * mix(0.2, 1.0, smoothstep(1.5, 5.0, ngWindSpeed));
+  float varW = 0.0;
+  vec2 sl = uDbg.y > 1.5 ? vec2(0.0) : ngWaterWaveLean(p, uTime, vh, fpL, fpX, varW) * waveS;
+  varW *= waveS * waveS;
   vec2 wd = normalize(ngWindDir + vec2(1e-5, 0.0));
   vec2 wp = vec2(-wd.y, wd.x);
   vec2 q = vec2(dot(p, wd), dot(p, wp));
   float shallow = 0.35 + 0.65 * smoothstep(0.0, 0.6, vShoal);
-  float a0 = ngWaterFineAmp(wnd.z, rain) * shallow;
+  float a0 = ngWaterFineAmp(wnd.z, ngWindSpeed, rain) * shallow;
   float a1 = ngWaterCoarseAmp(wnd.z, ngWindSpeed, rain) * shallow;
   vec4 f0 = vec4(0.0), f1 = vec4(0.0);
   if (uDbg.x < 0.5) {
@@ -217,10 +268,10 @@ void main() {
   sl += sd.x * wd + sd.y * wp;
   vec2 ring = ngRippleSlope(p) + ngSimSlope(p) + ngRainRings(p, ngEnvTime, rain) * 2.4;
   sl += ring;
-  /* 鏡面の AA：画面の微分から «画素に解けない» 勾配の分散（解析の波・輪・雨） */
-  vec2 dsx = dFdx(sl), dsy = dFdy(sl);
-  float varGeo = min(0.5 * (dot(dsx, dsx) + dot(dsy, dsy)), 0.06);
-  float a2r = 0.0015 * 0.0015 + var + varGeo + 0.004 * rain;
+  /* 鏡面の AA：輪・シミュ・雨は画面の微分から «画素に解けない» 勾配の分散（波は上で 1 本ずつ LEAN 済み） */
+  vec2 dsx = dFdx(ring), dsy = dFdy(ring);
+  float varGeo = min(0.5 * (dot(dsx, dsx) + dot(dsy, dsy)), 0.03);
+  float a2r = 0.0015 * 0.0015 + var + varW + varGeo + 0.004 * rain;
   float alpha = sqrt(a2r);
   vec3 N = normalize(vec3(-sl.x, 1.0, -sl.y));
   vec3 col;
