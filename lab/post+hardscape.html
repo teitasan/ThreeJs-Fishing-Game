@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lab: post + hardscape</title>
+<!-- 相対 URL（assets/…・importmap）をリポジトリの根から解決する -->
+<base href="../">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="lab/_kit/lab.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/",
+    "postprocessing": "./vendor/postprocessing/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="lab-status">lab: loading</div>
+<script type="module">
+/* post と hardscape の lab（CORE_API §16）。
+   既定は本流で統合済みの sky・water・terrain・trees と、担当の post・hardscape を本物で起動し、残りは core のスタブ。
+   ?mods=post,hardscape で本物にする id を絞れる（比較用：?mods=sky,water,terrain,trees で post と hardscape をスタブに） */
+import { bootLabPage } from './lab/_kit/page.js';
+const q = new URLSearchParams(location.search);
+const modules = q.has('mods') ? q.get('mods').split(',').filter(Boolean) : ['sky', 'water', 'terrain', 'trees', 'post', 'hardscape'];
+bootLabPage({ modules });
+</script>
+</body>
+</html>
