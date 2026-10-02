@@ -229,7 +229,7 @@ vec2 ngRippleSlope(vec2 p) {
     if (abs(x) > 3.0 * sig) continue;
     float env = exp(-(x * x) / (sig * sig));
     float life = 1.0 - age / dur;
-    float A = sz * 0.0045 * life * life / sqrt(1.0 + r / 0.25);
+    float A = sz * 0.0075 * life * life / sqrt(1.0 + r / 0.25);   // 本編の 10m 先の着水でも読める（暗い映りの上でも）
     float k = 6.2831853 / lam;
     float s = -A * env * (k * sin(k * x) + 2.0 * x / (sig * sig) * cos(k * x));
     g += s * dv / max(d, 1e-3);

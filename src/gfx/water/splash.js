@@ -31,11 +31,14 @@ void main() {
   vec3 vv = (viewMatrix * vec4(vel, 0.0)).xyz;
   vec2 ax = length(vv.xy) > 1e-4 ? normalize(vv.xy) : vec2(0.0, 1.0);
   vec2 ay = vec2(-ax.y, ax.x);
-  float sz = aV0.w;
+  /* 画面で ≈1.5px を割る水滴は大きさを保ち、その分だけ薄くする（遠くの着水が点滅せず、明るさの総量は同じ） */
+  float sz0 = aV0.w;
+  float sz = max(sz0, -mvPosition.z * 0.0018);
+  float cover = (sz0 * sz0) / (sz * sz);
   float stretch = sz + length(vv.xy) * (1.0 / 60.0);
   mvPosition.xy += ax * position.y * stretch + ay * position.x * sz;
   vQ = position.xy * 2.0;
-  vFade = (1.0 - smoothstep(life * 0.7, life, tau)) * smoothstep(-0.02, 0.03, P.y);
+  vFade = (1.0 - smoothstep(life * 0.7, life, tau)) * smoothstep(-0.02, 0.03, P.y) * cover;
   gl_Position = alive ? projectionMatrix * mvPosition : vec4(2.0, 2.0, 2.0, 1.0);
   #include <fog_vertex>
 }
