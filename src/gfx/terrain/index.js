@@ -103,16 +103,7 @@ export class TerrainModule extends NgModule {
     progress?.(0.6);
 
     /* 2. 地形の素材とメッシュ */
-    const mat = ngExtendStandard(new T.MeshStandardMaterial({ roughness: 1, metalness: 0 }), {
-      key: 'terrain-ground', module: 'terrain',
-      uniforms: { ...hf.uniforms, ...this.u },
-      vertex: { pars: TERRAIN_VERT_PARS, normal: TERRAIN_VERT_NORMAL, begin: TERRAIN_VERT_BEGIN },
-      fragment: {
-        pars: TERRAIN_FRAG_PARS, surface: TERRAIN_FRAG_SURFACE, normal: TERRAIN_FRAG_NORMAL,
-        rough: TERRAIN_FRAG_ROUGH, lights: TERRAIN_FRAG_LIGHTS, ao: TERRAIN_FRAG_AO,
-      },
-      caustics: true, hfShadow: true, depth: true,
-    });
+    const mat = this._groundMaterial(false);
     this.material = mat;
     this._cells = this.q.cells;
     const geo = patchGeometry(T, this._cells);
@@ -144,6 +135,22 @@ export class TerrainModule extends NgModule {
     ctx.scene.add(this.root);
     this.loadMs = performance.now() - t0;
     progress?.(1);
+  }
+
+  /* 地形の素材。debug = true は lab の表示用の別のプログラム（NG_TERR_DEBUG。本番の素材に debug の分岐を入れない） */
+  _groundMaterial(debug) {
+    const T = this.ctx.THREE;
+    return ngExtendStandard(new T.MeshStandardMaterial({ roughness: 1, metalness: 0 }), {
+      key: debug ? 'terrain-ground-debug' : 'terrain-ground', module: 'terrain',
+      uniforms: { ...this.ctx.heightfield.uniforms, ...this.u },
+      defines: debug ? { NG_TERR_DEBUG: 1 } : {},
+      vertex: { pars: TERRAIN_VERT_PARS, normal: TERRAIN_VERT_NORMAL, begin: TERRAIN_VERT_BEGIN },
+      fragment: {
+        pars: TERRAIN_FRAG_PARS, surface: TERRAIN_FRAG_SURFACE, normal: TERRAIN_FRAG_NORMAL,
+        rough: TERRAIN_FRAG_ROUGH, lights: TERRAIN_FRAG_LIGHTS, ao: TERRAIN_FRAG_AO,
+      },
+      caustics: true, hfShadow: true, depth: !debug,
+    });
   }
 
   /* ---------- 焼き込み ---------- */
@@ -351,6 +358,9 @@ export class TerrainModule extends NgModule {
   setDebug(mode) {
     this._debug = Number.isFinite(mode) ? mode : 0;
     if (this.u) this.u.ngTerrParams.value.w = this._debug;
+    if (!this.mesh) return;
+    if (this._debug && !this._debugMat) this._debugMat = this._groundMaterial(true);
+    this.mesh.material = this._debug ? this._debugMat : this.material;
   }
 
   restoreGPU() {
@@ -384,6 +394,7 @@ export class TerrainModule extends NgModule {
 
   dispose() {
     this.material?.dispose();
+    this._debugMat?.dispose();
     this.material?.userData?.ngDepth?.dispose();
     this.material?.userData?.ngDistance?.dispose();
     this.ridgeMaterial?.dispose();

@@ -36,8 +36,9 @@ void main() {
   vec3 Ng = ngTerrainN(xz);
   float sd = ngTerrShoreD(xz);
   vec2 cn = ngCanopyAt(xz);
-  float w[8];
-  ngTerrWeights(vec3(xz.x, y, xz.y), Ng, sd, ngTerrBed(xz), cn, ngTerrTrailAt(xz, ngTerrDock), w);
+  vec4 wA, wB;
+  ngTerrWeights(vec3(xz.x, y, xz.y), Ng, sd, ngTerrBed(xz), cn, ngTerrTrailAt(xz, ngTerrDock), wA, wB);
+  float w[8] = float[8](wA.x, wA.y, wA.z, wA.w, wB.x, wB.y, wB.z, wB.w);   // 焼き込みは 1 回だけなので配列でよい
   vec3 c = vec3(0.0);
   /* 層の平均色：16² の段を 4×4 で読む（最後の 1×1 の段に頼らない） */
   for (int i = 0; i < 8; i++) {

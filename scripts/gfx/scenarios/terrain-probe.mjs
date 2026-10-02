@@ -30,12 +30,12 @@ uniform vec4 ngDockP;
 void main() {
   int i = int(gl_FragCoord.x), row = int(gl_FragCoord.y);
   vec2 xz = ngPts[i];
-  float w[8];
+  vec4 wA, wB;
   vec3 Ng = ngTerrainN(xz);
-  ngTerrWeights(vec3(xz.x, ngTerrainH(xz), xz.y), Ng, ngTerrShoreD(xz), ngTerrBed(xz), ngCanopyAt(xz), 0.0, w);
+  ngTerrWeights(vec3(xz.x, ngTerrainH(xz), xz.y), Ng, ngTerrShoreD(xz), ngTerrBed(xz), ngCanopyAt(xz), 0.0, wA, wB);
   if (row == 0) gl_FragColor = textureLod(ngFarT, ngFarMapUV(xz), 0.0);
-  else if (row == 1) gl_FragColor = vec4(w[0], w[1], w[2], w[3]);
-  else gl_FragColor = vec4(w[4], w[5], w[6], w[7]);
+  else if (row == 1) gl_FragColor = wA;
+  else gl_FragColor = wB;
 }`;
     ctx.forge.run(rt, frag, { ...ctx.heightfield.uniforms, ngFarT: { value: m.u.ngTerrFar.value }, ngPts: { value: Array.from({ length: 64 }, (_, i) => new T.Vector2(xs[i * 2], xs[i * 2 + 1])) } });
     const buf = new Float32Array(n * 3 * 4);

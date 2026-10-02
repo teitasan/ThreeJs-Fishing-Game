@@ -79,8 +79,9 @@ float ngTerrTrailAt(vec2 xz, vec4 dock) {
   float tr = (1.0 - smoothstep(wid * 0.5, wid * 1.3, abs(s - mean))) * along;
   return max(tr, (1.0 - smoothstep(1.8, 3.8, length(d) + 0.8 * (ngVNoise2(xz * 1.3) - 0.5))) * 0.9);
 }
-/* w：0 林床・1 苔・2 草地・3 玉石・4 砂・5 泥・6 岩・7 踏み跡。和は 1 */
-void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, out float w[8]) {
+/* wA = (0 林床, 1 苔, 2 草地, 3 玉石)、wB = (4 砂, 5 泥, 6 岩, 7 踏み跡)。和は 1。
+   配列（float[8]）にしない：動的な添字の局所配列は Apple の GPU でメモリへ落ちて 1440p で数 ms 重かった */
+void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, out vec4 wA, out vec4 wB) {
   vec2 xz = P.xz;
   float slope = sqrt(max(1.0 - Ng.y * Ng.y, 0.0)) / max(Ng.y, 0.05);
   float nM = ngVNoise2(xz * 0.031 + 11.0);
@@ -105,17 +106,16 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float cob = smoothstep(0.55, 0.78, nP);
   float shallow = smoothstep(-3.5, -0.4, P.y);
   float u = under;
-  w[0] = (1.0 - u) * lv * forest * (1.0 - 0.8 * moist);
-  w[1] = (1.0 - u) * lv * forest * (0.8 * moist + 0.35 * smoothstep(0.3, 0.6, slope));
-  w[2] = (1.0 - u) * lv * (1.0 - forest);
-  w[3] = (1.0 - u) * lb * (bw.b + 0.5 * bw.g * cob) + u * bw.b * shallow;
-  w[4] = (1.0 - u) * lb * bw.g * (1.0 - 0.5 * cob) + u * bw.g;
-  w[5] = (1.0 - u) * lb * bw.r + u * bw.r;
-  w[6] = (1.0 - u) * rock + u * bw.b * (1.0 - shallow);
-  w[7] = (1.0 - u) * tr;
-  float s = 0.0;
-  for (int i = 0; i < 8; i++) s += w[i];
-  for (int i = 0; i < 8; i++) w[i] /= max(s, 1e-4);
+  wA.x = (1.0 - u) * lv * forest * (1.0 - 0.8 * moist);
+  wA.y = (1.0 - u) * lv * forest * (0.8 * moist + 0.35 * smoothstep(0.3, 0.6, slope));
+  wA.z = (1.0 - u) * lv * (1.0 - forest);
+  wA.w = (1.0 - u) * lb * (bw.b + 0.5 * bw.g * cob) + u * bw.b * shallow;
+  wB.x = (1.0 - u) * lb * bw.g * (1.0 - 0.5 * cob) + u * bw.g;
+  wB.y = (1.0 - u) * lb * bw.r + u * bw.r;
+  wB.z = (1.0 - u) * rock + u * bw.b * (1.0 - shallow);
+  wB.w = (1.0 - u) * tr;
+  float s = max(dot(wA, vec4(1.0)) + dot(wB, vec4(1.0)), 1e-4);
+  wA /= s; wB /= s;
 }
 #endif
 `;
@@ -142,7 +142,8 @@ uniform vec4 ngTerrDock;             // 踏み跡（付け根 xz、内陸の向�
 uniform vec4 ngTerrFlats[4];         // 藻場（x, z, r, 強さ）
 varying vec3 ngTerrVInfo;
 const float ngTerrTile[8] = ${arr(TERRAIN_TILE_M)};
-const float ngTerrPoro[8] = ${arr(TERRAIN_POROSITY)};
+const vec4 ngTerrPoroA = vec4(${TERRAIN_POROSITY.slice(0, 4).map(f).join(', ')});
+const vec4 ngTerrPoroB = vec4(${TERRAIN_POROSITY.slice(4).map(f).join(', ')});
 /* hex の回転の上限（rad）。向きのある模様（砂の波紋・泥・踏み跡）は回しすぎると継ぎ目が «く» の字に見える */
 const float ngTerrHexRot[8] = float[8](3.1416, 3.1416, 3.1416, 3.1416, 0.22, 1.2, 3.1416, 0.8);
 
@@ -245,6 +246,10 @@ vec3 ngTerrDebugCol(float i) {
 /* 本体：アルベドを返し、法線・粗さ・AO を大域へ置く */
 vec3 ngTerrShade(vec3 P) {
   vec2 xz = P.xz;
+  /* 計測用（debug 90）：素材を飛ばし、光・影・媒質だけの重さを測る */
+#ifdef NG_TERR_DEBUG
+  if (ngTerrParams.w > 89.5 && ngTerrParams.w < 90.5) { ngTerrNW = vec3(0.0, 1.0, 0.0); return vec3(0.1); }
+#endif
   vec3 dPx = dFdx(P), dPy = dFdy(P);
   vec3 Ng = ngTerrainN(xz);
   float sd = ngTerrShoreD(xz);
@@ -259,20 +264,25 @@ vec3 ngTerrShade(vec3 P) {
   vec4 m3 = texture(ngTerrMacro, xz * (1.0 / 431.0) + 0.71);
   vec4 farT = texture(ngTerrFar, ngFarMapUV(xz));
   vec3 farC = farT.rgb;
-  float w[8];
-  ngTerrWeights(P, Ng, sd, bed, cn, ngTerrTrailAt(xz, ngTerrDock), w);
+#ifdef NG_TERR_DEBUG
+  if (ngTerrParams.w > 90.5 && ngTerrParams.w < 91.5) { ngTerrNW = Ng; return farC + (m1.rgb + m2.rgb + m3.rgb) * 0.001 + vec3(sd, bed.x, cn.x) * 0.001; }
+#endif
+  vec4 wA, wB;
+  ngTerrWeights(P, Ng, sd, bed, cn, ngTerrTrailAt(xz, ngTerrDock), wA, wB);
   float weed = ngTerrWeedAt(xz) * (1.0 - smoothstep(-0.6, 0.0, P.y));
-  /* 上位 2 層 */
+#ifdef NG_TERR_DEBUG
+  if (ngTerrParams.w > 91.5 && ngTerrParams.w < 92.5) { ngTerrNW = Ng; return farC + (wA.rgb + wB.rgb + weed) * 0.001; }
+#endif
+  /* 上位 2 層（展開して比べる。ループと動的な添字を使わない） */
   int i1 = 0, i2 = 1;
   float w1 = -1.0, w2 = -1.0;
-  for (int i = 0; i < 8; i++) {
-    float v = w[i];
-    if (v > w1) { w2 = w1; i2 = i1; w1 = v; i1 = i; } else if (v > w2) { w2 = v; i2 = i; }
-  }
-  float poro = 0.0, puddleable = 0.0;
-  for (int i = 0; i < 8; i++) poro += w[i] * ngTerrPoro[i];
-  puddleable = w[7] + 0.55 * w[2] + 0.8 * w[5] + 0.25 * w[0];
-  float veg = w[0] * 0.4 + w[1] + w[2];
+#define NG_TERR_T2(v, i) if (v > w1) { w2 = w1; i2 = i1; w1 = v; i1 = i; } else if (v > w2) { w2 = v; i2 = i; }
+  NG_TERR_T2(wA.x, 0) NG_TERR_T2(wA.y, 1) NG_TERR_T2(wA.z, 2) NG_TERR_T2(wA.w, 3)
+  NG_TERR_T2(wB.x, 4) NG_TERR_T2(wB.y, 5) NG_TERR_T2(wB.z, 6) NG_TERR_T2(wB.w, 7)
+#undef NG_TERR_T2
+  float poro = dot(wA, ngTerrPoroA) + dot(wB, ngTerrPoroB);
+  float puddleable = wB.w + 0.55 * wA.z + 0.8 * wB.y + 0.25 * wA.x;
+  float veg = wA.x * 0.4 + wA.y + wA.z;
   vec3 alb = farC;
   vec3 N = Ng;
   float ro = 0.9, ao = 1.0, hBlend = 0.5;
@@ -299,8 +309,11 @@ vec3 ngTerrShade(vec3 P) {
     ro = mix(mix(R1.x, R2.x, t), 0.9, farK);
     ao = mix(mix(R1.y, R2.y, t), 1.0, farK);
   }
+#ifdef NG_TERR_DEBUG
+  if (ngTerrParams.w > 92.5 && ngTerrParams.w < 93.5) { ngTerrNW = N; ngTerrRo = ro; return alb; }
+#endif
   /* 乾いた浜の砂は波紋を弱く（風紋ほど）。水中・濡れた所は強いまま */
-  N = normalize(mix(N, Ng, w[4] * smoothstep(-0.02, 0.15, P.y) * 0.85));
+  N = normalize(mix(N, Ng, wB.x * smoothstep(-0.02, 0.15, P.y) * 0.85));
   /* 藻場：有機物の堆積で暗く緑褐色に */
   alb = mix(alb, alb * vec3(0.55, 0.62, 0.45), weed * 0.75);
   /* 水中の底は常に濡れている（砂ほど暗い） */
@@ -326,8 +339,11 @@ vec3 ngTerrShade(vec3 P) {
     N = normalize(mix(N, Ng, film * 0.7));
     ngTerrF0 = mix(0.04, 0.02, film);
   }
+#ifdef NG_TERR_DEBUG
+  if (ngTerrParams.w > 93.5 && ngTerrParams.w < 94.5) { ngTerrNW = N; ngTerrRo = ro; return alb; }
+#endif
   /* 水たまり：低い所（層の高さの窪み）から先に溜まる。面は雨の輪 */
-  float pud = ngPuddle(xz, slope) * clamp(puddleable, 0.0, 1.0) * (1.0 - under) * smoothstep(0.3, 1.0, sd);
+  float pud = ngPuddleAmt > 0.001 ? ngPuddle(xz, slope) * clamp(puddleable, 0.0, 1.0) * (1.0 - under) * smoothstep(0.3, 1.0, sd) : 0.0;
   pud = smoothstep(0.0, 1.0, clamp(pud * 1.6 - hBlend * 0.6, 0.0, 1.0));
   if (pud > 0.0) {
     vec2 g = ngRainRings(xz, ngEnvTime, ngRain);
@@ -342,8 +358,11 @@ vec3 ngTerrShade(vec3 P) {
   ngTerrRo = clamp(ro, 0.02, 1.0);
   ngTerrAo = ao;
   ngTerrSkyOcc = (1.0 - 0.75 * cn.x) * mix(1.0, ao, 0.7) * (1.0 - under);
-  /* デバッグ：1 = LOD の色、2 = 一番重い層、3 = パッチの格子の線 */
+  /* デバッグ（lab の表示だけ。別のプログラム NG_TERR_DEBUG）：1 = LOD の色、2 = 一番重い層、3 = パッチの格子の線。
+     本番の素材から外す：この塊（分岐の中の texture と fwidth）があるだけで 1440p の地形が 1.8 → 7.4ms になった */
+#ifdef NG_TERR_DEBUG
   float dbg = ngTerrParams.w;
+  if (dbg > 94.5) return alb;
   if (dbg > 9.5) {
     /* 10 + i：層 i のアルベド、20 + i：層 i の法線、30 + i：層 i の高さ（平面の写像そのまま） */
     float li = mod(dbg, 10.0);
@@ -367,6 +386,7 @@ vec3 ngTerrShade(vec3 P) {
       alb = mix(vec3(0.02), alb, smoothstep(0.0, 1.2, min(gq.x, gq.y)));
     }
   }
+#endif
   return alb;
 }
 /* 空の鏡面（Karis の EnvBRDF 近似）。lights の口で indirectSpecular に足す */
@@ -413,12 +433,13 @@ export function terrainCoverRules(start, inland) {
 /* terrain の層：1 林床・2 苔・3 草地・4 玉石・5 砂・6 泥・7 岩・8 踏み跡（p.y < 0 は湖底） */
 float ngGroundKind(vec3 p) {
   vec2 xz = p.xz;
-  float w[8];
+  vec4 wA, wB;
   ngTerrWeights(p, ngTerrainN(xz), ngTerrShoreD(xz), ngTerrBed(xz), ngCanopyAt(xz),
-    ngTerrTrailAt(xz, vec4(${v(start.x)}, ${v(start.z)}, ${v(inland.x)}, ${v(inland.z)})), w);
-  int best = 0; float bw = -1.0;
-  for (int i = 0; i < 8; i++) if (w[i] > bw) { bw = w[i]; best = i; }
-  return float(best + 1);
+    ngTerrTrailAt(xz, vec4(${v(start.x)}, ${v(start.z)}, ${v(inland.x)}, ${v(inland.z)})), wA, wB);
+  float m = max(max(max(wA.x, wA.y), max(wA.z, wA.w)), max(max(wB.x, wB.y), max(wB.z, wB.w)));
+  /* 一番重い層の番号（同点は若い方）：等しい成分に番号を掛けて最小を取る */
+  vec4 eA = mix(vec4(99.0), vec4(1.0, 2.0, 3.0, 4.0), step(m, wA)), eB = mix(vec4(99.0), vec4(5.0, 6.0, 7.0, 8.0), step(m, wB));
+  return min(min(min(eA.x, eA.y), min(eA.z, eA.w)), min(min(eB.x, eB.y), min(eB.z, eB.w)));
 }
 #endif
 `;
