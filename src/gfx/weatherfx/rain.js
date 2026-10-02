@@ -190,24 +190,23 @@ in vec2 vQ;
 in float vU;
 void main() {
   if (vA < 1e-4) discard;
-  /* 横から見た王冠：広がる縁の壁と、縁の上に跳ねた小さな粒 */
+  /* しぶき：低く広がる柔らかい塊 + 放物線で跳ねる 6 粒（ガウス）。王冠の弧や足もとの輪は数画素の板では
+     «白い括弧» の記号に見えたので描かない */
   float u = vU;
-  float r = 0.25 + 0.75 * sqrt(u);
-  float hc = 0.75 * sin(3.14159 * min(u * 1.3, 1.0));
   float x = vQ.x, y = vQ.y;
-  /* 縁は柔らかく（ガウス）：数画素の板で硬い縁を出すと «白い括弧» の記号に見える */
-  float dw = abs(abs(x) - r * 0.85) / 0.14;
-  float wall = exp(-dw * dw) * smoothstep(hc + 0.08, hc - 0.12, y) * (0.25 + 0.75 * clamp(y / max(hc, 0.05), 0.0, 1.0));
+  float r = 0.3 + 0.7 * sqrt(u);
+  vec2 bq = vec2(x / (0.55 * r), (y - 0.04) / 0.16);
+  float blob = exp(-dot(bq, bq)) * (1.0 - u) * 0.8;
   float drops = 0.0;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 6; i++) {
     float fi = float(i);
-    vec2 dp = vec2((fi - 2.0) * 0.42 * r, hc + 0.12 + 0.25 * u * (1.0 - abs(fi - 2.0) * 0.3));
-    vec2 dd = (vec2(x, y) - dp) / 0.07;
-    drops += exp(-dot(dd, dd)) * 0.7;
+    float vx = (fi - 2.5) * 0.36 * (0.8 + 0.4 * fract(fi * 0.618 + vA * 7.0));
+    float vy = 1.7 - abs(fi - 2.5) * 0.28;
+    vec2 dp = vec2(vx * u * 1.6, vy * u - 2.2 * u * u + 0.05);
+    vec2 dd = (vec2(x, y) - dp) / 0.06;
+    drops += exp(-dot(dd, dd)) * step(0.0, dp.y);
   }
-  /* 足もとの濡れた輪（地面に寝た明るい楕円。見下ろすと王冠より目立つ） */
-  float ring = exp(-pow((length(vec2(x, y * 5.0)) - r) / 0.12, 2.0)) * step(y, 0.12);
-  float a = clamp(wall + drops + ring * 0.5, 0.0, 1.0) * (1.0 - smoothstep(0.45, 1.0, u)) * vA * 0.32;
+  float a = clamp(blob + drops * 0.8, 0.0, 1.0) * (1.0 - smoothstep(0.5, 1.0, u)) * vA * 0.3;
   if (a < 1e-3) discard;
   gl_FragColor = vec4(vCol * 1.3, 1.0);
   #include <fog_fragment>
@@ -251,7 +250,9 @@ void main() {
   /* 1 周期 = 横 18m・縦 26m（ノイズは横 24 セル = 幕の筋 0.75m。細かすぎると遠景に «櫛» の模様が出る） */
   vec2 uv = vec2(az * ngRnRadius / 18.0 + ngRnA.x * dot(wd, vec2(-vDir.z, vDir.x)) / 18.0, (vH + ngRnA.x * 9.0) / 26.0);
   float n = texture(ngRnNoise, uv).r * 0.65 + texture(ngRnNoise, uv * vec2(2.3, 1.7) + 0.37).g * 0.35;
-  float a = rain * (0.08 + 0.07 * n) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(30.0, 55.0, vH));
+  /* 幕は一様にしない：大きな尺度（90m × 80m）の濃淡で «雨の帯» が流れて来ては去る（一様だと遠景が櫛の模様） */
+  float m = smoothstep(0.25, 0.8, texture(ngRnNoise, vec2(az * ngRnRadius / 90.0 + ngRnA.x * 0.004, vH / 80.0 + 0.31)).r);
+  float a = rain * (0.05 + (0.04 + 0.08 * n) * m) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(30.0, 55.0, vH));
   /* 地形に刺さる縁を消す（不透明の深度との差でソフト） */
   float zs = texture(ngSceneDepth, gl_FragCoord.xy * ngScreen.zw).r;
   float zf = gl_FragCoord.z / gl_FragCoord.w;
