@@ -29,6 +29,8 @@ import { NG_HEIGHTFIELD_GLSL } from '../core/glsl/heightfield.glsl.js';
 import { NG_WAVE_GLSL } from '../core/glsl/wave.glsl.js';
 
 const ID = 'shoreflora';
+/** 反射の LOD1 の茎を描く距離 m（その先はカード） */
+const SF_REFL_NEAR = 40;
 
 export class ShorefloraModule extends NgModule {
   static id = ID;
@@ -217,7 +219,7 @@ export class ShorefloraModule extends NgModule {
           stems += sfStemCount(A1[o]);
         }
       }
-      if (d > near - q.fadeBand || (d > 4 && A1[o] > 0.35)) { C0.set(A0.subarray(o, o + 4), nc * 4); C1.set(A1.subarray(o, o + 4), nc * 4); nc++; }
+      if (d > near - q.fadeBand || (d > 15 && A1[o] > 0.35)) { C0.set(A0.subarray(o, o + 4), nc * 4); C1.set(A1.subarray(o, o + 4), nc * 4); nc++; }
     }
     for (const a of [this.nearA0, this.nearA1]) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(nn, 1) * 4); a.needsUpdate = true; }
     for (const a of [this.cardA0, this.cardA1]) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(nc, 1) * 4); a.needsUpdate = true; }
@@ -252,6 +254,13 @@ export class ShorefloraModule extends NgModule {
     const refl = passId === NG_PASS.REFLECTION;
     this.reedNear.visible = !refl;
     this.reedLod1.visible = refl;
+    /* 反射では LOD1 の茎を 40m まで、その先は株のカード（反射は粗く揺れるので幾何は要らない）。主のパスでは元の距離 */
+    const q = SF_QUALITY[this.tier];
+    const near = (refl ? Math.min(SF_REFL_NEAR, q.near) : q.near) * this.lod;
+    for (const m of [this.reedLod1.material, this.reedCard.material]) {
+      const u = m.userData.ngSfReedU;
+      if (u) u.value.y = near;
+    }
   }
 
   setQuality(tier, profile) { this._applyTier(tier, profile); }

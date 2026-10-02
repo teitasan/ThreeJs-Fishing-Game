@@ -57,7 +57,8 @@ export const SF_REED_VS_NORMAL = /* glsl */ `
     hs = hc;
     /* ---- 遠くの株のカード：軸の周りでカメラへ向く 1 枚。近い株の帯で現れる ---- */
     /* 近い株の中でも密な株は奥に «茎の筋» のカードを 1 枚置いて、茎の本数（§7 の予算）以上の密度に見せる */
-    float fill = smoothstep(4.0, 9.0, dist) * smoothstep(0.35, 0.6, dens) * 0.8;
+    /* 近すぎる所では出さない（画面の大きなカードの α の 9 回の繰り返しが重い：1440p で opaque の大半）。15–25m で現れる */
+    float fill = smoothstep(15.0, 25.0, dist) * smoothstep(0.35, 0.6, dens) * 0.8;
     float grow = max(smoothstep(ngSfReed.y - ngSfReed.z, ngSfReed.y, dist), fill) * (1.0 - smoothstep(ngSfReed.w * 0.85, ngSfReed.w, dist));
     if (grow <= 0.001) dead = true;
     float wdt = (0.7 + 0.9 * dens) * mix(0.85, 1.15, hc);
@@ -82,7 +83,9 @@ export const SF_REED_VS_NORMAL = /* glsl */ `
     float hs2 = ngHash12(base.xz * 3.31 + si * 9.17 + 4.1);
     /* 近い株の帯の外側で茎を 1 本ずつ抜く（カードへ渡す） */
     float keep = 1.0 - smoothstep(ngSfReed.y - ngSfReed.z, ngSfReed.y, dist);
-    if (si >= ns || hs2 > keep * 1.02 - 0.01) dead = true;
+    /* 遠い近景（25m → 近い株の端）は茎を 55% まで間引き、残りを太らせて面積を保つ（頂点の数を減らす） */
+    float thinK = mix(1.0, 0.55, smoothstep(25.0, max(ngSfReed.y, 26.0), dist));
+    if (si >= ns || hs2 > keep * thinK * 1.02 - 0.01) dead = true;
     old = step(hs, 0.3);
     float ang = si * 2.39996 + hc * 6.2831;
     float rr = (0.07 + 0.2 * dens) * sqrt((si + 0.5) / max(ns, 1.0)) * mix(0.7, 1.3, hs2);
@@ -104,7 +107,7 @@ export const SF_REED_VS_NORMAL = /* glsl */ `
       vec3 T = normalize(Pn - Pp + vec3(0.0, 1e-4, 0.0));
       vec3 V = normalize(cameraPosition - Pc);
       vec3 S = normalize(cross(T, V) + vec3(1e-5));
-      float w = mix(0.0075, 0.0022, t) * (kind > 0.5 ? 1.25 : 1.0) * (mode > 0.5 ? 1.6 : 1.0);
+      float w = mix(0.0075, 0.0022, t) * (kind > 0.5 ? 1.25 : 1.0) * (mode > 0.5 ? 1.6 : 1.0) * inversesqrt(thinK);
       P = Pc + S * w * sd;
       N = normalize(cross(S, T) * (dot(cross(S, T), V) < 0.0 ? -1.0 : 1.0) + S * sd * 0.7);
       frac = clamp(P.y / max(top, 0.1), 0.0, 1.0);
