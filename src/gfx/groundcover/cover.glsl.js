@@ -345,7 +345,7 @@ export const GC_FS_LIGHTS = /* glsl */ `
     float back = smoothstep(-0.2, 0.4, -ndl * sign(dot(Nw, Vw) + 1e-4)) * 0.6 + 0.4;
     vec3 trc = alb * vec3(1.25, 1.55, 0.75) + vec3(0.010, 0.018, 0.0);
     float tip = k < 0.5 ? mix(0.35, 1.0, ngGcT) : 1.0;
-    reflectedLight.directDiffuse += E * trc * (hg * 2.2 + 0.08) * thin * back * tip * ngGcLook.x * max(Lw.y + 0.15, 0.0);
+    reflectedLight.directDiffuse += E * trc * (hg * 2.2 + 0.08) * thin * back * tip * ngGcLook.x * smoothstep(-0.03, 0.10, Lw.y);
     /* 先端の光沢（細い刃の縁で日を拾う） */
     if (k < 0.5) {
       vec3 Hh = normalize(Lw + Vw);

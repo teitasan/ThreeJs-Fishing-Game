@@ -204,8 +204,12 @@ float ngSfPor = 0.2;
     vec3 fresh = kind < 0.5 ? mix(vec3(0.060, 0.098, 0.032), vec3(0.080, 0.118, 0.040), n1) : mix(vec3(0.066, 0.115, 0.034), vec3(0.090, 0.135, 0.042), n1);
     vec3 straw = vec3(0.24, 0.19, 0.11);
     c = mix(fresh, straw, max(ngSfOld, smoothstep(0.78, 1.0, t) * 0.55));
-    /* 葉の中肋 */
+    /* ヨシの葉は粉を吹いた灰緑：彩度を少し落とす */
+    c = mix(c, vec3(dot(c, vec3(0.3, 0.55, 0.15))), 0.18);
+    /* 葉の中肋と平行脈（縦の筋）、付け根は暗く先へ明るく */
     c *= 1.0 + 0.12 * (1.0 - smoothstep(0.0, 0.2, abs(vSfA.y)));
+    c *= 0.95 + 0.07 * smoothstep(0.3, 0.5, abs(fract(vSfA.y * 3.5 + 0.5) - 0.5));
+    c *= mix(0.82, 1.06, smoothstep(0.0, 0.55, t));
     ngSfPor = 0.1;
   } else {
     /* 穂：去年の穂は銀褐色、今年の若い穂は紫褐色 */
@@ -266,7 +270,9 @@ export const SF_REED_FS_LIGHTS = /* glsl */ `
   float hg = (1.0 - g * g) / (4.0 * 3.14159265 * pow(max(1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
   float thin = ngSfPart < 0.5 ? 0.35 : (ngSfPart < 8.5 ? 1.0 : (ngSfPart < 10.5 ? 2.2 : 0.8));
   vec3 trc = ngSfPart > 8.5 && ngSfPart < 10.5 ? diffuseColor.rgb * vec3(1.6, 1.35, 0.9) : diffuseColor.rgb * vec3(1.25, 1.5, 0.75);
-  reflectedLight.directDiffuse += E * trc * (hg * 2.0 + 0.06) * thin * max(Lw.y + 0.12, 0.0) * step(0.0, vNgWorld.y);
+  /* 太陽が低いほど逆光が要る（夕方の穂が光る）。地平の下で消す */
+  float sunUp = smoothstep(-0.03, 0.10, Lw.y);
+  reflectedLight.directDiffuse += E * trc * (hg * 2.0 + 0.06) * thin * sunUp * step(0.0, vNgWorld.y);
 }
 `;
 

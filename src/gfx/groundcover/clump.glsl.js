@@ -170,8 +170,8 @@ void ngGcMain(ivec2 px) {
     float fernPatch = smoothstep(0.30, 0.58, ngVNoise2(xz * (1.0 / 6.5) + 9.1));
     float fern = (wA.y * 0.9 + wA.x * 0.45 * mix(0.35, 1.0, wet) + wA.z * 0.22 * wet) * fernPatch;
     if (!land || tierCut >= R3.y) { ngGcCull(); return; }
-    if (u < sasa * 0.95) { kind = 1.0; H = mix(0.42, 0.85, colony) * mix(0.85, 1.15, hj.y); }
-    else if (u < sasa * 0.95 + fern * 0.8) { kind = 2.0; H = mix(0.32, 0.72, max(wet, wA.y)) * mix(0.8, 1.2, hj.x); }
+    if (u < sasa * 1.25) { kind = 1.0; H = mix(0.42, 0.85, colony) * mix(0.85, 1.15, hj.y); }
+    else if (u < sasa * 1.25 + fern * 0.8) { kind = 2.0; H = mix(0.32, 0.72, max(wet, wA.y)) * mix(0.8, 1.2, hj.x); }
     else { ngGcCull(); return; }
   } else {
     /* 小物：玉石の浜の小石（岩の肌）・落ち枝・落葉・苔の塊 */

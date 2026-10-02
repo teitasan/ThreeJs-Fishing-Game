@@ -102,7 +102,12 @@ export default async function (h) {
           L.tick(2);
           const c = gc.debugCounts();
           /* 太陽の方 14m に幹・岩があれば落とす（逆光の草原の手前を木が塞がない） */
-          const blk = blocked(x, z, x + sux * 14, z + suz * 14, 0.05, 1.0);
+          /* 前の 40° の扇の 12m 以内に木があれば塞がる（幹だけでなく樹冠が視界を覆う） */
+          let blk = blocked(x, z, x + sux * 14, z + suz * 14, 0.05, 1.0);
+          for (const b of treeList) {
+            const dx = b.x - x, dz = b.z - z, dd = Math.hypot(dx, dz);
+            if (dd < 12 && dd > 0.1 && (dx * sux + dz * suz) / dd > 0.77) blk++;
+          }
           const g = ((c[0]?.alive || 0) + (c[1]?.alive || 0) * 0.5) * Math.pow(Math.min(c[0]?.hf ?? 0, c[1]?.hf ?? 0), 2) * (blk ? 0.05 : 1);
           if (!back || g > back.score) back = { score: g, x, z, y, a, hf: c[0]?.hf };
         }

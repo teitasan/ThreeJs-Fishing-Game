@@ -44,7 +44,7 @@ void main() {
     float l = ngShLeaf(p, c, ang, vec2(mix(0.15, 0.21, h.x), mix(0.07, 0.095, h.y)), vein);
     if (l > 0.5) {
       a = 1.0;
-      vec3 base = mix(vec3(0.055, 0.095, 0.028), vec3(0.085, 0.125, 0.038), h.y);
+      vec3 base = mix(vec3(0.068, 0.115, 0.032), vec3(0.105, 0.150, 0.044), h.y);
       base *= mix(0.85, 1.12, ngVNoise2(p * 18.0 + fi));
       col = base * (1.0 - 0.18 * clamp(vein, 0.0, 1.0));
     }
@@ -174,7 +174,8 @@ export const SHRUB_FS_SURFACE = /* glsl */ `
 {
   /* 株ごとの色むら（同じ緑の塊が並ばない）。下の葉は暗く、上は明るい若葉 */
   float hh = vShInfo.z;
-  vec3 tint = mix(vec3(0.92, 1.0, 0.86), vec3(1.12, 1.05, 0.9), hh);
+  /* 株ごとの色相：青みの濃い緑（ウツギ・ヤマブキの陰）〜黄緑（若葉の多い株） */
+  vec3 tint = mix(mix(vec3(0.82, 0.98, 0.88), vec3(1.0, 1.0, 0.9), smoothstep(0.0, 0.5, hh)), vec3(1.22, 1.1, 0.82), smoothstep(0.5, 1.0, hh));
   if (vShInfo.y > 0.5) diffuseColor.rgb *= tint * mix(0.8, 1.1, smoothstep(0.2, 1.0, vShInfo.x));
 #ifdef USE_MAP
   /* 遠くの mip で葉が痩せない：mip の段ごとに α を持ち上げる（forge の coverageAlpha は同じテクスチャの段を読みながら書くので
