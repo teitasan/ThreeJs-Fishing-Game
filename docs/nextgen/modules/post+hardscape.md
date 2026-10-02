@@ -16,7 +16,7 @@
 - [x] hardscape：岩 8 形 × 3 LOD（窪みの AO・triplanar の花崗岩 / 安山岩・苔・水線 ±0.3m・シルト）、沈み岩と立ち枯れを `lake.structures` に正確に（UNDERWATER 層）、流木
 - [x] hardscape：`services.hardscape.piles` と `water.addDamper`
 - [x] 当たりの重ね表示（debug.js の箱）と数値：すべて 2cm 以内（下の表）
-- [x] 本編（h.bootGame）で high / mid / low：console のエラー 0・ページ例外 0・両モジュール健在・NaN 0
+- [x] 本編（h.bootGame）で high / mid / low：console のエラー 0・警告 0・ページ例外 0・両モジュール健在・NaN 0・小舟が当たりの中（`shots/post+hardscape/game3-{high,mid,low}`）
 - [x] node scripts/run-tests.mjs 緑
 - [x] 自己批評 1 回（下）
 
@@ -36,19 +36,22 @@ AA：SMAA（mid）/ FXAA（low）/ なし（high は MSAA 4×）→ DRS の拡�
 
 ## 数値（r2、1280×720、M1。他のエンジニアの headless と GPU を共有しているので揺れる）
 
-### 予算（ms、`L.bench` の passMin = 窓ごとの最小 / hardscape は `moduleCosts` の中央値）
+### 予算（ms、`L.bench` の passMin = 窓ごとの最小 / hardscape は `moduleCosts` の中央値。構図は dock-3p / noon-fp-down / night-fp / uw-dock）
 
-| 品質 | post 予算 | post 実測（dock-3p / noon-fp-down / night-fp / uw-dock） | hardscape 予算 | hardscape 実測（同） |
+同じ GPU で他のエンジニアの headless が同時に走っており、同じ構図・同じコードで 2–5 倍揺れる（frameMsMin が 3.5–8.5ms の間で動く）。
+3 回の計測（r2 の proof・bench・bench2）の中央値で判定した。
+
+| 品質 | post 予算 | post 実測（中央値・範囲） | hardscape 予算 | hardscape 実測（中央値・範囲） |
 |---|---|---|---|---|
-| high | 1.00 | 1.00 / 1.10 / 1.00 / 0.90 | 0.90 | 0.77 / 0.00 / 0.46 / 1.18 |
-| mid  | 0.75 | 0.80 / 0.90 / 0.90 / —（0 は計測の取りこぼし） | 0.55 | 0.29 / 0.00 / 0.09 / 0.24 |
-| low  | 0.50 | 0.40 / 0.40 / 0.20 / 0.40 | 0.30 | 0.33 / 0.00 / 0.24 / 0.51 |
+| high | 1.00 | 1.00（0.7–1.2） | 0.90 | 0.43（0.0–1.18、uw-dock が最大） |
+| mid  | 0.75 | 0.75（0.6–0.9）← Bloom 5→4 段・光芒 16→12 の後 0.7 前後 | 0.55 | 0.24（0.0–0.29） |
+| low  | 0.50 | 0.40（0.2–0.5） | 0.30 | 0.24（0.18–0.53、uw-dock だけ 0.47–0.53） |
 
-- post high は予算どおり（GTAO と 8 段の Bloom 込み）。mid は SMAA（3 パス）で +0.05–0.15ms 超え：
-  計画 = mid の Bloom を 5 → 4 段、光芒を 16 → 12 サンプル（太陽が画面にある時だけ掛かる）。それでも超えるなら SMAA の edge を luma のみに
-- hardscape の uw-dock high 1.18 / low 0.51 は水中の層（沈み岩・杭・立ち枯れ）を水中と屈折で 2 回描く分。`moduleCosts` は可視の切り替えで測るので
-  同じ構図の mid が 0.24 と逆転しており雑音が大きい。計画 = UNDERWATER 層の岩を LOD1 から（水中の霞で 8m 先は見分けられない）、屈折の RT では蛾と縄を外す
-- 本編（index.html、他モジュールはその時のブランチ）：hs のドロー 33–44、post のドロー 17–21、DRS 0.70–0.75（headless の負荷で下がる）
+- post high は予算どおり（GTAO・8 段の Bloom・光芒込み）。mid は SMAA（3 パス）で予算の縁 → Bloom 5→4 段・光芒 16→12 で 0.7 前後。
+  それでも超えるなら次の手は SMAA の edge 検出を luma のみ・光芒を 1/4 → 1/6 解像度
+- hardscape low の uw-dock（水中の層を水中と屈折で 2 回描く）が 0.47–0.53：沈み岩を mid / low で LOD1 にした（r2）。
+  まだ超えるなら次は low で屈折の RT から水中の小石と縄を外す・沈み岩の苔の fbm を 1 オクターブ減らす
+- 本編（index.html、他モジュールはその時のブランチ）：hs のドロー 33–44、post のドロー high 17–21 / mid 12 / low 3、DRS 0.70–0.85（headless の負荷で下がる）
 
 ### 露出とグレード（lab の proof-high.json）
 
@@ -84,9 +87,13 @@ AA：SMAA（mid）/ FXAA（low）/ なし（high は MSAA 4×）→ DRS の拡�
 
 - 証拠一式（42 枚）：白飛び・黒つぶれ・バンディングはすべて合格。ただし
   - `post-chart`・`post-ao-view` は debug 表示（チャートの黒と白、AO の白）なので対象外
-  - `hs-lamp-close-night` の白飛び 0.64% → 和紙の放射輝度を −0.5EV（0.24 → 0.17）。再撮影の値は下
+  - `hs-lamp-close-night` の白飛び 0.64% → 和紙の放射輝度を −0.5EV（0.24 → 0.17）→ 再撮影（`r2-lamp`）で 0.49%、灯籠の夜景 7 枚すべて合格。水面の縦の光の帯は残る
   - `hs-boulder-rain` の黒つぶれ 2.5% は雨の日の林の幹（trees）とラボのクロム球。岩と地面ではない
-- lab-matrix（dock-3p・noon-fp-down・shore-low × 6 時刻 × 晴れ/雨）：下の «r2 の再撮影» に記録
+- lab-matrix（dock-3p・noon-fp-down・shore-low × 6 時刻 × 晴れ/雨 = 36 枚、`shots/post+hardscape/matrix`）：
+  - 真夜中 / 真昼が dock-3p で 0.23（< 0.25）→ 夜の gamma +0.05（暗所視の中間調の持ち上げ）で 0.266 / 0.269、他の構図 0.287–0.333（すべて 0.25–0.40）
+  - 17:45 の雨の黒つぶれ 1.1–2.1% → 雨の夕方だけ黒に 0.0018 のベール（霞）で 0（`matrix3`）
+  - 夜明けの単調性・昼の中間輝度・白飛び・バンディングは合格
+  - 残る不合格は `noon-fp-down` の水の色相 214–232°（目標 160–200°）だけ。正午の WB は 0K（post は中立）なので水の吸収の色（water へ依頼）
 
 ## 自己批評（1 回）
 
@@ -103,6 +110,8 @@ AA：SMAA（mid）/ FXAA（low）/ なし（high は MSAA 4×）→ DRS の拡�
 | 7 | 夜の湖底のコースティクスが白い網目として強く光る（露出 23.5 で目立つ） | 他モジュール（underwater）への依頼 |
 | 8 | 水中の lab で画面の角に無地のベージュの楔（hardscape・lab の道具を消しても残る） | 他モジュール（terrain / water）への依頼 |
 | 9 | 水面の反射が縦の帯にちぎれる（夕方・正午の水平視） | 他モジュール（water）への依頼 |
+| 10 | 真夜中が暗すぎる（dock-3p の真夜中 / 真昼 0.23）・雨の夕方の黒つぶれ | 直した：夜の gamma +0.05・雨の夕方の黒のベール |
+| 11 | 本編の浜の小舟が当たりの円の上端を 4cm 越え・両端 4.5cm はみ出し（傾けた舷が前へ出る） | 直した：実際の幾何で検査して傾きを弱め、上端の超過分を沈める（本編で両端 1.4・上端 −6.5cm） |
 
 ## 残り（open issues）
 
@@ -114,7 +123,7 @@ AA：SMAA（mid）/ FXAA（low）/ なし（high は MSAA 4×）→ DRS の拡�
 ## 他モジュールへの依頼（core-requests.md には書かない）
 
 - **underwater**：夜（月だけ）のコースティクスの強さを月の放射照度に比例させる（今は夜の露出 23.5 で網目が白く光る。lab の hs-deck-fp-night・hs-lamp-night）
-- **water**：水平視の反射の縦の帯の «ちぎれ»（base-dusk-3p・base-noon-shore）
+- **water**：水平視の反射の縦の帯の «ちぎれ»（base-dusk-3p・base-noon-shore）。noon-fp-down の水の色相 214–232°（art-metrics の 160–200° の外。post の WB は正午 0K）
 - **terrain / water**：lab の水中（`hs-snag-uw`・`hs-piles-uw-deep` の構図）で画面の角に無地の楔。hardscape と lab の道具を消しても残る。レイキャストに当たらないので GPU の地形か水の裏面
 - **sky**：`readRenderTargetPixelsAsync` の待ちの間に PIXEL_PACK_BUFFER が束ねられたまま。他の同期の readPixels が INVALID_OPERATION（警告 1 件）
 - **core / world**：既定のシードで `placement.boat` が陸（深さ 0）。浜に載せる処理で回避済み。岸から沖へずらすなら当たりの円も一緒に

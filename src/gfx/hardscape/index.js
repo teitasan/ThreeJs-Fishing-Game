@@ -302,12 +302,14 @@ export class HardscapeModule extends NgModule {
       this.snagMesh.receiveShadow = true;
       g.add(this.snagMesh);
     }
-    /* 沈み岩：形ごとの InstancedMesh（LOD0） */
+    /* 沈み岩：形ごとの InstancedMesh（high は LOD0、mid / low は LOD1。2m より深く、水中の霞と屈折でしか見えない。
+       r2 の計測で low の uw-dock が 0.5ms > 予算 0.30 だった。輪郭は LOD で揃うので当たりの検査は同じ） */
+    const sLod = this.tier === 'high' ? 0 : 1;
     const byShape = new Map();
     for (const r of rocks) { if (!byShape.has(r.shape)) byShape.set(r.shape, []); byShape.get(r.shape).push(r); }
     const m = new T.Matrix4(), q = new T.Quaternion(), e = new T.Euler(), v = new T.Vector3(), sc = new T.Vector3();
     for (const [k, list] of byShape) {
-      const geo = this._instGeo(this.rockGeos[k][0], list.length);
+      const geo = this._instGeo(this.rockGeos[k][sLod], list.length);
       const im = new T.InstancedMesh(geo, this.rockMat, list.length);
       im.name = `hs-struct-rock-${k}`;
       const info = geo.attributes.ngRockI.array;
