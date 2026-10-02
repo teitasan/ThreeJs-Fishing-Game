@@ -141,14 +141,17 @@ export default async function (h) {
       const all = [];
       for (const cam of errCams) {
         L.cam(cam); L.setHour(12.5); L.freeze(10); L.tick(4);
-        const rt = gfx.pipeline.targets.copy, W = rt.width, H = rt.height;
-        const step = 4, w = Math.floor(W / step), hgt = Math.floor(H / step);
+        /* 主の深度バッファ（24bit、主の解像度）を直に読む。copy の線形深度は low で 0.5× に縮めてあり、
+           最近傍で 1/4 画素ずれるので測りに使わない */
+        /* MSAA の段（high）は深度の resolve が 1 標本を拾って画素の中心からずれるので、copy の線形深度（主と同じ解像度）を使う */
+        const msaa = (gfx.pipeline.targets.main.samples | 0) > 0;
+        const mt = msaa ? gfx.pipeline.targets.copy : gfx.pipeline.targets.main, W = mt.width, H = mt.height;
+        const step = Math.max(2, Math.round(4 * W / 1280)), w = Math.floor(W / step), hgt = Math.floor(H / step);
         const buf = new Float32Array(W * H * 4);
-        /* 線形深度（R32F）は three の readRenderTargetPixels で読めないので RGBA32F へ写して読む */
         const tctx = gfx.modules.get('terrain').ctx, TT = tctx.THREE;
         const rtD = tctx.forge.target(W, H, { type: TT.FloatType, filter: 'nearest', wrap: 'clamp' });
-        tctx.forge.run(rtD, 'uniform highp sampler2D ngD;\nvoid main() { gl_FragColor = vec4(texture(ngD, vUv).r, 0.0, 0.0, 1.0); }\n',
-          { ngD: { value: gfx.pipeline.uniforms.ngSceneDepth.value } });
+        tctx.forge.run(rtD, 'uniform highp sampler2D ngD;\nvoid main() { gl_FragColor = vec4(texelFetch(ngD, ivec2(gl_FragCoord.xy), 0).r, 0.0, 0.0, 1.0); }\n',
+          { ngD: { value: msaa ? gfx.pipeline.uniforms.ngSceneDepth.value : mt.depthTexture } });
         r.readRenderTargetPixels(rtD, 0, 0, W, H, buf);
         rtD.dispose();
         const C = L.camera;
@@ -158,17 +161,18 @@ export default async function (h) {
         const v = { x: 0, y: 0, z: 0 };
         for (let j = 0; j < hgt; j++) for (let i = 0; i < w; i++) {
           const px = i * step + step / 2, py = j * step + step / 2;
-          const z = buf[(py * W + px) * 4];
+          const d01 = buf[(py * W + px) * 4];
           const o = ((hgt - 1 - j) * w + i) * 4;
           img[o + 3] = 255;
-          if (!(z > 0.1 && z < 120)) { img[o] = img[o + 1] = img[o + 2] = 30; continue; }
-          /* NDC → view（z = −depth の面）→ world */
-          const nx = (px / W) * 2 - 1, ny = (py / H) * 2 - 1;
+          if (!(msaa ? d01 > 0.1 : d01 > 0 && d01 < 1)) { img[o] = img[o + 1] = img[o + 2] = 30; continue; }
+          /* 画素の中心（+0.5）の NDC → view（深度バッファの z から射影の逆で） */
+          const nx = ((px + 0.5) / W) * 2 - 1, ny = ((py + 0.5) / H) * 2 - 1, nz = d01 * 2 - 1;
           const e = inv.elements;
-          const vx = e[0] * nx + e[4] * ny + e[8] * 1 + e[12], vy = e[1] * nx + e[5] * ny + e[9] * 1 + e[13], vz = e[2] * nx + e[6] * ny + e[10] * 1 + e[14], vw = e[3] * nx + e[7] * ny + e[11] * 1 + e[15];
-          const dx = vx / vw, dy = vy / vw, dz = vz / vw;
-          const k = z / -dz;
-          v.x = dx * k; v.y = dy * k; v.z = -z;
+          const vx = e[0] * nx + e[4] * ny + e[8] * nz + e[12], vy = e[1] * nx + e[5] * ny + e[9] * nz + e[13], vz = e[2] * nx + e[6] * ny + e[10] * nz + e[14], vw = e[3] * nx + e[7] * ny + e[11] * nz + e[15];
+          v.x = vx / vw; v.y = vy / vw; v.z = vz / vw;
+          if (msaa) { const k = d01 / -v.z; v.x *= k; v.y *= k; v.z = -d01; }   // 線形深度：同じ光線の上で view の z を合わせる
+          const z = -v.z;
+          if (!(z > 0.1 && z < 120)) { img[o] = img[o + 1] = img[o + 2] = 30; continue; }
           const m = mw.elements;
           const wx = m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12], wy = m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13], wz = m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14];
           const hTw = hf.heightAt(wx, wz), hGame = lake.heightAt(wx, wz);
