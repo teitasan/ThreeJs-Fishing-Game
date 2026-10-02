@@ -16,6 +16,7 @@ import { cloudShadow } from '../core/medium.js';
 import { SkyRig, MOON_TINT } from './rig.js';
 import { smooth as smooth01 } from './atmosphere.js';
 import { skyTier } from './quality.js';
+import { stripAt } from './strips.js';
 import { TRANS_FRAG, MS_FRAG, SKYCLEAR_FRAG, SKYVIEW_FRAG } from './atmo.glsl.js';
 import { SHAPE_FRAG, SHAPE2_FRAG, DETAIL_FRAG, CIRRUS_FRAG, MOON_FRAG, COVER_FRAG, COVER_Q, PANO_FRAG, STRIP_COPY_FRAG } from './clouds.glsl.js';
 import { DOME_VS, DOME_FS } from './dome.glsl.js';
@@ -36,14 +37,7 @@ const UTIL_FRAG = VUV + 'uniform float uCopyMode;\n'
   + STRIP_COPY_FRAG.replace('void main() {', 'void ngSkyCopyMain() {')
   + '\nvoid main() { if (uCopyMode < 0.5) ngSkyViewMain(); else ngSkyCopyMain(); }\n';
 
-/** 帯の順（n 本を «黄金比の歩み» で巡る：続けて隣を描かず、n 回で全部を 1 回ずつ） */
-export function stripAt(k, n) {
-  const step = Math.max(1, Math.round(n * 0.381966));
-  let s = step;
-  while (gcd(s, n) !== 1) s++;
-  return ((k % n) * s) % n;
-}
-function gcd(a, b) { while (b) { [a, b] = [b, a % b]; } return a; }
+
 const SKY_W = 256, SKY_H = 128;
 
 export class SkyModule extends NgModule {

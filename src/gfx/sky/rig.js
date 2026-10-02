@@ -23,7 +23,7 @@ export const NIGHT_FLOOR = Object.freeze([0.00024, 0.00040, 0.00084]);
 /** 月の光の色（輝度 1）。物理の月光は太陽よりわずかに赤いが、夜の目（プルキンエ）と絵の約束（#0b1426 の天頂）で青へ寄せる。
     月の空の項・月の key・雲を照らす月の光に掛ける */
 export const MOON_TINT = Object.freeze((() => { const c = [0.66, 0.90, 1.55]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
-const MIE_G_MEDIUM = 0.76;
+const MIE_G_MEDIUM = 0.72;
 
 /**
  * 天候 → 空の係数（純関数）
@@ -198,12 +198,14 @@ export class SkyRig {
     if (!this.twReady || a >= TW_N - 1) { out[0] = out[1] = out[2] = 1; this.gW.fill(1); up[0] = up[1] = up[2] = 0; return out; }
     const x = Math.max(0, a), i = Math.min(TW_N - 2, Math.floor(x)), f = Math.min(1, x - i);
     const t = smooth(4, 6, a + TW_A0);       // +4°〜+6° で 1 へ
+    /* 利得は対数で補間する（物理の空が −11°〜−12° で 1/14 に落ちる崖で、線形だと «利得 × 物理» が跳ねた） */
     const lerp = (tab, j) => tab[j] + (tab[j + (tab === this.twM ? 1 : 3)] - tab[j]) * f;
+    const lerpG = (tab, j) => Math.exp(Math.log(Math.max(tab[j], 1e-6)) * (1 - f) + Math.log(Math.max(tab[j + 3], 1e-6)) * f);
     for (let k = 0; k < 3; k++) {
-      const g = lerp(this.twG, i * 3 + k);
+      const g = lerpG(this.twG, i * 3 + k);
       out[k] = g + (1 - g) * t;
     }
-    for (let k = 0; k < 3; k++) { const gw = lerp(this.twW, i * 3 + k); this.gW[k] = gw + (1 - gw) * t; }
+    for (let k = 0; k < 3; k++) { const gw = lerpG(this.twW, i * 3 + k); this.gW[k] = gw + (1 - gw) * t; }
     /* 薄明・夜の «甲板なしの» 空の照度 rgb（雲の上の環境光・甲板の底の明かり。昼は使わない） */
     const m = lerp(this.twM, i), fade = 1 - smooth(0.0, 0.10, Math.sin((a + TW_A0) * Math.PI / 180));
     for (let k = 0; k < 3; k++) up[k] = (lerp(this.twE, i * 3 + k) + m * MOON_TINT[k] + NIGHT_FLOOR[k] * Math.PI) * fade;
@@ -422,11 +424,12 @@ export class SkyRig {
     x /= l; y /= l; z /= l;
     const out = [0, 0, 0];
     let ws = 0;
-    for (let i = 0; i < SH_N; i++) {
+    const n = this.dirs.length;           // 128 方向 + 地平の 8 方位
+    for (let i = 0; i < n; i++) {
       const d = this.dirs[i];
       const c = d[0] * x + d[1] * y + d[2] * z;
-      if (c < 0.80) continue;
-      const wgt = Math.pow((c - 0.80) / 0.20, 4) + 1e-6;
+      if (c < 0.86) continue;
+      const wgt = Math.pow((c - 0.86) / 0.14, 4) + 1e-6;
       ws += wgt;
       for (let k = 0; k < 3; k++) out[k] += this.Lsky[i * 3 + k] * wgt;
     }
