@@ -277,10 +277,11 @@ export class SkyModule extends NgModule {
     /* 雲 */
     const h = this.rig._last ? this.rig._last.h : 12;
     const a = (h / 24) * Math.PI * 2;
-    const ox = F[NG.CLOUDSH * 4] / 1000, oz = F[NG.CLOUDSH * 4 + 1] / 1000;
+    const fz = (v) => (Number.isFinite(v) ? v : 0);
+    const ox = fz(F[NG.CLOUDSH * 4]) / 1000, oz = fz(F[NG.CLOUDSH * 4 + 1]) / 1000;
     U.uCloud.value.set(wp.cover, wp.base / 1000, wp.top / 1000, wp.strat);
-    const inv = F[NG.CLOUDSH * 4 + 2];
-    U.uCoverXf.value.set(inv * 1000, F[NG.CLOUDSH * 4] * inv, F[NG.CLOUDSH * 4 + 1] * inv, COVER_Q);
+    const inv = fz(F[NG.CLOUDSH * 4 + 2]);
+    U.uCoverXf.value.set(inv * 1000, ox * 1000 * inv, oz * 1000 * inv, COVER_Q);
     U.uCloud2.value.set(wp.sigma, 1 / 2.2, 1 / 0.32, wp.erosion);
     /* 細部は 24h 周期の小さな円でさらに流れる（湧き立ち） */
     U.uWind.value.set(ox, oz, ox * 1.35 + Math.cos(a * 3) * 1.1, oz * 1.35 + Math.sin(a * 3) * 1.1);
@@ -294,7 +295,7 @@ export class SkyModule extends NgModule {
     /* 円盤・星 */
     U.uSunDisk.value.fromArray(o.sunDisk);
     U.uMoonDisk.value.fromArray(o.moonDisk);
-    U.uNightSky.value.set(o.stars, o.milky, -((h - 6) / 24) * Math.PI * 2, F[NG.TIME * 4 + 2]);
+    U.uNightSky.value.set(o.stars, o.milky, -((h - 6) / 24) * Math.PI * 2, fz(F[NG.TIME * 4 + 2]));
     U.uSkyMisc.value.set(1, this.q.starSize, 0, 0);
   }
 

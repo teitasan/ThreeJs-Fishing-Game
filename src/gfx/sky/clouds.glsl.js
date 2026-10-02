@@ -69,7 +69,8 @@ uniform highp sampler3D uNgShape;
 void main() {
   float a = 0.0, m = 0.0;
   for (int i = 0; i < 16; i++) {
-    vec4 s = texture(uNgShape, vec3(vUv, (float(i) + 0.5) / 16.0));
+    /* 主の読みは texture(uNgShape, (x, 高さ, z))。柱 = 2 番目の座標（高さ）に沿った平均で、2D の uv は (x, z) */
+    vec4 s = texture(uNgShape, vec3(vUv.x, (float(i) + 0.5) / 16.0, vUv.y));
     float wf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
     float sh = clamp((s.r - wf * 0.35) / max(1.0 - wf * 0.35, 1e-4), 0.0, 1.0);
     a += sh / 16.0; m = max(m, sh);
@@ -181,9 +182,19 @@ float ngCloudHeightGrad(float h01, float strat) {
 /* 雲の密度（消散 1/km）。p は km（x, z = 湖の中心からの水平、y = 地表からの高さ）。full = 細部まで。
    距離の LOD（パノラマのテクセル ≈0.18°：10km で 30m、100km で 300m の足跡。遠くで 3D のノイズを点々に読むと
    キャッシュが外れて重い）：〜12km は形 + 細部、12〜20km で細部を消し、16〜24km で形を «柱の平均» の 2D（mip 付き）へ */
+/* 乱層雲の «厚みの場»（0..1、低い周波数の 2D。7km と 3km の 2 オクターブの «柱の平均»）。
+   下面の高さの揺らぎ（±350m）と腹の暗さ・透ける光の濃淡に使う（平らな灰の板にしない） */
+float ngSkyNimboField(vec2 xzKm) {
+  vec2 q = (xzKm + uWind.xy * 0.8) * uCloud2.y;
+  float a = textureLod(uNgShape2, q * 0.31 + vec2(0.37, 0.71), 1.5).r;
+  float b = textureLod(uNgShape2, q * vec2(0.83, 0.61) + vec2(0.13, 0.29), 1.0).r;
+  return smoothstep(0.36, 0.64, a * 0.6 + b * 0.4);
+}
 float ngSkyCloudBase(vec3 p, float distKm, out float h01, out float hh) {
   float base = uCloud.y, top = uCloud.z;
   hh = 0.0;
+  float nsw = smoothstep(0.7, 1.0, uCloud.w) * smoothstep(0.3, 0.8, uLight.w);
+  if (nsw > 0.0) base -= nsw * (ngSkyNimboField(p.xz) - 0.5) * 0.7;
   h01 = (p.y - base) / max(top - base, 0.05);
   if (h01 < 0.0 || h01 > 1.0) return 0.0;
   /* 乱層雲・厚い層積雲は穴を開けない（被覆の斑は雲影と同じだが、層状の度合いで底上げ） */
@@ -285,6 +296,12 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
        空の所は 2 倍の歩幅で進み、雲に当たったら半歩戻って細かく（Schneider 2015）。
        光の向きは uMode.y − 1 回の形の密度 + 1 回の被覆だけの遠い見積もり（2.4km 先まで） */
     float NMAX = uMode.x;
+    float nsw = smoothstep(0.7, 1.0, uCloud.w) * smoothstep(0.3, 0.8, uLight.w);
+    float nimbo = 0.5;
+    if (nsw > 0.0) {
+      vec3 Pb = vec3(0.0, r0, 0.0) + d * t0;
+      nimbo = ngSkyNimboField(Pb.xz);
+    }
     /* 層状の雲（曇天・乱層雲）は光が拡散で決まるので光の段を減らし、歩幅も広げる */
     int NL = int(uMode.y - 1.0 - 2.0 * uCloud.w + 0.5);
     float stepT = mix(mix(0.045, 0.5, smoothstep(4.0, 40.0, t0)), mix(0.11, 0.6, smoothstep(4.0, 40.0, t0)), uCloud.w);
@@ -324,6 +341,10 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
         float ha = clamp(h01, 0.0, 1.0);
         vec3 amb = mix(uAmbBot, uAmbTop, sqrt(ha)) * (0.35 + 0.65 * ha) * mix(1.0, 0.5, uLight.w * (1.0 - ha));
         vec3 S = E * (ngCloudMS(ph, tauL) * powder) + amb;
+        if (nsw > 0.0) {
+          /* 厚い所（下面が低い所）ほど暗い腹、薄い所は上の光が透けて明るい（±35%） */
+          S *= mix(1.0, mix(1.45, 0.55, nimbo), nsw * (1.0 - 0.6 * ha));
+        }
         float Tk = exp(-den * dtk);
         float w = T * (1.0 - Tk);
         Lc += S * w;
@@ -378,6 +399,11 @@ void main() {
   ngCirrusLayer(d, Lsky, ci, ai);
   vec4 cur = vec4(cl + al * ci, al * ai);
   vec4 prev = texture(uPrev, uv);
+  /* NaN / Inf を履歴に残さない（mix(NaN, cur, 1) は NaN のまま、一度入ると二度と抜けない） */
+  bvec4 bc = bvec4(isnan(cur.r) || isinf(cur.r), isnan(cur.g) || isinf(cur.g), isnan(cur.b) || isinf(cur.b), isnan(cur.a) || isinf(cur.a));
+  if (any(bc)) cur = vec4(0.0, 0.0, 0.0, 1.0);
+  bvec4 bp = bvec4(isnan(prev.r) || isinf(prev.r), isnan(prev.g) || isinf(prev.g), isnan(prev.b) || isinf(prev.b), isnan(prev.a) || isinf(prev.a));
+  if (any(bp)) prev = cur;
   vec4 o = mix(prev, cur, uMode.z);
   gl_FragColor = vec4(clamp(o.rgb, vec3(0.0), vec3(60000.0)), clamp(o.a, 0.0, 1.0));
 }

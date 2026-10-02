@@ -43,7 +43,7 @@ export function weatherParams(cloud, rain, hour = 12) {
   const c = clamp01(cloud), r = clamp01(rain);
   const kc = clamp01((c - 0.14) / 0.58), kr = clamp01(r / 0.85);
   /* 晴れ（0.14）でも積雲が 3 割ほど浮かぶ（雲影も流れる）。曇り 0.77・雨 0.95+ */
-  const cover = clamp01(0.30 + (c - 0.14) * 0.84);
+  const cover = clamp01(0.36 + (c - 0.14) * 0.76);
   const strat = smooth(0.30, 0.90, c);
   /* 巻雲：晴れの日に多く、雨で隠れる。日ごとの量は時刻の周期関数（決定的） */
   const ciDay = 0.65 + 0.35 * Math.sin((hour / 24) * Math.PI * 2 + 1.3);
