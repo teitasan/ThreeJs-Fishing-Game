@@ -120,12 +120,14 @@ export class TreesModule extends NgModule {
       vertex: TREE_HOOKS.vertex, fragment: TREE_HOOKS.fragment, depth: true, hfShadow: false,
     });
     /* ---- 5. BatchedMesh（LOD0・LOD1） */
-    this.batches = [0, 1].map((k) => {
+    /* LOD0 1 本 + LOD1 3 本（同じマテリアル = 同じプログラム）。LOD1 は距離で «反射・影・主» / «影・主» / «主だけ» の束へ分ける：
+       BatchedMesh は全部のパスで全部のインスタンスの頂点を回すので、反射（18m まで）・影（箱の中）で頂点の半分以上を捨てていた */
+    this.batches = [0, 1, 1, 1].map((k, bi) => {
       let nv = 0, ni = 0;
       for (const g of this.geos[k]) { nv += g.attributes.position.count; ni += g.index.count; }
       const cap = k === 0 ? q.cap0 : q.cap1 + q.cap0;
       const bm = new T.BatchedMesh(cap, nv, ni, this.treeMat);
-      bm.name = `trees-lod${k}`;
+      bm.name = `trees-lod${k}${bi > 1 ? '-' + bi : ''}`;
       bm.perObjectFrustumCulled = false;
       bm.sortObjects = false;
       bm.frustumCulled = false;
@@ -135,7 +137,7 @@ export class TreesModule extends NgModule {
       for (let i = 0; i < cap; i++) { const id = bm.addInstance(ids[0]); bm.setVisibleAt(id, false); }
       ngAttachDepth(bm);
       this.root.add(bm);
-      return { bm, ids, cap, used: 0 };
+      return { bm, ids, cap, used: 0, lod: k };
     });
     progress?.(0.5);
     /* ---- 6. 木の表（高さは GPU の地形と同じ補間）と格子 */
@@ -207,6 +209,11 @@ export class TreesModule extends NgModule {
     /* ---- 層・品質・提供 */
     ngOwn(this.root, NG_LAYER.WORLD);
     ngOwn(this.shell, NG_LAYER.FAR);
+    /* 束の層：LOD0 = 主 + 影（反射は LOD1 とインポスター）、LOD1-a = 反射・影・主、LOD1-b = 影・主、LOD1-c = 主だけ */
+    const [L0b, , L1b, L1c] = this.batches;
+    for (const b of [L0b, L1b]) { b.bm.layers.set(NG_LAYER.NO_REFLECT); b.bm.layers.enable(NG_LAYER.SHADOW_ONLY); }
+    L1c.bm.layers.set(NG_LAYER.NO_REFLECT);
+    L1c.bm.castShadow = false;
     this.setQuality(this.tier, ctx.profile);
     ctx.services.provide('trees', {
       impostorBake: { albedoTex: this.imp.alb.texture, normalDepthTex: this.imp.nrm.texture, frames: IMP_GRID, size: this.imp.size },
@@ -431,9 +438,22 @@ export class TreesModule extends NgModule {
     const hfov = Math.atan(Math.tan(vfov / 2) * (cam.aspect || 1.78));
     const cosCut = Math.cos(Math.min(Math.PI, hfov + 0.44));
     const lookDown = Math.abs(fwd.y) > 0.8;
-    const [b0, b1] = this.batches;
-    let n0 = 0, n1 = 0, np = 0, ns = 0;
+    const [b0, ...b1s] = this.batches;
+    let n0 = 0, np = 0, ns = 0;
+    const n1s = [0, 0, 0];
     const SR = this.shadowR || 60;
+    /* LOD1 の束：反射の LOD1 の端（ngTreePass.x）の内 = a、影の箱の対角（ngTreePass.w）の内 = b、外 = c（シェーダの距離は ÷ lodScale） */
+    const TP = this.U.ngTreePass.value;
+    const RA = (TP.x + 1) * k, RB = TP.w * k;
+    const put1 = (t, d, flag) => {
+      const bi = d < RA ? 0 : d < RB ? 1 : 2;
+      const b = b1s[bi];
+      if (n1s[bi] >= b.cap) return false;
+      const id = n1s[bi]++;
+      b.bm.setGeometryIdAt(id, b.ids[gid(t)]);
+      b.bm.setMatrixAt(id, this._matrix(t, flag));
+      return true;
+    };
     const R = q.lod1 * k + 2;
     const i0 = Math.max(0, Math.floor((ex - R + GRID_HALF) / CELL)), i1 = Math.min(GRID_N - 1, Math.floor((ex + R + GRID_HALF) / CELL));
     const j0 = Math.max(0, Math.floor((ez - R + GRID_HALF) / CELL)), j1 = Math.min(GRID_N - 1, Math.floor((ez + R + GRID_HALF) / CELL));
@@ -471,25 +491,18 @@ export class TreesModule extends NgModule {
       const d = cd[c];
       if (inView && d < L0) {
         if (n0 < b0.cap) { const id = n0++; b0.bm.setGeometryIdAt(id, b0.ids[gid(t)]); b0.bm.setMatrixAt(id, this._matrix(t, 1)); }
-        if (n1 < b1.cap) {
-          /* 切り替えの帯は本物の LOD1（ディザ）、内側は代理（反射と遠めの影） */
-          const proxy = d < L0 - W0 - 1;
-          const id = n1++;
-          b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
-          b1.bm.setMatrixAt(id, this._matrix(t, proxy ? 2 : 1));
-          if (proxy) np++;
-        }
+        /* 切り替えの帯は本物の LOD1（ディザ）、内側は代理（反射と遠めの影） */
+        const proxy = d < L0 - W0 - 1;
+        if (put1(t, d, proxy ? 2 : 1) && proxy) np++;
       } else if (inView && d < L1) {
-        if (n1 < b1.cap) { const id = n1++; b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]); b1.bm.setMatrixAt(id, this._matrix(t, 1)); }
-      } else if (!inView && d < SR && n1 < b1.cap) {
+        put1(t, d, 1);
+      } else if (!inView && d < SR) {
         /* 視野の外の近い木：影だけ（LOD1） */
-        const id = n1++;
-        b1.bm.setGeometryIdAt(id, b1.ids[gid(t)]);
-        b1.bm.setMatrixAt(id, this._matrix(t, 3));
-        ns++;
+        if (put1(t, d, 3)) ns++;
       }
     }
-    for (const [b, n] of [[b0, n0], [b1, n1]]) {
+    const n1 = n1s[0] + n1s[1] + n1s[2];
+    for (const [b, n] of [[b0, n0], [b1s[0], n1s[0]], [b1s[1], n1s[1]], [b1s[2], n1s[2]]]) {
       for (let i = n; i < b.used; i++) b.bm.setVisibleAt(i, false);
       for (let i = 0; i < n; i++) b.bm.setVisibleAt(i, true);
       b.used = n;
@@ -594,12 +607,12 @@ export class TreesModule extends NgModule {
     if (!this.batches) return { draws: 0, tris: 0, instances: 0, texBytes: 0, programs: 0 };
     const P = this.ctx.placement?.trees;
     let tris = 0;
-    for (const [k, b] of this.batches.entries()) {
-      for (let i = 0; i < b.used; i++) tris += this.geos[k][b.bm.getGeometryIdAt(i)].index.count / 3;
+    for (const b of this.batches) {
+      for (let i = 0; i < b.used; i++) tris += this.geos[b.lod][b.bm.getGeometryIdAt(i)].index.count / 3;
     }
     tris += this.counts.imp * 2 + 256 * 256 * 2;
     return {
-      draws: 4, tris, instances: this.counts.lod0 + this.counts.lod1 + this.counts.imp, texBytes: this.texBytes, programs: 4,
+      draws: 6, tris, instances: this.counts.lod0 + this.counts.lod1 + this.counts.imp, texBytes: this.texBytes, programs: 4,
       lod0: this.counts.lod0, lod1: this.counts.lod1, proxy: this.counts.proxy, shadowOnly: this.counts.shadowOnly,
       lodDist: [+(this.L0n ?? 0).toFixed(1), +(this.L1n ?? 0).toFixed(1), +(this.L0target ?? 0).toFixed(1), +(this.L1target ?? 0).toFixed(1)], impostors: this.counts.imp, trees: P?.count || 0,
     };
