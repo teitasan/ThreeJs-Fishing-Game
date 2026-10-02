@@ -60,7 +60,7 @@ ARCHITECTURE §6.5 / CORE_API。担当のブランチ：`ng/trees`（G1 前半�
 - 証拠：`TIERS=low,mid,high node scripts/gfx/shot.mjs scripts/gfx/scenarios/trees-proof.mjs --out DIR [--size 2560x1440]`（`SET=hi` で少ない組、`ONLY=a,b` で一部、`DBG=N` で調べ物の表示、`BENCH=1` で lab の GPU ms、`LAB=integ` で sky・terrain の WIP を重ねた scratch の頁）
 - 本編：`TIERS=high,mid,low node scripts/gfx/shot.mjs scripts/gfx/scenarios/trees-game.mjs --out DIR`（`VIEWS=0` で測るだけ）
 - 本物の sky（ng/sky-r4）と terrain（ng/terrain-r4）を重ねた確認は scratch（`git archive` で書き出した他のモジュール + この worktree）で撮る。他のモジュールのファイルは触らない
-- r4 の撮影：`scratchpad/shots/trees/r4-final`（high 1280×720、全部）・`r4-2560`（2560×1440）・`r4-lowmid`（low・mid）・`r4-game2`（本編 3 段 × 9 構図）・`r4-integ`（夕方 18.2 / 18.5 の霜の確認）
+- r4 の撮影（最終）：`scratchpad/shots/trees/r4-final3`（high 1280×720、全部）・`r4-2560b`（2560×1440）・`r4-lowmid2`（low・mid）・`r4-game2`（本編 3 段 × 9 構図）・`r4-game7`（本編 high、最終の版）・`r4-integ`（夕方 18.2 / 18.5 の霜の確認）
 
 ## 自己批評
 
@@ -90,7 +90,7 @@ ARCHITECTURE §6.5 / CORE_API。担当のブランチ：`ng/trees`（G1 前半�
 9. 見上げで葉柄・小枝の細い暗い線が放射状に見える（未：LOD0 の小枝の太さと葉柄の向き。焼き込みの見直し）
 10. 水に写る森が縦の柵（water のスタブの読み方。trees の反射の RT は正しい）
 
-## art-metrics（r4-final、high 1280×720、本物の sky・terrain を重ねて）
+## art-metrics（r4-final3、high 1280×720、本物の sky・terrain を重ねて。low・mid（r4-lowmid2）も同じ 2 枚だけ失敗）
 
 37 枚中 35 枚合格（白飛び 0・バンディング ≤ 9px）。失敗の 2 枚：
 - `backlit-sugi-18.0`（黒つぶれ 31%）：日没直後に «密な林の中から明るい夕空を見上げる» 極端な構図。潰れているのは手前の林の影の側（明るさは空 0.15 に対して葉 ≈ 0.001、物理的にも 1/100 前後）。
