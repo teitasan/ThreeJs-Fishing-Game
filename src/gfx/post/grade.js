@@ -100,9 +100,12 @@ export function ngGradeParams(s) {
   const day = smooth(4, 20, alt);
   const dK = 300 * golden - 800 * blue - 250 * night;
   const sat = clamp(1.0 + 0.05 * day * clear + 0.07 * golden - 0.05 * rain, 1.0, 1.12);
-  const lift = [0.0005 * golden, 0.0015 * night + 0.0008 * blue, 0.0045 * night + 0.003 * blue];
+  /* 雨の夕方は黒が潰れる（r2 の lab-matrix で 17:45 の雨が 1.1–2.1%）。雨の霞の «ベール» として黒を少しだけ持ち上げる */
+  const veil = 0.0018 * rain * (1 - day);
+  const lift = [0.0005 * golden + veil, 0.0015 * night + 0.0008 * blue + veil, 0.0045 * night + 0.003 * blue + veil];
   const gain = [1 + 0.015 * golden, 1, 1 - 0.02 * golden];
-  const gamma = 1 + 0.02 * rain + 0.02 * cloud * (1 - night);
+  /* 夜は中間調を少し持ち上げる（暗所視で «暗いと分かるが見える»。art-metrics の真夜中 / 真昼 0.25–0.40。r2：dock-3p が 0.23 だった） */
+  const gamma = 1 + 0.02 * rain + 0.02 * cloud * (1 - night) + 0.08 * night * (1 - uw);
   return {
     dK, wb: ngWhiteBalance(dK), sat, purkinje: night * (1 - uw), lift, gamma, gain,
     vignette: 0.12, bloom: 0.035 + 0.015 * Math.max(night, uw), golden, blue,

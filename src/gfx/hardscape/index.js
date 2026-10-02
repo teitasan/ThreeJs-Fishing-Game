@@ -146,6 +146,17 @@ export class HardscapeModule extends NgModule {
     const bg = buildBoat(rnd);
     this.boatGeo = bg.toGeometry(T);
     this.boatLocal = bg;
+    /* 浜の姿勢を実際の幾何で当たりに収める：傾けると舳先の高い舷が前へ出る（両端のはみ出し）→ 傾きを弱める。
+       舷の上端（船首の柱・舷の縁木を含む）が当たりの上端を越える分は沈める */
+    if (this._beach) {
+      const pa = this.boatGeo.attributes.position.array, B = this._beach;
+      const rep = () => boatContractReport(pa, { ...boatP, pitch: B.pitch, roll: B.roll });
+      const flat = boatContractReport(pa, { ...boatP, pitch: 0, roll: 0 }).outsideEnds;
+      for (let i = 0; i < 8 && rep().outsideEnds > Math.max(1.8, flat + 0.2); i++) { B.pitch *= 0.7; B.roll *= 0.85; }
+      const r = rep();
+      if (r.topOver > 1.0) B.y -= (r.topOver - 0.5) / 100;
+      boatP.y = B.y;
+    }
     this.boat = new T.Mesh(this.boatGeo, this.woodMat);
     this.boat.name = 'hs-boat';
     this.boat.position.set(boatP.x, boatP.y, boatP.z);
