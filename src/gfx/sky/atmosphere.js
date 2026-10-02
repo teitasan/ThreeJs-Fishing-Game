@@ -32,6 +32,9 @@ export const ATMO = Object.freeze({
 });
 
 /** LUT の大きさ（GPU）。CPU 双子は小さい版 */
+/** 太陽の項の太陽の最低の高度（sin(−9°)）と cos */
+export const SUN_CLAMP_SY = Math.sin(-9 * Math.PI / 180);
+export const SUN_CLAMP_C = Math.cos(-9 * Math.PI / 180);
 export const LUT = Object.freeze({
   transW: 256, transH: 64, msN: 32, viewW: 256, viewH: 128,
   cpuTransW: 64, cpuTransH: 32, cpuMsN: 16,
@@ -251,7 +254,12 @@ export class AtmosphereCPU {
     const tMax = Math.min(tG >= 0 ? tG : distToTop(r, vy), 400e3);
     const m = this._m, tS = this._r0, tM = this._r1, msS = this._r2, msM = this._r3;
     const muSv = vx * sx + vy * sy + vz * sz;
-    const pRs = phaseR(muSv), pMs = phaseCS(muSv, ATMO.mieG);
+    /* 太陽の項の太陽は SUN_CLAMP_SY（−9°）より下へ沈めない（GPU の sS と同じ）。深い薄明は «−9° の空の形 × 利得»：
+       物理の空は −11°〜−12° で崖のように落ち、段数の違う CPU と GPU・時刻表の利得（×2000）が崖の位置で食い違った */
+    let qx = sx, qy = sy, qz = sz;
+    if (sy < SUN_CLAMP_SY) { const hl = Math.hypot(sx + 1e-6, sz) || 1; qx = (sx + 1e-6) / hl * SUN_CLAMP_C; qy = SUN_CLAMP_SY; qz = sz / hl * SUN_CLAMP_C; }
+    const muSvS = vx * qx + vy * qy + vz * qz;
+    const pRs = phaseR(muSvS), pMs = phaseCS(muSvS, ATMO.mieG);
     const pRm = phaseR(-muSv), pMm = phaseCS(-muSv, ATMO.mieG);
     const useS = eS[0] + eS[1] + eS[2] > 0, useM = eM[0] + eM[1] + eM[2] > 0;
     const dk = this.deck, gInv = 1 / Math.max(G, 1e-6);
@@ -266,10 +274,10 @@ export class AtmosphereCPU {
       tPrev = t1;
       const px = vx * tm, py = r + vy * tm, pz = vz * tm;
       const rp = Math.hypot(px, py, pz);
-      const muS = (px * sx + py * sy + pz * sz) / rp;
+      const muS = (px * sx + py * sy + pz * sz) / rp, muSs = (px * qx + py * qy + pz * qz) / rp;
       const h = rp - ATMO.Rg;
       medium(h, this.haze, m);
-      if (useS) { this.sunTransmittance(rp, muS, tS); this.multiScatter(rp, muS, msS); }
+      if (useS) { this.sunTransmittance(rp, muSs, tS); this.multiScatter(rp, muSs, msS); }
       if (useM) { this.sunTransmittance(rp, -muS, tM); this.multiScatter(rp, -muS, msM); }
       const below = 1 - smooth(dk.h - 200, dk.h + 200, h);
       const occ = 1 - dk.occ * below;
@@ -288,15 +296,16 @@ export class AtmosphereCPU {
     if (tG >= 0 && tG < 400e3) {
       const px = vx * tMax, py = r + vy * tMax, pz = vz * tMax;
       const rp = Math.hypot(px, py, pz);
-      const muS = (px * sx + py * sy + pz * sz) / rp;
-      if (useS) this.sunTransmittance(rp, muS, tS);
+      const muS = (px * sx + py * sy + pz * sz) / rp, muSs = (px * qx + py * qy + pz * qz) / rp;
+      if (useS) this.sunTransmittance(rp, muSs, tS);
       if (useM) this.sunTransmittance(rp, -muS, tM);
       for (let k = 0; k < 3; k++) {
-        const E = (useS ? eS[k] * tS[k] * Math.max(muS, 0) : 0) + (useM ? eM[k] * tM[k] * Math.max(-muS, 0) : 0);
+        const E = (useS ? eS[k] * tS[k] * Math.max(muSs, 0) : 0) + (useM ? eM[k] * tM[k] * Math.max(-muS, 0) : 0);
         out[k] += thr[k] * E * (1 - dk.occ) * ATMO.albedo / PI;
       }
     }
     for (let k = 0; k < 3; k++) out[k] *= G;
+    twShape(vx, vy, vz, sx, sy, sz, out);
     return out;
   }
 
@@ -334,4 +343,71 @@ export function sunDirAt(hour) {
   const a = (((hour % 24) + 24) % 24 - 6) / 24 * PI * 2;
   const x = Math.cos(a), y = Math.sin(a), z = 0.34, l = Math.hypot(x, y, z);
   return [x / l, y / l, z / l];
+}
+
+/* ---------- 薄明の見た目の整形（ブルーアワー） ----------
+   RGB 3 波長の raymarch は、太陽が沈むと多重散乱とオゾンの吸収の釣り合いで方向によらず «灰がかった
+   ラベンダー» に寄る（実際の空は連続スペクトルで青が残る）。また rig.js の薄明の利得（−14° で ×1800）が
+   地平の多重散乱をそのまま持ち上げ、深い薄明の反太陽側の地平が灰色に光る。
+   ここで «太陽の側の残照（warmW）以外» の空を、輝度を保ったまま
+   - 地平：淡い青 → 天頂：市民薄明の青 → 航海薄明の深い青（仰角と太陽の深さで）
+   - 反太陽側の地平の数度上：ビーナスベルトの桃色（太陽 +2°〜−5°、地球の影の上端より上の帯）
+   - 地球の影（帯より下）：青灰
+   の色度へ寄せ、深い薄明（−4° より下）の地平を仰角に応じて暗くする。純関数（GLSL の ngSkyTwShape と同じ式）。
+   rig.js の薄明の利得の表はこの整形込みの空から作る（照度の目標はそのまま） */
+const lumN = (c) => { const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return Object.freeze(c.map((v) => v / l)); };
+export const TWS = Object.freeze({
+  hor: lumN([0.70, 0.95, 1.60]), horD: lumN([0.45, 0.80, 2.20]),
+  zen: lumN([0.40, 0.72, 2.60]), zenD: lumN([0.26, 0.56, 3.40]),
+  belt: lumN([1.60, 0.78, 1.00]), shadow: lumN([0.55, 0.82, 1.90]), glow: lumN([2.0, 0.80, 0.40]),
+});
+/** 太陽の側の地平（残照）の重み（rig.js の warmWeight・GLSL の ngSkyWarmW と同じ式） */
+export function warmW(vx, vy, vz, sx, sz) {
+  const mu = (vx * sx + vz * sz) / Math.max(Math.hypot(vx, vz) * Math.hypot(sx, sz), 1e-4);
+  const a = Math.max(0.5 + 0.5 * mu, 0), a2 = a * a;
+  return a2 * a2 * a2 * smooth(0.0, 0.06, vy) * Math.exp(-Math.max(vy, 0) * 7.0);
+}
+/** 薄明の整形の係数（太陽高度の sin だけで決まる）：[色度の重み, 深さ 0..1, ベルトの重み, 地平を暗くする重み, 地球の影の上端 sin] */
+export function twShapeParams(sy, out = [0, 0, 0, 0, 0]) {
+  const fade = 1 - smooth(-0.24, -0.32, sy);
+  out[0] = smooth(0.06, -0.02, sy) * fade;
+  out[1] = smooth(-0.01, -0.12, sy);
+  out[2] = smooth(0.035, 0.0, sy) * (1 - smooth(-0.035, -0.075, sy));
+  out[3] = smooth(-0.07, -0.18, sy) * fade;
+  out[4] = Math.max(0.004, -sy * 0.85 + 0.006);
+  return out;
+}
+const _twp = [0, 0, 0, 0, 0];
+/** L（rgb、その場で書き換え）に薄明の整形を掛ける */
+export function twShape(vx, vy, vz, sx, sy, sz, L) {
+  if (!(sy <= 0.06)) return L;
+  const p = twShapeParams(sy, _twp);
+  if (p[0] <= 0) return L;
+  const e = clamp01(vy);
+  const mu = (vx * sx + vz * sz) / Math.max(Math.hypot(vx, vz) * Math.hypot(sx, sz), 1e-4);
+  /* 残照の側（地平まで含む。warmW と違い地平で 0 に落とさない）は物理の色度のまま */
+  const a = Math.max(0.5 + 0.5 * mu, 0), a2 = a * a;
+  const w0 = a2 * a2 * Math.exp(-5.0 * e);
+  /* 深い薄明（−5° より下）では残照の側も整形する（物理のままだと利得 ×300 で灰白に光る）：地平の細い帯だけ残照の橙へ */
+  const deep = smooth(-0.09, -0.17, sy), ww = w0 * (1 - deep), glow = w0 * deep * Math.exp(-6.0 * e);
+  const anti = smooth(0.0, -0.85, mu);
+  const t = smooth(0.0, 0.45, e), dp = p[1];
+  const sh = p[4], bt = sh + 0.16;
+  const belt = p[2] * anti * smooth(sh * 0.6, sh + 0.03, e) * (1 - smooth(bt - 0.06, bt + 0.04, e));
+  const shadow = p[2] * anti * (1 - smooth(sh * 0.5, sh + 0.02, e));
+  const C = [0, 0, 0];
+  for (let k = 0; k < 3; k++) {
+    const h = TWS.hor[k] + (TWS.horD[k] - TWS.hor[k]) * dp, z = TWS.zen[k] + (TWS.zenD[k] - TWS.zen[k]) * dp;
+    let c = h + (z - h) * t;
+    c += (TWS.belt[k] - c) * belt * 0.95;
+    c += (TWS.shadow[k] - c) * shadow * 0.7;
+    c += (TWS.glow[k] - c) * glow;
+    C[k] = c;
+  }
+  const cl = 0.2126 * C[0] + 0.7152 * C[1] + 0.0722 * C[2];
+  const lum = 0.2126 * L[0] + 0.7152 * L[1] + 0.0722 * L[2];
+  const cw = p[0] * (1 - ww) * 0.9;
+  const dim = 1 + (0.38 + 0.62 * smooth(0.0, 0.4, e) - 1) * p[3] * (1 - ww);
+  for (let k = 0; k < 3; k++) L[k] = (L[k] + (lum * C[k] / cl - L[k]) * cw) * dim;
+  return L;
 }

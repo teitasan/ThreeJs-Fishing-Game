@@ -22,6 +22,12 @@ export const CLOUD_R = 1500;
 export const NIGHT_FLOOR = Object.freeze([0.00024, 0.00040, 0.00084]);
 /** 月の光の色（輝度 1）。物理の月光は太陽よりわずかに赤いが、夜の目（プルキンエ）と絵の約束（#0b1426 の天頂）で青へ寄せる。
     月の空の項・月の key・雲を照らす月の光に掛ける */
+/** 月が照らす空の明るさの倍率（key の月光はそのまま）。物理の比のままだと露出 ×22 の夜空が «昼の空を暗くしただけ»
+ *  の明るい青になる（天頂 ≈ 2.5 × #0b1426）。空だけ半分にして、月明かりの地面と暗い夜空の対比を作る */
+export const MOON_SKY = 0.38;
+/** 月が照らす空の項の色（key の MOON_TINT とは別）。Rayleigh がすでに青くするので、ここで青を重ねると AgX の後で R が 0 に潰れた
+ *  «青のベタ塗り» になる（23:30 の天頂 #011e45）。ほぼ中立にして、表示で #0b1426 に近い色度（リニア 0.70, 0.99, 1.98）に */
+export const MOON_SKY_TINT = Object.freeze((() => { const c = [0.97, 1.0, 1.06]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
 export const MOON_TINT = Object.freeze((() => { const c = [0.66, 0.90, 1.55]; const l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map((v) => v / l); })());
 const MIE_G_MEDIUM = 0.72;
 
@@ -164,7 +170,7 @@ export class SkyRig {
       const alt = (TW_A0 + i) * Math.PI / 180, sy = Math.sin(alt);
       const s = [Math.cos(alt), sy, 0];
       const sunSky = smooth(-0.40, -0.05, sy), moonSky = smooth(-0.40, -0.05, -sy);
-      const eS = [this.Etop * sunSky, this.Etop * sunSky, this.Etop * sunSky], eM = MOON_TINT.map((t) => this.moonTop * moonSky * t);
+      const eS = [this.Etop * sunSky, this.Etop * sunSky, this.Etop * sunSky], eM = MOON_SKY_TINT.map((t) => this.moonTop * MOON_SKY * moonSky * t);
       const Es = [0, 0, 0];
       let Em = 0;
       for (const d of dirs) {
@@ -187,7 +193,25 @@ export class SkyRig {
         this.twE[i * 3 + k] = Es[k] * this.twG[i * 3 + k];
         /* 太陽の側：明るさは同じ倍率、色度は物理の平均 → 残照の橙へ。深い薄明（−6° より下）では青へ戻す（残照は −10° で消える） */
         const gw = gl * Math.pow(glow[k] / Math.max(lp > 1e-12 ? Es[k] / lp : 1, 1e-3), 0.6 * wg);
-        this.twW[i * 3 + k] = clamp(gw + (this.twG[i * 3 + k] - gw) * smooth(-0.10, -0.19, sy), 0.05, TW_GMAX);
+        this.twW[i * 3 + k] = clamp(gw + (this.twG[i * 3 + k] - gw) * smooth(-0.14, -0.22, sy), 0.05, TW_GMAX);
+      }
+      /* 実際の空（残照の側は twW）で照度を測り直し、目標の輝度へ合わせる（残照の側の利得の分だけ明るすぎた：−10° で +5% の段） */
+      if (sunSky > 0 && lum > lp * 1.001) {
+        const Ea = [0, 0, 0], eSd = [0, 0, 0];
+        for (const d of dirs) {
+          if (d[1] <= 0) continue;
+          const ww = warmWeight(d[0], d[1], d[2], s[0], s[2]);
+          for (let k = 0; k < 3; k++) eSd[k] = eS[k] * (this.twG[i * 3 + k] + (this.twW[i * 3 + k] - this.twG[i * 3 + k]) * ww);
+          atm.radiance(d[0], d[1], d[2], s[0], s[1], s[2], eSd, z, this.G, 10, o);
+          for (let k = 0; k < 3; k++) Ea[k] += o[k] * d[1] * w;
+        }
+        const la = ngLuminance(Ea[0], Ea[1], Ea[2]);
+        const sc = la > 1e-12 ? clamp(lum / la, 0.5, 2) : 1;
+        for (let k = 0; k < 3; k++) {
+          this.twG[i * 3 + k] = clamp(this.twG[i * 3 + k] * sc, 0.05, TW_GMAX);
+          this.twW[i * 3 + k] = clamp(this.twW[i * 3 + k] * sc, 0.05, TW_GMAX);
+          this.twE[i * 3 + k] = Ea[k] * sc;
+        }
       }
       yield i;
     }
@@ -211,7 +235,7 @@ export class SkyRig {
     for (let k = 0; k < 3; k++) { const gw = lerpG(this.twW, i * 3 + k); this.gW[k] = gw + (1 - gw) * t; }
     /* 薄明・夜の «甲板なしの» 空の照度 rgb（雲の上の環境光・甲板の底の明かり。昼は使わない） */
     const m = lerp(this.twM, i), fade = 1 - smooth(0.0, 0.10, Math.sin((a + TW_A0) * Math.PI / 180));
-    for (let k = 0; k < 3; k++) up[k] = (lerp(this.twE, i * 3 + k) + m * MOON_TINT[k] + NIGHT_FLOOR[k] * Math.PI) * fade;
+    for (let k = 0; k < 3; k++) up[k] = (lerp(this.twE, i * 3 + k) + m * MOON_SKY_TINT[k] + NIGHT_FLOOR[k] * Math.PI) * fade;
     return out;
   }
 
@@ -244,12 +268,12 @@ export class SkyRig {
     p.eS0 = this.Etop * sunSky;
     for (let k = 0; k < 3; k++) {
       p.eS[k] = this.Etop * this.sunCol[k] * sunSky * gTw[k];
-      p.eM[k] = this.moonTop * this.sunCol[k] * moonSky * MOON_TINT[k];
+      p.eM[k] = this.moonTop * MOON_SKY * this.sunCol[k] * moonSky * MOON_SKY_TINT[k];
     }
     /* 雲を照らす光：太陽が −6° より上なら太陽、それより下は月（月は 6° より上でだけ灯す → 切り替えで 0） */
     p.useMoonLight = s[1] < -0.10;
     p.light = p.useMoonLight ? [-s[0], -s[1], -s[2]] : s.slice();
-    const lg = p.useMoonLight ? smooth(0.10, 0.25, -s[1]) : 1;
+    const lg = p.useMoonLight ? smooth(0.10, 0.34, -s[1]) : 1;
     for (let k = 0; k < 3; k++) p.lightE[k] = (p.useMoonLight ? this.moonTop * MOON_TINT[k] : this.Etop) * this.sunCol[k] * lg;
     /* key：太陽高度 −1° で月へ。交差点で両方 0 */
     const useSun = s[1] > -SIN_1DEG;

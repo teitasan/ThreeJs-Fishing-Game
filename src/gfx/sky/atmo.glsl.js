@@ -9,7 +9,7 @@
      太陽と月の 2 灯・オゾン・地球の影（ビーナスベルト）・雲の甲板の下の陰り
    - SKYVIEW_FRAG：services の skyView（晴れの空 ⊕ 雲パノラマ、mip 付き）
    =========================================================== */
-import { ATMO } from './atmosphere.js';
+import { ATMO, TWS, SUN_CLAMP_SY } from './atmosphere.js';
 import { NG_FRAME_GLSL } from '../core/frame.js';
 import { NG_SURFACE_GLSL } from '../core/glsl/surface.glsl.js';
 
@@ -32,6 +32,8 @@ const float NG_SKY_HM = ${f(ATMO.HM / 1e3)};
 const float NG_SKY_OZC = ${f(ATMO.ozoneC / 1e3)};
 const float NG_SKY_OZW = ${f(ATMO.ozoneW / 1e3)};
 const float NG_SKY_G = ${f(ATMO.mieG)};
+const float NG_SKY_SUNCLAMP = ${f(SUN_CLAMP_SY)};
+const float NG_SKY_SUNCLAMPC = ${f(Math.sqrt(1 - SUN_CLAMP_SY * SUN_CLAMP_SY))};
 const float NG_SKY_ALBEDO = ${f(ATMO.albedo)};
 const float NG_SKY_VIEWR = ${f((ATMO.Rg + ATMO.viewH) / 1e3)};
 
@@ -185,6 +187,38 @@ float ngSkyWarmW(vec3 v, vec3 s) {
   float a = max(0.5 + 0.5 * mu, 0.0), a2 = a * a;
   return a2 * a2 * a2 * smoothstep(0.0, 0.06, v.y) * exp(-max(v.y, 0.0) * 7.0);
 }
+/* atmosphere.js の smooth（a > b も可） */
+float ngSkySm(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
+/* atmosphere.js の twShape と同じ式：薄明の空の色度（ブルーアワーの青・ビーナスベルト・地球の影・残照）と深い薄明の地平の暗さ */
+vec3 ngSkyTwShape(vec3 v, vec3 s, vec3 L) {
+  float sy = s.y;
+  if (sy > 0.06) return L;
+  float fade = 1.0 - ngSkySm(-0.24, -0.32, sy);
+  float p0 = ngSkySm(0.06, -0.02, sy) * fade;
+  if (p0 <= 0.0) return L;
+  float dp = ngSkySm(-0.01, -0.12, sy);
+  float p2 = ngSkySm(0.035, 0.0, sy) * (1.0 - ngSkySm(-0.035, -0.075, sy));
+  float p3 = ngSkySm(-0.07, -0.18, sy) * fade;
+  float sh = max(0.004, -sy * 0.85 + 0.006), bt = sh + 0.16;
+  float e = clamp(v.y, 0.0, 1.0);
+  float mu = dot(v.xz, s.xz) / max(length(v.xz) * length(s.xz), 1e-4);
+  float a = max(0.5 + 0.5 * mu, 0.0), a2 = a * a;
+  float w0 = a2 * a2 * exp(-5.0 * e);
+  float deep = ngSkySm(-0.09, -0.17, sy), ww = w0 * (1.0 - deep), glow = w0 * deep * exp(-6.0 * e);
+  float anti = ngSkySm(0.0, -0.85, mu);
+  float t = ngSkySm(0.0, 0.45, e);
+  float belt = p2 * anti * ngSkySm(sh * 0.6, sh + 0.03, e) * (1.0 - ngSkySm(bt - 0.06, bt + 0.04, e));
+  float shadow = p2 * anti * (1.0 - ngSkySm(sh * 0.5, sh + 0.02, e));
+  vec3 C = mix(mix(${v3(TWS.hor)}, ${v3(TWS.horD)}, dp), mix(${v3(TWS.zen)}, ${v3(TWS.zenD)}, dp), t);
+  C = mix(C, ${v3(TWS.belt)}, belt * 0.95);
+  C = mix(C, ${v3(TWS.shadow)}, shadow * 0.7);
+  C = mix(C, ${v3(TWS.glow)}, glow);
+  const vec3 ngTwY = vec3(0.2126, 0.7152, 0.0722);
+  float cl = dot(C, ngTwY), lum = dot(L, ngTwY);
+  float cw = p0 * (1.0 - ww) * 0.9;
+  float dim = 1.0 + (0.38 + 0.62 * ngSkySm(0.0, 0.4, e) - 1.0) * p3 * (1.0 - ww);
+  return mix(L, lum * C / cl, cw) * dim;
+}
 uniform vec4 uSkyDeck;
 uniform vec3 uSkyDeckL;
 uniform vec3 uSkySunDir;
@@ -201,8 +235,10 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
   float tG = ngSkyDistGround(r, v.y);
   float tMax = min(tG >= 0.0 ? tG : ngSkyDistTop(r, v.y), 400.0);
   vec3 s = uSkySunDir;
-  float muSv = dot(v, s);
-  float pRs = ngSkyPhaseR(muSv), pMs = ngSkyPhaseCS(muSv, NG_SKY_G);
+  /* 太陽の項の太陽は −9° より下へ沈めない（atmosphere.js の SUN_CLAMP_SY と同じ。深い薄明は «−9° の空の形 × 利得»） */
+  vec3 sS = s.y < NG_SKY_SUNCLAMP ? vec3(normalize(s.xz + vec2(1e-6, 0.0)).x * NG_SKY_SUNCLAMPC, NG_SKY_SUNCLAMP, normalize(s.xz + vec2(1e-6, 0.0)).y * NG_SKY_SUNCLAMPC) : s;
+  float muSv = dot(v, s), muSvS = dot(v, sS);
+  float pRs = ngSkyPhaseR(muSvS), pMs = ngSkyPhaseCS(muSvS, NG_SKY_G);
   float pRm = ngSkyPhaseR(-muSv), pMm = ngSkyPhaseCS(-muSv, NG_SKY_G);
   float haze = uSkyE.w;
   vec3 eS = mix(uSkySunCol, uSkySunWarm, ngSkyWarmW(v, s)) * uSkyE.x, eM = uSkyMoonCol * uSkyE.y;
@@ -216,14 +252,14 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
     tPrev = t1;
     vec3 p = vec3(v.x * tm, r + v.y * tm, v.z * tm);
     float rp = length(p);
-    float muS = dot(p, s) / rp;
+    float muS = dot(p, s) / rp, muSs = dot(p, sS) / rp;
     float h = rp - NG_SKY_RG;
     ngSkyMedium(h, haze, sR, sM, ext);
     vec3 sig = sR + vec3(sM);
     float below = 1.0 - smoothstep(uSkyDeck.x - 0.2, uSkyDeck.x + 0.2, h);
     float occ = 1.0 - uSkyDeck.y * below;
     vec3 S = vec3(0.0);
-    if (uSkyE.x > 0.0) S += eS * occ * (ngSkySunT(rp, muS) * (sR * pRs + sM * pMs) + ngSkyMSAt(rp, muS) * sig);
+    if (uSkyE.x > 0.0) S += eS * occ * (ngSkySunT(rp, muSs) * (sR * pRs + sM * pMs) + ngSkyMSAt(rp, muSs) * sig);
     if (uSkyE.y > 0.0) S += eM * occ * (ngSkySunT(rp, -muS) * (sR * pRm + sM * pMm) + ngSkyMSAt(rp, -muS) * sig);
     S += uSkyDeckL * sig * (0.5 * below) / max(uSkyE.z, 1e-6);
     vec3 e = max(ext, vec3(1e-9));
@@ -234,13 +270,13 @@ vec3 ngSkyRadiance(vec3 v, int steps) {
   if (tG >= 0.0 && tG < 400.0) {
     vec3 p = vec3(v.x * tMax, r + v.y * tMax, v.z * tMax);
     float rp = length(p);
-    float muS = dot(p, s) / rp;
+    float muS = dot(p, s) / rp, muSs = dot(p, sS) / rp;
     vec3 E = vec3(0.0);
-    if (uSkyE.x > 0.0) E += eS * ngSkySunT(rp, muS) * max(muS, 0.0);
+    if (uSkyE.x > 0.0) E += eS * ngSkySunT(rp, muSs) * max(muSs, 0.0);
     if (uSkyE.y > 0.0) E += eM * ngSkySunT(rp, -muS) * max(-muS, 0.0);
     L += thr * E * (1.0 - uSkyDeck.y) * NG_SKY_ALBEDO / 3.14159265;
   }
-  return L * uSkyE.z;
+  return ngSkyTwShape(v, s, L * uSkyE.z);
 }
 #endif
 `;

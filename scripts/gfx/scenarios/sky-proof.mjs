@@ -54,7 +54,7 @@ const sunAlt = (hour) => { const a = ((hour - 6) / 24) * Math.PI * 2; return Mat
 export default async function (h) {
   const tier = process.env.TIER || 'high';
   const sets = new Set(list(process.env.SETS, ['sheet', 'blue', 'golden', 'overcast', 'rain', 'night', 'numbers']));
-  await h.open(`lab/sky.html?capture=1&chart=0&tier=${tier}`);
+  await h.open(`lab/sky.html?capture=1&chart=0&chars=${process.env.CHARS ?? 0}&tier=${tier}`);
   await h.waitFor(() => window.__gfxReady === true, undefined, 180);
   const out = { tier, shots: [], size: await h.eval(() => [window.__lab.renderer.domElement.width, window.__lab.renderer.domElement.height]) };
   const add = (r) => { out.shots.push(r); console.log(r.name, JSON.stringify({ lum: +r.lum.toFixed(4), expo: +r.expo.toFixed(2), nan: r.nan })); };

@@ -68,10 +68,11 @@ const ex = [];
 for (let h = 18.0; h <= 20.0; h += 0.05) {
   const o = step(h, W.clear, { dt: 0 });
   const sy = Math.sin(Math.asin(Math.min(1, F[NG.SUN * 4 + 1])));
-  ex.push({ h, v: ngLuminance(rig.skyUp[0], rig.skyUp[1], rig.skyUp[2]) * o.exposure, sy, z: o.zenith });
+  ex.push({ h, v: ngLuminance(rig.skyUp[0], rig.skyUp[1], rig.skyUp[2]) * o.exposure, sy, z: o.zenith, ex: o.exposure });
 }
 let up = 0;
-for (let i = 1; i < ex.length; i++) if (ex[i].v > ex[i - 1].v * 1.04) up++;
+for (let i = 1; i < ex.length; i++) if (ex[i].v > ex[i - 1].v * 1.04) { up++; if (process.env.SKY_DEBUG) console.log("  up", ex[i - 1].h.toFixed(2), ex[i - 1].v.toFixed(4), "→", ex[i].v.toFixed(4)); }
+if (process.env.SKY_DEBUG) console.log("  tw", ex.map((e) => e.h.toFixed(2) + ":" + e.v.toFixed(3) + "/" + (e.sy * 57.3).toFixed(1) + "/" + e.ex.toFixed(2)).join(" "));
 check(up === 0, `日没 → 夜の空の照度（露出後）が単調でない所 ${up}`);
 check(ex[0].v > 0.2 && ex[ex.length - 1].v > 0.07, `薄明の明るさ ${ex[0].v.toFixed(3)} → ${ex[ex.length - 1].v.toFixed(3)}`);
 for (const e of ex) {
@@ -81,8 +82,9 @@ for (const e of ex) {
 check(Math.abs(twilightTarget(0) - 0.26) < 0.01 && twilightTarget(-0.5) === 0.12, 'twilightTarget の端');
 const night = step(23.5, W.clear, { dt: 0 });
 const zl = ngLuminance(...night.zenith), zc = night.zenith.map((v) => v / zl);
-/* #0b1426 → リニア (0.0034, 0.0070, 0.0194) → 色度 (0.48, 0.99, 2.71) */
-check(Math.abs(zc[2] - 2.71) < 0.5 && Math.abs(zc[0] - 0.48) < 0.2, `23:30 の天頂の色度 ${zc.map((v) => v.toFixed(2))}（目標 0.48, 0.99, 2.71）`);
+/* #0b1426 は «表示» の色：post（AgX）の後でこの色になる露出後のリニアは (0.0071, 0.010, 0.020) → 色度 (0.70, 0.99, 1.98)。
+   リニアの #0b1426 の色度 (0.48, 0.99, 2.71) を狙うと AgX で R が 0 に潰れる（r3 で実測 #011e45） */
+check(Math.abs(zc[2] - 1.98) < 0.45 && Math.abs(zc[0] - 0.70) < 0.2, `23:30 の天頂の色度 ${zc.map((v) => v.toFixed(2))}（目標 0.70, 0.99, 1.98）`);
 const eNight = ngLuminance(...rig.skyUp) * night.exposure;
 const noon = step(12.5, W.clear, { dt: 0 });
 const eNoon = ngLuminance(...rig.skyUp) * noon.exposure;
@@ -144,4 +146,4 @@ for (const n of [16, 24, 32]) {
   check(adj === 0, `stripAt(${n}) が隣の帯を続けて描く ${adj}`);
 }
 
-done();
+done('sky-rig');
