@@ -243,10 +243,11 @@ vec3 ngRidgeAlbedo(vec3 P, vec3 Nw) {
   col = mix(col, pine, ridgeTop * 0.6);
   /* 初夏の明るい新緑の斑（季節で） */
   col = mix(col, vec3(0.060, 0.090, 0.030), smoothstep(0.7, 0.85, c) * (1.0 - plant) * smoothstep(0.3, 0.5, ngSeason));
-  /* 露岩は急な崖だけ（日本の 1000m 級の山は頂まで森。高さで白くしない） */
+  /* 露岩は急な崖だけ（日本の 1000m 級の山は頂まで森。高さで白くしない）。
+     r4：0.15 は遠目に白い岩峰に見えた → 地衣類の暗い 0.095、最大 55% */
   float rock = smoothstep(1.05, 1.45, slope + 0.35 * (c - 0.5));
-  col = mix(col, vec3(0.15, 0.145, 0.135) * (0.8 + 0.3 * b), clamp(rock, 0.0, 0.7));
-  ngRidgeCanopy = 1.0 - clamp(rock, 0.0, 0.7);
+  col = mix(col, vec3(0.095, 0.098, 0.088) * (0.8 + 0.3 * b), clamp(rock, 0.0, 0.55));
+  ngRidgeCanopy = 1.0 - clamp(rock, 0.0, 0.55);
   return col;
 }
 vec3 ngRidgeBump(vec3 P, vec3 Nw, float footprint) {
@@ -277,7 +278,8 @@ export const RIDGE_FRAG_LIGHTS = /* glsl */ `
   float ngHot = pow( max( dot( ngRv, ngKeyDir ), 0.0 ), 3.0 );
   float ngCan = mix( 1.0, mix( 0.48, 0.92, ngHot ), ngRidgeCanopy );
   reflectedLight.directDiffuse *= ngRidgeSun * ngCan;
-  reflectedLight.directSpecular *= ngRidgeSun * ngCan;
+  /* 樹冠は鏡面を持たない（斜めから見た GGX の縁の光りが森の稜線を灰色にする。地形の素材と同じ扱い） */
+  reflectedLight.directSpecular *= ngRidgeSun * ngCan * ( 1.0 - 0.9 * ngRidgeCanopy );
   reflectedLight.indirectDiffuse *= mix( 1.0, 0.72, ngRidgeCanopy );
 }
 `;

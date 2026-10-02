@@ -101,7 +101,8 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float forest0 = max(smoothstep(0.08, 0.42, cn.x), upland);
   float rock = smoothstep(1.05, 1.55, slope + (nP - 0.5) * 0.5 + (nF - 0.5) * 0.2) * (1.0 - 0.8 * forest0);
   rock = max(rock, smoothstep(0.7, 1.1, slope + (nP - 0.5) * 0.4) * (1.0 - forest0) * smoothstep(8.0, 20.0, sd) * 0.8);
-  rock = max(rock, smoothstep(150.0, 190.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.35, 0.6, slope + (nF - 0.5) * 0.2));
+  /* 高い所（> 150m）の露岩は 31° より急な所だけ（r4：20° からだと山腹が岩になり、木の無い灰色の斑になった） */
+  rock = max(rock, smoothstep(150.0, 190.0, P.y + 30.0 * (nM - 0.5)) * smoothstep(0.6, 0.9, slope + (nF - 0.5) * 0.2) * (1.0 - 0.5 * forest0));
   float tr = trail * (1.0 - rock) * smoothstep(0.2, 1.0, sd);
   float rest = (1.0 - rock) * (1.0 - tr);
   float lb = beach * rest, lv = (1.0 - beach) * rest;
@@ -163,6 +164,7 @@ float ngTerrAo = 1.0;
 float ngTerrSkyOcc = 1.0;
 float ngTerrF0 = 0.04;
 float ngTerrCan = 0.0;   // 遠景（farAlbedo）の樹冠の割合 × 遠景の重み：樹冠の BRDF に使う
+float ngTerrFarK = 0.0;  // 遠景へ渡す重み（鏡面を弱める）
 
 /* 平面の細部の法線を地形の法線へ «勾配の足し算» で載せる（t は接空間：x = 世界 x、y = 世界 z） */
 vec3 ngTerrAddDetail(vec3 Ng, vec2 t) {
@@ -389,6 +391,7 @@ vec3 ngTerrShade(vec3 P) {
     ngTerrF0 = mix(ngTerrF0, 0.02, pud);
   }
   ngTerrCan = farT.a * farK * (1.0 - under);
+  ngTerrFarK = farK * (1.0 - under);
   ngTerrNW = N;
   ngTerrRo = clamp(ro, 0.02, 1.0);
   ngTerrAo = ao;
@@ -440,7 +443,11 @@ export const TERRAIN_FRAG_SURFACE = 'diffuseColor.rgb = ngTerrShade( vNgWorld );
 export const TERRAIN_FRAG_NORMAL = 'normal = normalize( ( viewMatrix * vec4( ngTerrNW, 0.0 ) ).xyz );';
 export const TERRAIN_FRAG_ROUGH = 'roughnessFactor = ngTerrRo;';
 export const TERRAIN_FRAG_LIGHTS = /* glsl */ `
-reflectedLight.indirectSpecular += ngTerrSkySpec( vNgWorld, ngTerrNW, ngTerrRo, ngTerrF0 ) * ngTerrSkyOcc;
+/* 遠目の樹冠と林床は鏡面を持たない（葉の自己遮蔽。粗さ 0.9 の GGX でも斜めから見ると 1/(N·V) で光り、
+   400m 先の森の斜面が «灰色の禿げ山» になっていた：黒いアルベドでも 0.03 の放射輝度が残った） */
+float ngTerrSpecK = (1.0 - 0.9 * ngTerrCan) * (1.0 - 0.5 * ngTerrFarK);
+reflectedLight.directSpecular *= ngTerrSpecK;
+reflectedLight.indirectSpecular += ngTerrSkySpec( vNgWorld, ngTerrNW, ngTerrRo, ngTerrF0 ) * ngTerrSkyOcc * ngTerrSpecK;
 if ( ngTerrCan > 0.0 ) {
   /* 遠目の樹冠の BRDF（ridges.js と同じ式）：日向と樹冠の影が画素の中で混ざる。光と視線が揃うと明るい */
   float ngHot = pow( max( dot( normalize( cameraPosition - vNgWorld ), ngKeyDir ), 0.0 ), 3.0 );

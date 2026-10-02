@@ -124,8 +124,8 @@ export function buildCanopyColor(T, placement, seed) {
   };
   for (let k = 0; k < N * N; k++) {
     const wsum = acc[k * 4 + 3];
-    /* 上から見た樹冠は葉の隙間の影で葉 1 枚より暗い（×0.78） */
-    const r = wsum > 0 ? (acc[k * 4] / wsum) * 0.78 : 0.035, g = wsum > 0 ? (acc[k * 4 + 1] / wsum) * 0.78 : 0.052, b = wsum > 0 ? (acc[k * 4 + 2] / wsum) * 0.78 : 0.03;
+    /* 上から見た樹冠は葉の隙間の影で葉 1 枚より暗い（×0.62。r4：0.78 では 400m 先の樹冠が手前の木の 1.7 倍明るかった） */
+    const r = wsum > 0 ? (acc[k * 4] / wsum) * 0.62 : 0.035, g = wsum > 0 ? (acc[k * 4 + 1] / wsum) * 0.62 : 0.052, b = wsum > 0 ? (acc[k * 4 + 2] / wsum) * 0.62 : 0.03;
     px[k * 4] = enc(r); px[k * 4 + 1] = enc(g); px[k * 4 + 2] = enc(b);
     px[k * 4 + 3] = Math.round(Math.min(1, wsum / 20) * 255);
   }
