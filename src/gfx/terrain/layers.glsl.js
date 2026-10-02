@@ -277,7 +277,9 @@ vec4 ngTbSand(vec2 uv) {
   float grain = ngTbVN(uv * 800.0, 800.0, 4.0);
   float h = rip * amp * 0.65 + grain * 0.12 + 0.2 * ngTbFbm(uv, 8.0, 5.0, 3);
   vec3 sand = vec3(0.325, 0.282, 0.210), silt = vec3(0.215, 0.192, 0.152);
-  vec3 col = mix(mix(silt, sand, 0.5), sand, smoothstep(0.1, 0.8, rip * amp + 0.45 * (1.0 - amp)));
+  /* 波紋は主に起伏（法線）で見せる。色の縞は谷の細かい粒の溜まりだけ（弱く）：乾いた浜で縞模様が目立ちすぎた */
+  vec3 col = mix(mix(silt, sand, 0.78), sand, smoothstep(0.1, 0.8, rip * amp + 0.45 * (1.0 - amp)));
+  col *= 0.9 + 0.2 * ngTbFbm(uv, 6.0, 6.0, 3);                    // 乾きと粒径の斑
   col *= 0.86 + 0.26 * grain;
   float dk = step(0.975, ngTbH1(floor(uv * 1000.0), 1000.0, 7.0));
   float lt = step(0.985, ngTbH1(floor(uv * 1000.0), 1000.0, 8.0));
@@ -296,7 +298,8 @@ vec4 ngTbMud(vec2 uv) {
   h += rim * 0.05 - pit * 0.15;
   col *= 1.0 - pit * 0.3;
   ngTbLeaves(uv, 26.0, 0.32, h + 0.02, 6.0, 0.14, 1.0, col, h);
-  ngTbTwigs(uv, 6.0, h + 0.02, 7.0, 0.12, 0.012, vec3(0.07, 0.06, 0.045), vec3(0.05, 0.045, 0.035), col, h);
+  /* 小枝は短く疎らに（4m の層で 1 セル 0.25m → 長さ 0.3–0.5m。長い直線は引っかき傷に見えた） */
+  ngTbTwigs(uv, 16.0, h + 0.02, 7.0, 0.07, 0.03, vec3(0.07, 0.06, 0.045), vec3(0.05, 0.045, 0.035), col, h);
   return vec4(col, clamp(h, 0.0, 1.0));
 }
 vec4 ngTbRock(vec2 uv) {
@@ -341,7 +344,7 @@ vec4 ngTbTrail(vec2 uv) {
   float foot = smoothstep(0.35, 0.18, fp.x) * step(0.55, fp.z);
   h -= foot * 0.12; col *= 1.0 - foot * 0.12;
   ngTbStones(uv, 52.0, 0.2, 5.0, 0.32, 0.45, col, h);
-  ngTbTwigs(uv, 3.0, 0.3, 6.0, 0.6, 0.012, vec3(0.115, 0.080, 0.055), vec3(0.085, 0.060, 0.040), col, h);
+  ngTbTwigs(uv, 10.0, 0.3, 6.0, 0.22, 0.026, vec3(0.115, 0.080, 0.055), vec3(0.085, 0.060, 0.040), col, h);
   ngTbLeaves(uv, 16.0, 0.48, 0.5, 8.0, 0.22, 0.0, col, h);
   return vec4(col, clamp(h, 0.0, 1.0));
 }

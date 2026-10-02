@@ -106,8 +106,10 @@ void ngTerrWeights(vec3 P, vec3 Ng, float sd, vec4 bed, vec2 cn, float trail, ou
   float cob = smoothstep(0.55, 0.78, nP);
   float shallow = smoothstep(-3.5, -0.4, P.y);
   float u = under;
-  wA.x = (1.0 - u) * lv * forest * (1.0 - 0.8 * moist);
-  wA.y = (1.0 - u) * lv * forest * (0.8 * moist + 0.35 * smoothstep(0.3, 0.6, slope));
+  /* 苔は日陰（樹冠の下）と湿った斜面に。森の縁の日向に苔を出すと、空撮で森の周りが黄緑に光る輪になった */
+  float shadeK = mix(0.2, 1.0, smoothstep(0.22, 0.6, cn.x));
+  wA.x = (1.0 - u) * lv * forest * (1.0 - 0.8 * moist * shadeK);
+  wA.y = (1.0 - u) * lv * forest * (0.8 * moist * shadeK + 0.35 * smoothstep(0.3, 0.6, slope) * mix(0.5, 1.0, shadeK));
   wA.z = (1.0 - u) * lv * (1.0 - forest);
   wA.w = (1.0 - u) * lb * (bw.b + 0.5 * bw.g * cob) + u * bw.b * shallow;
   wB.x = (1.0 - u) * lb * bw.g * (1.0 - 0.5 * cob) + u * bw.g;
@@ -293,10 +295,15 @@ vec3 ngTerrShade(vec3 P) {
     int mode2 = (i2 == 6 && tri) ? 2 : (hexM >= 2 ? 1 : 0);
     vec4 A1, A2; vec3 N1, N2; vec2 R1, R2;
     ngTerrSample(i1, P, Ng, mode1, dPx, dPy, A1, N1, R1);
+    /* 乾いた浜の砂（層 4、水より上）は波紋を弱く：法線を地形へ寄せ、高さブレンドの高さも縮める。
+       縮めないと、草地との境で砂の波紋の峰だけが草の間から縞になって突き出た */
+    float dryS = smoothstep(-0.02, 0.15, P.y);
+    if (i1 == 4) { A1.a = mix(A1.a, 0.22 + 0.3 * A1.a, dryS); N1 = normalize(mix(N1, Ng, 0.85 * dryS)); }
     float s2 = w2 / max(w1 + w2, 1e-4);
     float t = 0.0;
     if (s2 > 0.015) {
       ngTerrSample(i2, P, Ng, mode2, dPx, dPy, A2, N2, R2);
+      if (i2 == 4) { A2.a = mix(A2.a, 0.22 + 0.3 * A2.a, dryS); N2 = normalize(mix(N2, Ng, 0.85 * dryS)); }
       float s1 = 1.0 - s2, dpt = 0.16;
       float ma = max(A1.a + s1, A2.a + s2) - dpt;
       float b1 = max(A1.a + s1 - ma, 0.0), b2 = max(A2.a + s2 - ma, 0.0);
@@ -312,8 +319,6 @@ vec3 ngTerrShade(vec3 P) {
 #ifdef NG_TERR_DEBUG
   if (ngTerrParams.w > 92.5 && ngTerrParams.w < 93.5) { ngTerrNW = N; ngTerrRo = ro; return alb; }
 #endif
-  /* 乾いた浜の砂は波紋を弱く（風紋ほど）。水中・濡れた所は強いまま */
-  N = normalize(mix(N, Ng, wB.x * smoothstep(-0.02, 0.15, P.y) * 0.85));
   /* 藻場：有機物の堆積で暗く緑褐色に */
   alb = mix(alb, alb * vec3(0.55, 0.62, 0.45), weed * 0.75);
   /* 水中の底は常に濡れている（砂ほど暗い） */

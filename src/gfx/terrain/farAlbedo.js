@@ -77,9 +77,13 @@ void main() {
   float na = ngVNoise2(xz / 210.0), nb = ngVNoise2(xz / 75.0 + 5.3), nc = ngVNoise2(xz / 31.0 + 1.7);
   float plant = smoothstep(0.40, 0.50, na + 0.12 * (nb - 0.5) - 0.0003 * (y - 250.0));
   vec3 gen = mix(vec3(0.036, 0.056, 0.025) * (0.8 + 0.4 * nc), vec3(0.019, 0.032, 0.021) * (0.85 + 0.3 * nc), plant);
-  vec3 can = cc.a > 0.05 ? mix(gen, cc.rgb, smoothstep(0.05, 0.4, cc.a)) : gen;
+  /* 樹冠の葉の色は «樹冠が詰まった所» だけ。縁（cc.a が小さい = 樹冠の半径 + 格子の滲み）で葉の色を使うと、
+     木の外の地面が葉の明るい色になり、空撮で森の周りに明るい輪が出た。縁は木陰の暗い森の色 gen */
+  /* 樹冠の色の地図（木の配置から、半径 + 格子の滲み）は core の樹冠の密度（影と空の遮り）より広い。
+     密度の低い所（日の当たる地面）で葉の色を使うと、森の周りが明るい葉の色の輪になる → 両方が詰まった所だけ */
+  vec3 can = mix(gen, cc.rgb, smoothstep(0.3, 0.8, cc.a) * smoothstep(0.3, 0.7, cn.x));
   float a2 = max(a, fw * 0.82);
-  gl_FragColor = vec4(mix(c, a2 > a ? can : cc.rgb, a2), a2);
+  gl_FragColor = vec4(mix(c, can, a2), a2);
 }
 `;
 
