@@ -90,12 +90,13 @@ float ngWaterWindy(float Ug) { return smoothstep(1.5, 4.6, Ug); }
 /* 細かいカスケード（λ 1.7cm–36cm、単位の σ ≈ 0.17）：凪の所は σ ≈ 0.003 の鏡、斑の中は σ ≈ 0.05 */
 float ngWaterFineAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
-  return 0.018 + 0.35 * pt + wy * (0.10 + 0.45 * pt) + 0.25 * rain;
+  /* 雨は毛管の細波を潰す（雨滴の乱れで短い波が減衰する：雨の海面が «凪いで» 見える現象）→ 雨の輪が読める */
+  return (0.018 + 0.35 * pt + wy * (0.10 + 0.45 * pt)) * (1.0 - 0.6 * rain);
 }
 /* 粗いカスケード（λ 36cm–4.5m、単位の σ ≈ 0.08） */
 float ngWaterCoarseAmp(float U, float Ug, float rain) {
   float pt = ngWaterPatch(U, Ug), wy = ngWaterWindy(Ug);
-  return 0.05 + 0.45 * pt + wy * (0.25 + 0.3 * pt) + 0.12 * rain;
+  return (0.05 + 0.45 * pt + wy * (0.25 + 0.3 * pt)) * (1.0 - 0.3 * rain);
 }
 `;
 
@@ -371,9 +372,16 @@ void main() {
     vec2 ruv = suv + (ngToScreen(vWorld + Tn * L) - ngToScreen(vWorld + Tf * L));
     ruv = clamp(ruv, ngScreen.zw, 1.0 - ngScreen.zw);
     if (uDbg.z > 0.5) ruv = suv;
-    if (texture(ngSceneDepth, ruv).r < vViewZ) ruv = suv;
+    /* 深度の検証は ruv と ±1.5px の 4 点の最小で（MSAA の解決後の色は輪郭の画素に手前の物の色が混ざるが、
+       深度は 1 サンプルなので «奥» と言う。1 点だけだと桟橋・手すりの輪郭に沿って手前の色の粒が出ていた） */
+    vec2 o = ngScreen.zw * 1.5;
+    float zr = min(texture(ngSceneDepth, ruv).r,
+               min(min(texture(ngSceneDepth, ruv + vec2(o.x, 0.0)).r, texture(ngSceneDepth, ruv - vec2(o.x, 0.0)).r),
+                   min(texture(ngSceneDepth, ruv + vec2(0.0, o.y)).r, texture(ngSceneDepth, ruv - vec2(0.0, o.y)).r)));
+    float rok = smoothstep(vViewZ - 0.02, vViewZ + 0.15, zr);
     float rlod = clamp(log2(1.0 + alpha * min(path, 6.0) * 40.0), 0.0, ngCopyMips);
-    vec3 refr = textureLod(ngSceneColor, ruv, rlod).rgb;
+    vec3 refr = textureLod(ngSceneColor, suv, rlod).rgb;
+    if (rok > 0.0) refr = mix(refr, textureLod(ngSceneColor, ruv, rlod).rgb, rok);
     float soft = smoothstep(0.0, 0.04, colW);
 
     /* ---- 反射 ---- */
@@ -420,13 +428,16 @@ void main() {
     if (NoL > 0.0 && dot(ngKeyRad, vec3(1.0)) > 1e-6 && uDbg.w < 0.5) {
       vec3 H = normalize(Ld + V);
       float NoH = max(dot(N, H), 0.0);
-      float aS = alpha + 0.0024;                              // 円盤（角半径 0.27°）の広がり
+      /* 円盤（角半径 0.27°）の広がり。厚い雲の下では太陽は円盤ではなく雲の明るい斑：鏡面を広げて弱める
+         （雨の日に «太陽の点» が水面に写らない。空の明るい所は反射 RT が持つ） */
+      float ovc = smoothstep(0.55, 1.0, ngCloudiness);
+      float aS = alpha + 0.0024 + 0.22 * ovc;
       float a2s = aS * aS;
       float D = ngGGXD(NoH, a2s) * (a2r / a2s);
       float Vis = ngSmithV(NoV, NoL, a2s);
       float VoH = max(dot(V, H), 0.0);
       float Fs = NG_F0 + (1.0 - NG_F0) * pow(1.0 - VoH, 5.0);
-      float s = D * Vis * Fs * NoL;
+      float s = D * Vis * Fs * NoL * (1.0 - 0.75 * ovc);
       if (s > 1e-4) {
         float nearW = ngNearToFar(vWorld);
         /* 近景の影マップには地形が入らない（地形は影を落とさず高さ場影だけ）ので、高さ場影は近くでも掛ける */
