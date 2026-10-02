@@ -242,12 +242,16 @@ export default async function (h) {
     const drsRun = (ms, sec) => h.eval(async ({ ms, sec }) => {
       const L = window.__lab, post = L.gfx.modules.get('post'), pipe = L.gfx.pipeline;
       L.unfreeze();
+      /* DRS に «このフレームは ms かかった» と見せる（実時間の 1/30 秒ずつ進む模擬） */
+      const orig = post.drs.update;
+      post.drs.update = (f, d, frozen) => orig.call(post.drs, ms, 1 / 30, frozen);
       const seq = [];
-      for (let i = 0; i < sec * 30; i++) {
-        post._last = performance.now() - ms;
-        L.tick(1, 1 / 30);
-        if (i % 15 === 0) { seq.push({ ms, scale: pipe.renderScale }); await new Promise((r) => setTimeout(r, 1)); }
-      }
+      try {
+        for (let i = 0; i < sec * 30; i++) {
+          L.tick(1, 1 / 30);
+          if (i % 15 === 0) { seq.push({ ms, scale: pipe.renderScale }); await new Promise((r) => setTimeout(r, 1)); }
+        }
+      } finally { post.drs.update = orig; }
       return { scale: pipe.renderScale, changes: post.drs.changes, seq };
     }, { ms, sec });
     const heavy = await drsRun(30, 8);

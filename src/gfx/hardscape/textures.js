@@ -80,7 +80,7 @@ void main() {
   vec3 col = mix(fresh, silver, weather);
   col *= 0.86 + 0.28 * w.dirt;
   col *= 0.9 + 0.2 * w.fiber;                                      // 繊維の毛羽
-  col *= mix(1.06, 0.66, w.late);                                  // 晩材：浮いた暗い灰褐の筋、早材は晒されて明るい
+  col *= mix(1.05, 0.7, w.late);                                  // 晩材：浮いた暗い灰褐の筋、早材は晒されて明るい
   col = mix(col, col * vec3(0.95, 0.86, 0.74), w.late * (0.35 + 0.65 * (1.0 - weather)));
   col *= mix(0.62, 1.0, w.edge);                                   // 板の縁に溜まる汚れ
   col = mix(col, vec3(0.085, 0.068, 0.052), w.knot * 0.9);         // 節

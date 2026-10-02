@@ -8,8 +8,10 @@
    - 黒体の色（線形 Rec.709、輝度 1 に正規化）
    =========================================================== */
 
-/** 順応の基準：露出後の画面の log 平均輝度の «普通の景色» の値（lab の基準の構図で測って決めた） */
-export const NG_ADAPT_KEY = Object.freeze({ day: 0.115, night: 0.042 });
+/** 順応の基準：露出後の画面の log 平均輝度の «普通の景色» の値。lab の基準の構図を順応 1 で測った中央値
+ *  （昼：noon-fp-down −3.47・noon-shore −3.37・dock-3p −3.17・shore-low −2.67 → 2^−3.32、夜：night-fp −6.72 → 2^−6.67）。
+ *  基準の構図では順応 ≈ 1（撮影 = 本編）、林の陰・雨・水中だけが動く */
+export const NG_ADAPT_KEY = Object.freeze({ day: 0.10, night: 0.0098 });
 /** 順応の幅（EV）と時定数（s） */
 export const NG_ADAPT = Object.freeze({ down: -1.0, up: 1.0, upNight: 1.2, tauUp: 1.2, tauDown: 0.6, gain: 0.65 });
 
