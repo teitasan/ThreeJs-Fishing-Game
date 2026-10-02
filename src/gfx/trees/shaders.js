@@ -748,7 +748,8 @@ vec4 ngShellCan(vec2 xz) {
         + texture2D(ngCanopyMap, uv + vec2(0.0, e)) + texture2D(ngCanopyMap, uv - vec2(0.0, e))) / 6.0;
 }
 /* 樹冠の天井の持ち上げ：平均の樹高 × 0.8。疎らな所は沈めて地面へ馴染ませる */
-float ngShellLift(vec4 cm) { return cm.g * 40.0 * 0.8 * smoothstep(0.15, 0.7, cm.r); }
+/* 遠景（380m〜）では樹冠の «中ほど» の面で足りる：平均の樹高 × 0.55。0.8 だと稜線の森が 25m の幕になって下に空が抜けた */
+float ngShellLift(vec4 cm) { return cm.g * 40.0 * 0.55 * smoothstep(0.15, 0.7, cm.r); }
 /* 樹冠の頂の凹凸（8m と 4.5m の «こぶ»、樹高の ±18%）：稜線の上の輪郭を滑らかな幕にしない */
 float ngShellBump(vec2 xz) { return 0.82 + 0.36 * (ngVNoise2(xz / 8.0 + 11.3) * 0.65 + ngVNoise2(xz / 4.5 + 2.9) * 0.35); }
 float ngShellL(vec2 xz) { return ngShellLift(ngShellCan(xz)) * ngShellBump(xz); }
@@ -783,7 +784,7 @@ const SHELL_VS_BEGIN = /* glsl */ `
   float ngD = length(xz - ngTreeEye.xz) / max(ngTreeEye.w, 1e-3);
   float keep = smoothstep(ngShellLod.x, ngShellLod.x + ngShellLod.y, ngD);
   vNgSh = vec4(cm.r, cm.b, keep, cm.a);
-  vNgShW = vec2(ngShWallG, clamp(lift / max(cm.g * 40.0 * 0.8, 1.0), 0.0, 1.0));
+  vNgShW = vec2(ngShWallG, clamp(lift / max(cm.g * 40.0 * 0.55, 1.0), 0.0, 1.0));
   vNgShSun = ngTreeSunAt(xz);
 }
 `;
@@ -815,7 +816,11 @@ const SHELL_FS_ALPHA = /* glsl */ `
   float a = smoothstep(0.18, 0.42, vNgSh.x + (ngShB - 0.5) * 0.25);
   /* 林縁の壁：縦の木の列の凹凸（幅 4–7m の樹冠の «肩»）で切り欠いて、平らな幕に見せない */
   float wall = 1.0 - smoothstep(0.35, 0.8, vNgShW.x);
-  float crowns = ngVNoise2(vec2(dot(vNgWorld.xz, vec2(0.71, 0.71)) / 4.5, vNgWorld.y / 9.0)) * 0.6 + ngVNoise2(vNgWorld.xz / 3.0 + 1.7) * 0.4;
+  /* 壁の面の中の 2 次元（壁に沿った向き × 高さ）で評価する：xz だけのノイズは壁の上で縦の縞になる */
+  vec3 ngWn = inverseTransformDirection(normalize(vNormal), viewMatrix);
+  vec2 ngWt = normalize(vec2(-ngWn.z, ngWn.x) + vec2(1e-4, 0.0));
+  vec2 ngWq = vec2(dot(vNgWorld.xz, ngWt), vNgWorld.y);
+  float crowns = ngVNoise2(ngWq / 5.0 + 1.7) * 0.7 + ngVNoise2(ngWq / 2.2 + 4.1) * 0.3;
   a *= 1.0 - wall * smoothstep(0.0, 0.08, vNgShW.y - (0.5 + 0.5 * crowns));
   float keep = vNgSh.z;
   if (ngTreeMisc.x > 0.5 && ngPassId != NG_PASS_SHADOW) a *= keep;
