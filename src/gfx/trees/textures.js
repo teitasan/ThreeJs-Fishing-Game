@@ -50,18 +50,21 @@ float ngBarkH(int L, vec2 p, out vec3 col, out float rough) {
     /* ブナ：灰白の平滑な樹皮、地衣の斑（白・淡緑・黒）と横の皮目 */
     /* 地衣はドメインワープした fbm の閾値で «縁の不規則な斑»（白っぽい灰・淡い緑灰・暗い痂状）。丸いぼかしにしない */
     float base = ngFbmP(p * vec2(4.0, 2.0), vec2(4.0, 2.0), 4);
-    vec2 wp = p + 0.06 * vec2(ngFbmP(p * vec2(8.0, 4.0), vec2(8.0, 4.0), 3), ngFbmP(p * vec2(8.0, 4.0) + 5.2, vec2(8.0, 4.0), 3));
-    float fa = ngFbmP(wp * vec2(5.0, 2.5), vec2(5.0, 2.5), 5);
-    float fb = ngFbmP(wp * vec2(9.0, 4.0) + 3.7, vec2(9.0, 4.0), 5);
-    float fc = ngFbmP(wp * vec2(14.0, 7.0) + 9.1, vec2(14.0, 7.0), 4);
-    float lichW = smoothstep(0.58, 0.62, fa);
-    float lichG = smoothstep(0.60, 0.64, fb) * (1.0 - lichW);
-    float crust = smoothstep(0.66, 0.70, fc) * (1.0 - lichW) * (1.0 - lichG);
+    /* タイルは周 0.5m × 縦 1m なので、縦の周波数を 2 倍にして «メートルで等方» にする（前は 10cm × 40cm の縦長の格子が矩形の塊に見えた）。
+       値ノイズの格子の向きが閾値の輪郭に出ないよう、ずらした 2 つの格子の和 + 強めのドメインワープ */
+    vec2 wp = p + vec2(0.05, 0.1) * (vec2(ngFbmP(p * vec2(6.0, 12.0), vec2(6.0, 12.0), 3), ngFbmP(p * vec2(6.0, 12.0) + 5.2, vec2(6.0, 12.0), 3)) - 0.5) * 2.0;
+    float fa = 0.5 * (ngFbmP(wp * vec2(4.0, 8.0), vec2(4.0, 8.0), 5) + ngFbmP(wp * vec2(5.0, 10.0) + 0.37, vec2(5.0, 10.0), 5));
+    float fb = 0.5 * (ngFbmP(wp * vec2(7.0, 14.0) + 3.7, vec2(7.0, 14.0), 5) + ngFbmP(wp * vec2(9.0, 18.0) + 6.1, vec2(9.0, 18.0), 4));
+    float fc = 0.5 * (ngFbmP(wp * vec2(12.0, 24.0) + 9.1, vec2(12.0, 24.0), 4) + ngFbmP(wp * vec2(15.0, 30.0) + 2.3, vec2(15.0, 30.0), 3));
+    float lichW = smoothstep(0.55, 0.585, fa);
+    float lichG = smoothstep(0.57, 0.605, fb) * (1.0 - lichW);
+    float crust = smoothstep(0.60, 0.635, fc) * (1.0 - lichW) * (1.0 - lichG);
     float speck = smoothstep(0.1, 0.03, ngWorley2P(p * vec2(40.0, 20.0) + 1.3, vec2(40.0, 20.0)).x) * step(0.8, ngHash12(floor(p * vec2(40.0, 20.0)))) * lichW;
     float lent = smoothstep(0.92, 1.0, ngFbmP(vec2(p.x * 3.0, p.y * 40.0), vec2(3.0, 40.0), 2));
-    col = vec3(0.27, 0.265, 0.245) * (0.86 + 0.24 * base);
-    col = mix(col, vec3(0.40, 0.40, 0.37) * (0.92 + 0.16 * fc), lichW * 0.85);
-    col = mix(col, vec3(0.27, 0.31, 0.22), lichG * 0.8);
+    /* ブナの樹皮の反射率は 0.2–0.3（地衣の白でも 0.32 まで。前の 0.40 は岩より明るく、昼の林縁で幹が白く浮いた） */
+    col = vec3(0.215, 0.21, 0.195) * (0.86 + 0.24 * base);
+    col = mix(col, vec3(0.31, 0.31, 0.29) * (0.92 + 0.16 * fc), lichW * 0.85);
+    col = mix(col, vec3(0.21, 0.245, 0.17), lichG * 0.8);
     col = mix(col, vec3(0.15, 0.15, 0.14), crust * 0.75);
     col = mix(col, vec3(0.10, 0.09, 0.08), speck * 0.6);
     col *= 1.0 - lent * 0.3;
@@ -240,8 +243,8 @@ void ngNeedleTwig(inout NgLeaf o, vec2 p, vec2 a, vec2 b, float w, float seed, v
   float shade = clamp(d / max(ww, 1e-4), 0.0, 1.0);
   vec3 col = mix(cA, cB, shade * 0.8 + 0.2 * t) * (0.8 + 0.4 * ngHash12(vec2(floor(k), seed + 3.0)));
   ngAcc(o, dd, aa, col, (1.0 - shade) * 0.6 + needle * 0.2, 0.35, 0.6);
-  /* 小枝の芯（茶） */
-  ngAcc(o, w * 0.07 - d, aa, vec3(0.09, 0.06, 0.035), 0.8, 0.0, 0.8);
+  /* 小枝の芯：針に埋もれた緑褐色の細い軸。透過も少し残す（下から見上げたとき黒い «魚の骨» の線にしない） */
+  ngAcc(o, w * 0.04 - d, aa * 0.7, mix(cA, vec3(0.07, 0.055, 0.03), 0.45), 0.7, 0.2, 0.8);
 }
 
 NgLeaf ngLeafCell(int sp, vec2 uv) {
@@ -338,7 +341,8 @@ NgLeaf ngLeafCell(int sp, vec2 uv) {
       vec3 col = mix(vec3(0.030, 0.058, 0.030), vec3(0.050, 0.080, 0.036), tt) * (0.8 + 0.4 * r2);
       ngAcc(o, w - d, aa * 0.6, col, 0.5, 0.25, 0.45);
     }
-    ngAcc(o, 0.018 * (1.0 - smoothstep(0.0, 0.42, p.y)) + 0.006 - ngSeg(p, vec2(0.0, 0.0), vec2(0.0, 0.42), tt), aa, vec3(0.22, 0.11, 0.06), 0.7, 0.0, 0.8);
+    /* 小枝の先（針葉の房の付け根）：細い灰褐色の軸。太い楔にしない */
+    ngAcc(o, 0.007 * (1.0 - smoothstep(0.0, 0.36, p.y)) + 0.0035 - ngSeg(p, vec2(0.0, 0.0), vec2(0.0, 0.36), tt), aa, vec3(0.10, 0.068, 0.045), 0.7, 0.05, 0.8);
   } else {
     /* 広葉：小枝の房に互生の葉。ブナ 0・ミズナラ 1・モミジ 2・ハンノキ 4 */
     int kind = sp == 2 ? 0 : sp == 3 ? 1 : sp == 4 ? 2 : 4;
@@ -351,6 +355,8 @@ NgLeaf ngLeafCell(int sp, vec2 uv) {
     int N = sp == 4 ? 11 : sp == 3 ? 8 : 9;
     float Ls = sp == 4 ? 0.27 : sp == 3 ? 0.32 : 0.26;
     vec2 a = vec2(0.0), b = vec2(0.02, 0.8);
+    /* 小枝の軸は葉より先に描いて葉の下へ（後に描くと逆光の葉の上を黒い線が横切り、見上げで «魚の骨» になった）。少し透過する */
+    ngAcc(o, 0.006 * (1.0 - 0.5 * p.y) - ngSeg(p, a, b, tt), aa * 0.6, vec3(0.075, 0.062, 0.040), 0.7, 0.2, 0.8);
     for (int i = 0; i < 12; i++) {
       if (i >= N) break;
       float fi = float(i);
@@ -374,11 +380,10 @@ NgLeaf ngLeafCell(int sp, vec2 uv) {
       vec3 col = mix(cA, cB, age) * (1.0 + 0.35 * vein);
       if (sp == 4) col = mix(col, vec3(0.13, 0.11, 0.035), 0.12 * ngFbm(p * 30.0, 2));
       col *= 0.92 + 0.16 * ngFbm(q * 40.0 + fi, 2);
+      /* 葉柄（葉身より先 = 下に） */
+      ngAcc(o, 0.003 - ngSeg(p, s0, s1, tt), aa * 0.5, sp == 4 ? vec3(0.10, 0.06, 0.03) : vec3(0.06, 0.07, 0.03), 0.6, 0.4, 0.6);
       ngAcc(o, d, aa * 0.8, col, h, 0.85 - 0.3 * vein, 0.5 - 0.15 * vein);
-      /* 葉柄 */
-      ngAcc(o, 0.004 - ngSeg(p, s0, s1, tt), aa * 0.5, sp == 4 ? vec3(0.14, 0.05, 0.03) : vec3(0.07, 0.07, 0.03), 0.6, 0.3, 0.6);
     }
-    ngAcc(o, 0.008 * (1.0 - 0.5 * p.y) - ngSeg(p, a, b, tt), aa * 0.6, vec3(0.085, 0.065, 0.045), 0.7, 0.0, 0.8);
   }
   return o;
 }

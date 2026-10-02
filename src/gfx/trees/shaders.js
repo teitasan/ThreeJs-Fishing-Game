@@ -378,6 +378,8 @@ vec3 ngTr = vec3(0.0);
   float below = 1.0 - smoothstep(0.45, 1.0, vNgTInst.w);
   vec4 ngCan = ngCanopyAt2(vNgWorld.xz);
   ngCanAmb = ngCanopyAmbient(ngCan, below);
+  /* 樹冠の中の枝：自分の葉に囲まれている（樹冠の地図が疎らな一本木でも空の 4 割しか見えない）。前は樹冠の中で遮りが 0 になり、見上げた枝が白く光った */
+  if (ngTLeaf < 0.5) ngCanAmb = min(ngCanAmb, mix(vec3(1.0), vec3(0.32, 0.40, 0.22), 0.75 * smoothstep(0.35, 0.7, vNgTInst.w)));
   /* 葉の本当の面（微分から。頂点の法線は樹冠へ曲げてある）で、光と目が同じ側か。
      反対側（裏から光が来る）なら反射の鏡面は無く、拡散も透過に譲る（下から見上げた葉が白く光らない） */
   float ngSame = 0.65;
@@ -731,25 +733,57 @@ void main() {
 
 /* ---------------------------------------------------------------- 3. 樹冠シェル */
 
-const SHELL_VS_PARS = NG_HEIGHTFIELD_GLSL + SUN_VS + /* glsl */ `
+const SHELL_VS_PARS = NG_NOISE_GLSL + NG_HEIGHTFIELD_GLSL + SUN_VS + /* glsl */ `
 uniform sampler2D ngCanopyMap;   // r = 密度、g = 平均樹高 / 40m、b = 針葉の割合、a = 色むら（±512m）
 uniform vec4 ngTreeEye;
 uniform vec4 ngShellLod;          // x = 出始め、y = 幅
 varying vec4 vNgSh;               // x = 密度、y = 針葉、z = 残す割合、w = 色むら
+varying vec2 vNgShW;              // x = 面の上向き（1 = 天井、0 = 縁の壁）、y = 地面からの高さ / 樹冠の高さ
 varying float vNgShSun;
+/* 樹冠の地図を 6m の 5 点でならす（2m の地図のままだと林縁で天井が 4m で 25m 立ち上がる «垂れ幕» になる） */
+vec4 ngShellCan(vec2 xz) {
+  vec2 uv = (xz + 512.0) / 1024.0;
+  float e = 6.0 / 1024.0;
+  return (texture2D(ngCanopyMap, uv) * 2.0 + texture2D(ngCanopyMap, uv + vec2(e, 0.0)) + texture2D(ngCanopyMap, uv - vec2(e, 0.0))
+        + texture2D(ngCanopyMap, uv + vec2(0.0, e)) + texture2D(ngCanopyMap, uv - vec2(0.0, e))) / 6.0;
+}
+/* 樹冠の天井の持ち上げ：平均の樹高 × 0.8。疎らな所は沈めて地面へ馴染ませる */
+float ngShellLift(vec4 cm) { return cm.g * 40.0 * 0.8 * smoothstep(0.15, 0.7, cm.r); }
+/* 樹冠の頂の凹凸（8m と 4.5m の «こぶ»、樹高の ±18%）：稜線の上の輪郭を滑らかな幕にしない */
+float ngShellBump(vec2 xz) { return 0.82 + 0.36 * (ngVNoise2(xz / 8.0 + 11.3) * 0.65 + ngVNoise2(xz / 4.5 + 2.9) * 0.35); }
+float ngShellL(vec2 xz) { return ngShellLift(ngShellCan(xz)) * ngShellBump(xz); }
+float ngShellY(vec2 xz) { return ngTerrainH(xz) + ngShellL(xz) - 1.5; }
+float ngShWallG = 1.0;   // 地形に対する面の上向き（normal の口で求めて begin で渡す）
+`;
+
+/* 持ち上げた面の本当の法線（平面の法線のままだと林縁の壁が天井と同じ明るさの «布» になる） */
+const SHELL_VS_NORMAL = /* glsl */ `
+{
+  vec2 xz = position.xz;
+  float e = 4.0;
+  vec2 lx = vec2(ngShellL(xz + vec2(e, 0.0)), ngShellL(xz - vec2(e, 0.0)));
+  vec2 lz = vec2(ngShellL(xz + vec2(0.0, e)), ngShellL(xz - vec2(0.0, e)));
+  vec2 tx = vec2(ngTerrainH(xz + vec2(e, 0.0)), ngTerrainH(xz - vec2(e, 0.0)));
+  vec2 tz = vec2(ngTerrainH(xz + vec2(0.0, e)), ngTerrainH(xz - vec2(0.0, e)));
+  float hx = (lx.x + tx.x) - (lx.y + tx.y), hz = (lz.x + tz.x) - (lz.y + tz.y);
+  objectNormal = normalize(vec3(-hx, 2.0 * e, -hz));
+  /* 持ち上げだけの傾き（地形の傾きを除く）：林縁の壁ほど 0 */
+  vec2 gl = vec2(lx.x - lx.y, lz.x - lz.y) / (2.0 * e);
+  ngShWallG = inversesqrt(1.0 + dot(gl, gl));
+}
 `;
 
 const SHELL_VS_BEGIN = /* glsl */ `
 {
   vec2 xz = transformed.xz;
-  vec4 cm = texture2D(ngCanopyMap, (xz + 512.0) / 1024.0);
+  vec4 cm = ngShellCan(xz);
   float hT = ngTerrainH(xz);
-  float dens = cm.r;
-  /* 樹冠の天井：平均の樹高 × 0.82（樹冠の上の面）。疎らな所は沈めて地面へ馴染ませる */
-  transformed.y = hT + cm.g * 40.0 * 0.82 * smoothstep(0.05, 0.6, dens) - 1.5;
+  float lift = ngShellLift(cm);
+  transformed.y = hT + lift * ngShellBump(xz) - 1.5;
   float ngD = length(xz - ngTreeEye.xz) / max(ngTreeEye.w, 1e-3);
   float keep = smoothstep(ngShellLod.x, ngShellLod.x + ngShellLod.y, ngD);
-  vNgSh = vec4(dens, cm.b, keep, cm.a);
+  vNgSh = vec4(cm.r, cm.b, keep, cm.a);
+  vNgShW = vec2(ngShWallG, clamp(lift / max(cm.g * 40.0 * 0.8, 1.0), 0.0, 1.0));
   vNgShSun = ngTreeSunAt(xz);
 }
 `;
@@ -757,6 +791,7 @@ const SHELL_VS_BEGIN = /* glsl */ `
 const SHELL_FS_PARS = NG_NOISE_GLSL + SHARED_FRAG + SUN_FS + /* glsl */ `
 uniform vec4 ngTreeMisc;
 varying vec4 vNgSh;
+varying vec2 vNgShW;
 varying float vNgShSun;
 float ngShellH(vec2 p) {
   /* 樹冠の凹凸：6m と 2.5m のドーム（値ノイズ） */
@@ -778,6 +813,10 @@ float ngShB = ngShellH(vNgWorld.xz);
 const SHELL_FS_ALPHA = /* glsl */ `
 {
   float a = smoothstep(0.18, 0.42, vNgSh.x + (ngShB - 0.5) * 0.25);
+  /* 林縁の壁：縦の木の列の凹凸（幅 4–7m の樹冠の «肩»）で切り欠いて、平らな幕に見せない */
+  float wall = 1.0 - smoothstep(0.35, 0.8, vNgShW.x);
+  float crowns = ngVNoise2(vec2(dot(vNgWorld.xz, vec2(0.71, 0.71)) / 4.5, vNgWorld.y / 9.0)) * 0.6 + ngVNoise2(vNgWorld.xz / 3.0 + 1.7) * 0.4;
+  a *= 1.0 - wall * smoothstep(0.0, 0.08, vNgShW.y - (0.5 + 0.5 * crowns));
   float keep = vNgSh.z;
   if (ngTreeMisc.x > 0.5 && ngPassId != NG_PASS_SHADOW) a *= keep;
   else a = keep > ngHash12(floor(gl_FragCoord.xy) + 7.0) ? a : 0.0;
@@ -799,7 +838,8 @@ const SHELL_FS_LIGHTS = /* glsl */ `
 {
   vec3 Vw = normalize(cameraPosition - vNgWorld);
   vec3 Nw = inverseTransformDirection(normal, viewMatrix);
-  float self = mix(0.4, 1.0, ngShB);
+  /* 壁は樹冠の中が見える分だけ暗い（林縁の奥の陰） */
+  float self = mix(0.4, 1.0, ngShB) * mix(0.55, 1.0, vNgShW.x);
   float ngMt = ngTreeMt(vNgWorld, vNgShSun);
   reflectedLight.directDiffuse *= self * ngMt;
   reflectedLight.directSpecular *= ngMt;
@@ -811,6 +851,6 @@ const SHELL_FS_LIGHTS = /* glsl */ `
 `;
 
 export const SHELL_HOOKS = {
-  vertex: { pars: SHELL_VS_PARS, begin: SHELL_VS_BEGIN },
+  vertex: { pars: SHELL_VS_PARS, normal: SHELL_VS_NORMAL, begin: SHELL_VS_BEGIN },
   fragment: { pars: SHELL_FS_PARS, surface: SHELL_FS_SURFACE, alpha: SHELL_FS_ALPHA, normal: SHELL_FS_NORMAL, lights: SHELL_FS_LIGHTS },
 };
