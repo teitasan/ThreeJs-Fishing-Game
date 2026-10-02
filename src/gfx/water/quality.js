@@ -21,9 +21,9 @@
 
 /** @type {Record<'low'|'mid'|'high', WaterTier>} */
 export const WATER_TIERS = Object.freeze({
-  low: Object.freeze({ gridN: 64, rings: 4, fftN: 128, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 256, aniso: 2 }),
+  low: Object.freeze({ gridN: 64, rings: 5, fftN: 128, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 256, aniso: 2 }),
   mid: Object.freeze({ gridN: 96, rings: 5, fftN: 256, cascades: 2, glints: 0, sim: false, simN: 0, simTexel: 0, splashes: 512, aniso: 4 }),
-  high: Object.freeze({ gridN: 128, rings: 5, fftN: 256, cascades: 2, glints: 1, sim: true, simN: 512, simTexel: 0.05, splashes: 1024, aniso: 8 }),
+  high: Object.freeze({ gridN: 128, rings: 5, fftN: 256, cascades: 2, glints: 1, sim: true, simN: 512, simTexel: 0.05, splashes: 1024, aniso: 4 }),
 });
 
 /** 段のキーを丸める（未知の段は mid） */
