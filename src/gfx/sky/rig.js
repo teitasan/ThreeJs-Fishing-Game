@@ -47,7 +47,7 @@ export function weatherParams(cloud, rain, hour = 12) {
     sigma: 48 - 26 * kc + 26 * kr,                // 1/km（積雲 48・層積雲 22・乱層雲 48）
     erosion: 0.55 - 0.20 * strat,
     belly: kr,
-    cirrus: 0.62 * ciDay * (1 - 0.45 * kc) * (1 - kr),
+    cirrus: 0.62 * ciDay * (1 - smooth(0.1, 0.7, kc)) * (1 - kr),
     deckOcc: 0.97 * smooth(0.25, 1.0, cover),
     cloudDim: 1 - 0.9 * smooth(0.35, 1.0, cover),
     shadow: 0.85 * (1 - smooth(0.6, 0.97, cover)),

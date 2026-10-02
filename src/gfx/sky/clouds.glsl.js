@@ -63,6 +63,21 @@ void main() {
 }
 `;
 
+/** 形の «柱の平均» 256²（遠い雲の LOD。形 64³ を 16 の高さで平均し、平均で薄まった濃淡を少し戻す） */
+export const SHAPE2_FRAG = /* glsl */ `
+uniform highp sampler3D uNgShape;
+void main() {
+  float a = 0.0, m = 0.0;
+  for (int i = 0; i < 16; i++) {
+    vec4 s = texture(uNgShape, vec3(vUv, (float(i) + 0.5) / 16.0));
+    float wf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
+    float sh = clamp((s.r - wf * 0.35) / max(1.0 - wf * 0.35, 1e-4), 0.0, 1.0);
+    a += sh / 16.0; m = max(m, sh);
+  }
+  gl_FragColor = vec4(mix(a, m, 0.5), 0.0, 0.0, 1.0);
+}
+`;
+
 /** 細部のノイズ 32³：rgb = Worley fbm（2・4・8 セル、0..1 に正規化） */
 export const DETAIL_FRAG = PERIODIC_GLSL + /* glsl */ `
 float ngSkyWn(vec3 p, float f) { return clamp((ngSkyWorleyFbm(p, f) - 0.28) / 0.55, 0.0, 1.0); }
@@ -130,6 +145,7 @@ void main() {
 export const PANO_FRAG = NG_FRAME_GLSL + NG_CLOUD_GLSL + NG_SURFACE_GLSL + NG_SKY_TRANS_GLSL + /* glsl */ `
 uniform highp sampler3D uNgShape;
 uniform highp sampler3D uNgDetail;
+uniform sampler2D uNgShape2;  // 形の «柱の平均»（256²、mip。遠い雲の LOD）
 uniform sampler2D uNgCirrus;
 uniform sampler2D uSkyClear;
 uniform sampler2D uPrev;
@@ -162,42 +178,71 @@ float ngCloudHeightGrad(float h01, float strat) {
   float st = smoothstep(0.0, 0.18, h01) * (1.0 - smoothstep(0.55, 1.0, h01));
   return mix(cu, st, strat);
 }
-/* 雲の密度（消散 1/km）。p は km（x, z = 湖の中心からの水平、y = 地表からの高さ）。full = 細部まで */
-float ngCloudDensity(vec3 p, float distKm, bool full, out float h01) {
+/* 雲の密度（消散 1/km）。p は km（x, z = 湖の中心からの水平、y = 地表からの高さ）。full = 細部まで。
+   距離の LOD（パノラマのテクセル ≈0.18°：10km で 30m、100km で 300m の足跡。遠くで 3D のノイズを点々に読むと
+   キャッシュが外れて重い）：〜12km は形 + 細部、12〜20km で細部を消し、16〜24km で形を «柱の平均» の 2D（mip 付き）へ */
+float ngSkyCloudBase(vec3 p, float distKm, out float h01, out float hh) {
   float base = uCloud.y, top = uCloud.z;
+  hh = 0.0;
   h01 = (p.y - base) / max(top - base, 0.05);
   if (h01 < 0.0 || h01 > 1.0) return 0.0;
-  float cov = ngSkyCover(p.xz);
+  /* 乱層雲・厚い層積雲は穴を開けない（被覆の斑は雲影と同じだが、層状の度合いで底上げ） */
+  float cov = max(ngSkyCover(p.xz), uCloud.x * smoothstep(0.6, 1.0, uCloud.w));
   if (cov <= 0.002) return 0.0;
   float hTop = mix(0.45 + 0.55 * cov, 1.0, uCloud.w);       // 積雲は被覆の高い所ほど頂が高い
-  float hh = h01 / max(hTop, 0.05);
+  hh = h01 / max(hTop, 0.05);
   if (hh > 1.0) return 0.0;
   vec3 q = vec3(p.x + uWind.x, p.y, p.z + uWind.y) * uCloud2.y;
-  vec4 s = textureLod(uNgShape, q, 0.0);
-  /* 形 = Perlin-Worley を高い周波数の Worley fbm で少し削る（房の中の房） */
-  float wf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
-  float shape = clamp(ngSkyRemapF(s.r, wf * 0.35, 1.0), 0.0, 1.0);
+  float far = smoothstep(16.0, 24.0, distKm);
+  float shape = 0.0;
+  if (far < 1.0) {
+    vec4 s = textureLod(uNgShape, q, 0.0);
+    /* 形 = Perlin-Worley を高い周波数の Worley fbm で少し削る（房の中の房） */
+    float wf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
+    shape = clamp(ngSkyRemapF(s.r, wf * 0.35, 1.0), 0.0, 1.0);
+  }
+  if (far > 0.0) {
+    float lod = log2(max(distKm * 0.0031 * uCloud2.y * 256.0, 1.0));
+    float s2 = textureLod(uNgShape2, q.xz, lod).r;
+    shape = mix(shape, s2, far);
+  }
+  /* 乱層雲は形の谷でも切れない（層状の度合いで底上げ） */
+  shape = mix(shape, 0.55 + 0.45 * shape, smoothstep(0.7, 1.0, uCloud.w));
   shape *= ngCloudHeightGrad(hh, uCloud.w);
   float c = clamp(cov, 0.0, 1.0);
-  float d = clamp(ngSkyRemapF(shape, 1.0 - c, 1.0), 0.0, 1.0) * c;
-  if (d <= 0.0) return 0.0;
-  if (full) {
+  return clamp(ngSkyRemapF(shape, 1.0 - c, 1.0), 0.0, 1.0) * c;
+}
+/* 細部で縁を削る（base > 0 のときだけ呼ぶ）。戻りは消散 1/km */
+float ngSkyCloudErode(float d, vec3 p, float distKm, float hh) {
+  float wd = 1.0 - smoothstep(12.0, 20.0, distKm);
+  if (wd > 0.0) {
     vec3 qd = vec3(p.x + uWind.z, p.y, p.z + uWind.w) * uCloud2.z;
     vec3 dn = textureLod(uNgDetail, qd, 0.0).rgb;
     float df = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
     df = mix(df, 1.0 - df, clamp(hh * 4.0, 0.0, 1.0));      // 下は房、上は渦
-    d = clamp(ngSkyRemapF(d, df * uCloud2.w * mix(1.0, 0.55, uCloud.w), 1.0), 0.0, 1.0);
+    d = clamp(ngSkyRemapF(d, df * uCloud2.w * mix(1.0, 0.3, uCloud.w) * wd, 1.0), 0.0, 1.0);
   }
-  return d * uCloud2.x;
+  /* 薄い膜を残さない（積雲の縁は締まる。層状では弱く） */
+  float fl = 0.06 * (1.0 - uCloud.w);
+  return max(d - fl, 0.0) / (1.0 - fl) * uCloud2.x;
 }
-/* 多重散乱の近似（Wrenninge の 3 オクターブ）+ 二重 HG（0.6 / −0.2）+ 銀の縁（0.88） */
-float ngCloudMS(float muL, float tauL) {
-  float p0 = mix(ngSkyPhaseHG(muL, -0.2), ngSkyPhaseHG(muL, 0.6), 0.72) + 0.10 * ngSkyPhaseHG(muL, 0.88);
-  float ms = p0 * exp(-tauL) + 0.5 * ngSkyPhaseHG(muL, 0.3) * exp(-0.4 * tauL) + 0.25 * ngSkyPhaseHG(muL, 0.15) * exp(-0.16 * tauL);
+float ngCloudDensity(vec3 p, float distKm, bool full, out float h01) {
+  float hh;
+  float d = ngSkyCloudBase(p, distKm, h01, hh);
+  if (d <= 0.0) return 0.0;
+  return full ? ngSkyCloudErode(d, p, distKm, hh) : d * uCloud2.x;
+}
+/* 多重散乱の近似（Wrenninge の 3 オクターブ）+ 二重 HG（0.6 / −0.2）+ 銀の縁（0.88）。
+   位相は光線ごとに一定なので ngCloudPhases で 1 回だけ（ALU の大半だった） */
+vec3 ngCloudPhases(float muL) {
+  return vec3(mix(ngSkyPhaseHG(muL, -0.2), ngSkyPhaseHG(muL, 0.6), 0.72) + 0.10 * ngSkyPhaseHG(muL, 0.88),
+              0.5 * ngSkyPhaseHG(muL, 0.3), 0.25 * ngSkyPhaseHG(muL, 0.15));
+}
+float ngCloudMS(vec3 ph, float tauL) {
+  float ms = ph.x * exp(-tauL) + ph.y * exp(-0.4 * tauL) + ph.z * exp(-0.16 * tauL);
   /* 厚い雲の拡散（二流近似の透過 1/(1 + 0.75·τ·(1−g))、g = 0.85）：白く、方向に依らない。
      日の当たる面の近くで «白い雲»（反射率 ≈ 0.75）になる大きさ */
-  float diff = 1.0 / (1.0 + 0.1125 * tauL);
-  return ms + 0.17 * diff;
+  return ms + 0.17 / (1.0 + 0.1125 * tauL);
 }
 /* 原点から d 方向、距離 t までの空気の透過と、内散乱のうちその手前の割合 F */
 void ngCloudAerial(vec3 d, float t, out vec3 Tair, out float F) {
@@ -216,6 +261,7 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
   float len = min(t1 - t0, 40.0);
   vec3 Ld = uLight.xyz;
   float muL = dot(d, Ld);
+  vec3 ph = ngCloudPhases(muL);
   vec3 Pm = vec3(0.0, r0, 0.0) + d * (t0 + 0.5 * len);
   float rpm = length(Pm);
   vec3 E = uLightE * ngSkySunT(rpm, dot(Pm, Ld) / rpm);
@@ -232,39 +278,63 @@ void ngCloudLow(vec3 d, float jit, vec3 Lsky, out vec3 rgb, out float a) {
     float tauL = den * (uCloud.z - uCloud.y) * 0.35 / max(Ld.y, 0.12);
     T = exp(-tau);
     vec3 amb = mix(uAmbBot, uAmbTop, 0.6) * mix(1.0, 0.45, uLight.w);
-    Lc = (E * ngCloudMS(muL, tauL) * mix(1.0, 1.0 - exp(-2.5 * (tauL + 0.15)), pw) + amb) * (1.0 - T);
+    Lc = (E * ngCloudMS(ph, tauL) * mix(1.0, 1.0 - exp(-2.5 * (tauL + 0.15)), pw) + amb) * (1.0 - T);
     tW = tm; wS = 1.0;
   } else {
-    int N = int(uMode.x), NL = int(uMode.y);
-    float dt = len / float(N);
-    for (int i = 0; i < 96; i++) {
-      if (i >= N) break;
-      float t = t0 + (float(i) + jit) * dt;
+    /* 段数は «層の中の道のり / 目標の歩幅»（近い所 45m → 遠い所 0.5km）を 16..uMode.x に。
+       空の所は 2 倍の歩幅で進み、雲に当たったら半歩戻って細かく（Schneider 2015）。
+       光の向きは uMode.y − 1 回の形の密度 + 1 回の被覆だけの遠い見積もり（2.4km 先まで） */
+    float NMAX = uMode.x;
+    /* 層状の雲（曇天・乱層雲）は光が拡散で決まるので光の段を減らし、歩幅も広げる */
+    int NL = int(uMode.y - 1.0 - 2.0 * uCloud.w + 0.5);
+    float stepT = mix(mix(0.045, 0.5, smoothstep(4.0, 40.0, t0)), mix(0.11, 0.6, smoothstep(4.0, 40.0, t0)), uCloud.w);
+    float N = clamp(ceil(len / stepT), 16.0, NMAX);
+    float dt = len / N;
+    float tEnd = t0 + len;
+    float t = t0 + jit * dt;
+    bool coarse = true;
+    /* 回数の上限 NI の中で必ず層を抜ける：残りの道のり / 残りの回数を歩幅の下限に（上限で切ると仰角ごとに輪ができた） */
+    int NI = int(NMAX) + 8;
+    for (int i = 0; i < 104; i++) {
+      if (t >= tEnd || i >= NI) break;
+      float dtMin = (tEnd - t) / float(NI - i);
       vec3 P = vec3(0.0, r0, 0.0) + d * t;
       float rp = length(P);
       vec3 pc = vec3(P.x, rp - NG_SKY_RG, P.z);
-      float h01;
-      float den = ngCloudDensity(pc, t, false, h01);
-      if (den <= 0.0) continue;
-      den = ngCloudDensity(pc, t, true, h01);
-      if (den <= 0.0) continue;
-      float tauL = 0.0, sj = 0.0, ds = 0.06;
-      for (int j = 0; j < 8; j++) {
-        if (j >= NL) break;
-        float h2;
-        tauL += ngCloudDensity(pc + Ld * (sj + 0.5 * ds), t, false, h2) * ds;
-        sj += ds; ds *= 1.85;
+      float h01, hh;
+      float den = ngSkyCloudBase(pc, t, h01, hh);
+      if (den <= 0.0) { t += max(coarse ? 2.0 * dt : dt, dtMin); coarse = true; continue; }
+      coarse = false;
+      float dtk = max(dt, dtMin);
+      den = ngSkyCloudErode(den, pc, t, hh);
+      if (den > 0.0) {
+        float tauL = 0.0, sj = 0.0, ds = 0.08;
+        for (int j = 0; j < 6; j++) {
+          if (j >= NL) break;
+          float h2;
+          tauL += ngCloudDensity(pc + Ld * (sj + 0.5 * ds), t, false, h2) * ds;
+          sj += ds; ds *= 2.6;
+        }
+        /* 遠い所（被覆だけ。層の中ほどの平均の形 0.3） */
+        vec3 pf = pc + Ld * (sj + 0.6);
+        float hf = (pf.y - uCloud.y) / max(uCloud.z - uCloud.y, 0.05);
+        if (hf > 0.0 && hf < 1.0) tauL += ngSkyCover(pf.xz) * uCloud2.x * 0.3 * 1.2;
+        float powder = mix(1.0, 1.0 - exp(-2.5 * (tauL + 0.15)), pw);
+        /* 環境光：上は空、下は地面の照り返し。中ほどほど・下ほど暗い（腹） */
+        float ha = clamp(h01, 0.0, 1.0);
+        vec3 amb = mix(uAmbBot, uAmbTop, sqrt(ha)) * (0.35 + 0.65 * ha) * mix(1.0, 0.5, uLight.w * (1.0 - ha));
+        vec3 S = E * (ngCloudMS(ph, tauL) * powder) + amb;
+        float Tk = exp(-den * dtk);
+        float w = T * (1.0 - Tk);
+        Lc += S * w;
+        tW += w * t; wS += w;
+        T *= Tk;
+        if (T < 0.015) break;
+        dt *= 1.04;          // 雲の奥ほど歩幅を広げる（奥の寄与は小さい）
       }
-      float powder = mix(1.0, 1.0 - exp(-2.5 * (tauL + 0.15)), pw);
-      vec3 amb = mix(uAmbBot, uAmbTop, sqrt(clamp(h01, 0.0, 1.0))) * (0.45 + 0.55 * h01) * mix(1.0, 0.5, uLight.w * (1.0 - h01));
-      vec3 S = E * (ngCloudMS(muL, tauL) * powder) + amb;
-      float Tk = exp(-den * dt);
-      float w = T * (1.0 - Tk);
-      Lc += S * w;
-      tW += w * t; wS += w;
-      T *= Tk;
-      if (T < 0.004) break;
+      t += dtk;
     }
+    if (T < 0.015) { Lc /= max(1.0 - T, 0.5); T = 0.0; }
   }
   if (wS <= 0.0) return;
   vec3 Tair; float F;

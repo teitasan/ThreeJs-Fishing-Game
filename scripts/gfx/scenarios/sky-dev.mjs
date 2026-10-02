@@ -43,10 +43,10 @@ export default async function (h) {
     console.log(name, JSON.stringify(r));
     await h.eval(() => { const L = window.__lab; L.camera.fov = 55; L.camera.updateProjectionMatrix(); });
   }
-  const evalSrc = process.env.EVALFILE ? fs.readFileSync(process.env.EVALFILE, 'utf8') : process.env.EVAL;
+  const evalSrc = process.env.SKYJS ? fs.readFileSync(process.env.SKYJS, 'utf8') : process.env.EVAL;
   if (evalSrc) {
     const v = await h.eval((src) => { const L = window.__lab; return JSON.stringify((0, eval)(src)); }, evalSrc);
-    console.log('EVAL', v);
+    console.log('RESULT', v);
   }
   const health = await h.eval(() => {
     const g = window.__lab.gfx, s = g.safety, m = g.modules.get('sky');

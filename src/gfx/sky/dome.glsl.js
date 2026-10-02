@@ -102,7 +102,8 @@ void main() {
   if (v.y > 0.0) {
     vec4 c = texture(uCloudPano, vec2(uv.x, clamp(uv.y * 2.0 - 1.0, 0.0, 1.0)));
     /* 画面の解像度の縁：パノラマ（≈0.18°/テクセル）の半透明の縁だけを、雲の中ほどの面の細部ノイズで削る・足す */
-    float edge = c.a * (1.0 - c.a);
+    /* 縁だけ（透過の画面の勾配が大きい所）。薄い膜の内側に細胞の模様を付けない */
+    float edge = c.a * (1.0 - c.a) * clamp(length(vec2(dFdx(c.a), dFdy(c.a))) * 12.0, 0.0, 1.0);
     if (edge > 0.003 && uCloudSharp.x > 0.0) {
       float r0 = NG_SKY_RG + 0.02;
       float tm = ngSkyShell(r0, v.y, NG_SKY_RG + uCloudSharp.y);
