@@ -9,6 +9,31 @@
    =========================================================== */
 import fs from 'node:fs';
 import path from 'node:path';
+import { encodePNG } from '../png.mjs';
+
+/* 反射 RT（targets.refl）をそのまま PNG へ（露出 → Reinhard → 2.2。上下はそのまま = 鏡映の絵）。
+   r4 で見つけた «対岸の汀の下の白い帯» の原因（反射のパスに地形が写っていない）を誰でも確かめられるように */
+async function dumpRefl(h, file) {
+  const px = await h.eval(() => {
+    const gfx = window.__ngGfx, rt = gfx.targets?.refl, T = gfx.THREE;
+    if (!rt) return null;
+    const n = rt.width * rt.height * 4, half = rt.texture.type === T.HalfFloatType;
+    const buf = half ? new Uint16Array(n) : new Uint8Array(n);
+    gfx.renderer.readRenderTargetPixels(rt, 0, 0, rt.width, rt.height, buf);
+    const h2f = (v) => { const e = (v >> 10) & 31, f = v & 1023; return e === 0 ? 6.1035e-5 * (f / 1024) : e === 31 ? 0 : Math.pow(2, e - 15) * (1 + f / 1024); };
+    const ex = gfx.frame.get(16, 0) || 1, out = new Array(n);
+    for (let k = 0; k < n; k++) {
+      if ((k & 3) === 3) { out[k] = 255; continue; }
+      const v = (half ? h2f(buf[k]) : buf[k] / 255) * ex;
+      out[k] = Math.min(255, Math.pow(Math.max(v / (1 + v), 0), 1 / 2.2) * 255) | 0;
+    }
+    return { w: rt.width, h: rt.height, d: out };
+  });
+  if (!px) return;
+  const d = new Uint8Array(px.w * px.h * 4), row = px.w * 4;
+  for (let y = 0; y < px.h; y++) for (let x = 0; x < row; x++) d[y * row + x] = px.d[(px.h - 1 - y) * row + x];
+  fs.writeFileSync(file, encodePNG({ width: px.w, height: px.h, data: d }));
+}
 
 export default async function (h) {
   const quality = process.env.QUALITY || 'high';
@@ -68,6 +93,7 @@ export default async function (h) {
     await h.tick(40);
     await h.sleep(200);
     await h.shot(name);
+    if (name === 'mirror-0900-fp') await dumpRefl(h, path.join(h.out, 'mirror-0900-refl-rt.png'));
     const nan = await h.eval(() => {
       /* main の RT の half の Inf/NaN の画素を数える（labkit の nanCheck と同じ） */
       const gfx = window.__ngGfx, rt = gfx.targets.main;
