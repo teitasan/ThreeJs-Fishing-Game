@@ -112,14 +112,20 @@ const TREE_VS_BEGIN = /* glsl */ `
   mat4 ngTM = batchingMatrix;
   /* [3][3] は代理の印（2 = 反射だけに出す LOD1）。投影の前に 1 へ戻す */
   float ngFlag = ngTM[3][3];
+  /* [0][3] は幹を太らせる倍率（fit.js：当たりに合わせる）。投影の前に 0 へ戻す */
+  float ngWiden = max(ngTM[0][3], 1.0);
   batchingMatrix[3][3] = 1.0;
+  batchingMatrix[0][3] = 0.0;
   ngTM[3][3] = 1.0;
+  ngTM[0][3] = 0.0;
 #elif defined( USE_INSTANCING )
   mat4 ngTM = instanceMatrix;
   float ngFlag = 1.0;
+  float ngWiden = 1.0;
 #else
   mat4 ngTM = mat4(1.0);
   float ngFlag = 1.0;
+  float ngWiden = 1.0;
 #endif
   vec3 ngRoot = (modelMatrix * vec4(ngTM[3].xyz, 1.0)).xyz;
   mat3 ngM3 = mat3(ngTM);
@@ -152,6 +158,12 @@ const TREE_VS_BEGIN = /* glsl */ `
   }
   if (ngKeep < 0.003) ngDrop = true;
 
+  /* 幹（管の level 0）の根元の帯を当たりの太さへ（fit.js の widenAt と同じ式） */
+  if (ngLeaf < 0.5 && ngWind.w < 0.01 && ngWiden > 1.001) {
+    float ngYm = ngYn * ngH;
+    float ngWs = smoothstep(1.7, 1.7 + max(1.5, 0.2 * ngH), ngYm);
+    transformed.xz *= mix(ngWiden, 1.0 + 0.3 * (ngWiden - 1.0), ngWs);
+  }
   /* 風（世界の m で決めて、インスタンスの行列の逆でローカルへ）。影の変種も同じ式 */
   vec4 ngW = ngWindAt(ngRoot.xz);
   float ngSp = ngW.z;

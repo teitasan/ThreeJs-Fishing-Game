@@ -20,6 +20,7 @@ import { bakeTreeTextures } from './textures.js';
 import { bakeImpostors } from './impostor.js';
 import { TREE_HOOKS, IMP_HOOKS, SHELL_HOOKS } from './shaders.js';
 import { treesQuality, IMP_GRID } from './quality.js';
+import { trunkProfileOf, trunkWiden, visualTrunkR } from './fit.js';
 
 const ASSET_DIR = new URL('../../../assets/gfx/trees/', import.meta.url);
 const CELL = 16;
@@ -64,10 +65,12 @@ export class TreesModule extends NgModule {
     /* ---- 2. 展開（20B の量子化頂点） */
     this.geos = [[], []];
     this.vstats = [];
+    this.profiles = [];
     for (let i = 0; i < json.variants.length; i++) {
       const V = json.variants[i];
       for (let k = 0; k < 2; k++) {
         const rec = readLod(bytes, V.lods[k]);
+        if (k === 0) this.profiles.push(trunkProfileOf(rec));
         const e = expandLod(rec, { cardSegs: json.cardSegs[k], crown: V.crown, crownR: V.crownR, href: V.href, bend: 0.6, lod: k });
         const g = new T.BufferGeometry();
         g.setAttribute('position', new T.BufferAttribute(e.position, 3, true));
@@ -231,11 +234,27 @@ export class TreesModule extends NgModule {
     const n = P?.count || 0;
     this.n = n;
     this.baseY = new Float32Array(n);
+    this.widen = new Float32Array(n);
+    this.visR = new Float32Array(n);
     const hf = this.ctx.heightfield;
+    const hAt = (x, z) => {
+      const y = hf?.ready ? hf.heightAt(x, z) : NaN;
+      return Number.isFinite(y) ? y : NaN;
+    };
     for (let k = 0; k < n; k++) {
-      const y = hf?.ready ? hf.heightAt(P.x[k], P.z[k]) : P.y[k] + 0.15;
-      this.baseY[k] = (Number.isFinite(y) ? y : P.y[k] + 0.15) - 0.12;
+      const prof = this.profiles[P.species[k] * 4 + (P.variant[k] | 0)] || this.profiles[0];
+      const w = trunkWiden(prof, P.h[k], P.r[k]);
+      this.widen[k] = w;
+      this.visR[k] = visualTrunkR(prof, P.h[k], w);
+      /* 浮かせない：根張り（胸高の半径 × 1.6 + 10cm）の 4 点と中心の最も低い所から 12cm 沈める */
+      const x = P.x[k], z = P.z[k], rf = this.visR[k] * 1.6 + 0.1;
+      let y = hAt(x, z);
+      if (Number.isFinite(y)) {
+        for (const [dx, dz] of [[rf, 0], [-rf, 0], [0, rf], [0, -rf]]) { const v = hAt(x + dx, z + dz); if (Number.isFinite(v)) y = Math.min(y, v); }
+      } else y = P.y[k] + 0.15;
+      this.baseY[k] = y - 0.12;
     }
+    this.hfKey = this._hfKey();
     this.cellStart = new Int32Array(GRID_N * GRID_N + 1);
     this.cellList = new Int32Array(n);
     const cellOf = new Int32Array(n);
@@ -349,6 +368,7 @@ export class TreesModule extends NgModule {
     this._s.set(s, s, s);
     this._m.compose(this._v, this._qa, this._s);
     this._m.elements[15] = flag;
+    this._m.elements[3] = this.widen[k];
     return this._m;
   }
 
@@ -438,9 +458,20 @@ export class TreesModule extends NgModule {
     this.counts.lod0 = n0; this.counts.lod1 = n1 - np - ns; this.counts.proxy = np; this.counts.shadowOnly = ns;
   }
 
+  /** 描いた幹の胸高の半径 m（当たりの重ね表示・テスト用） */
+  visualTrunkR(k) { return this.visR?.[k] ?? 0; }
+
+  /** 高さ場の版（作り直されたら変わる） */
+  _hfKey() {
+    const hf = this.ctx.heightfield;
+    return hf?.ready ? (hf.grids?.hash ?? hf.grids?.near?.data ?? true) : null;
+  }
+
   update(f) {
     const cam = f?.camera;
     if (!cam || !this.batches) return;
+    /* 高さ場が作り直されたら（terrain の差し替え）根元の高さを取り直す */
+    if (this._hfKey() !== this.hfKey) { this._buildTreeTable(); this._buildImpostors(); this.forceBuild = true; }
     const p = cam.position;
     if (!Number.isFinite(p.x) || !Number.isFinite(p.z)) return;
     this.U.ngTreeEye.value.set(p.x, p.y, p.z, this.lodScale);
