@@ -2,7 +2,7 @@
    groundcover + shoreflora の証拠一式（ARCHITECTURE §6.6・§6.7）
    -----------------------------------------------------------
    PW_MODULE=… node scripts/gfx/shot.mjs scripts/gfx/scenarios/groundcover+shoreflora-proof.mjs --out DIR --size 1280x720 --timeout 900
-   環境変数：TIERS=high,mid,low（既定 3 段）、HERO=0（2560×1440 の撮影を省く）、BENCH=0（GPU ms を省く）
+   環境変数：TIERS=high,mid,low（既定 3 段）、BENCH=0（GPU ms を省く）、ONLY=numbers（撮影を省いて数値だけ）。1440p は --size 2560x1440 TIERS=high
    lab/groundcover.html（統合済みの sky・water・terrain・trees + 担当の 2 つ、釣り人なし）で：
      1. 起動・止めずに 300 フレーム・健在（両モジュール）・プログラムの監査（各 ≤ 6、サンプラーの上限）・NaN 0
      2. 構図を «探す»（計算パスの読み戻しで草地・笹の群落、placement で逆光のヨシ原・睡蓮の群落・藪）
@@ -400,28 +400,8 @@ export default async function (h) {
     expect(T.health.deadPasses.length === 0, `${tier}: 止まったパス ${T.health.deadPasses}`);
     expect(T.console.errors === 0 && T.console.pageErrors === 0 && myWarn.length === 0, `${tier}: console ${JSON.stringify(T.console)}`);
 
-    /* ---- 2560×1440 の主役の絵（high） ---- */
-    if (tier === 'high' && process.env.HERO !== '0') {
-      const vp = h.page.viewportSize();
-      await h.page.setViewportSize({ width: 2560, height: 1440 });
-      await h.sleep(800);
-      for (const [name, cam, hour, weather, hero] of views) {
-        if (!hero || !['gc-forest-floor', 'gc-meadow-backlit-1730', 'gc-thicket-10m', 'sf-reeds-from-dock-dusk', 'sf-lilies', 'sf-weedbed-uw', 'gc-edge-60m'].includes(name)) continue;
-        await h.eval(({ cam, hour, weather }) => {
-          const L = window.__lab;
-          if (typeof cam === 'string') L.cam(cam);
-          else {
-            const c = { pos: cam.pos.slice(), target: cam.target.slice() };
-            if (cam.dockEye) { const dy = L.dock?.dockY ?? 0.9; c.pos[1] = (Number.isFinite(dy) ? dy : 0.9) + 1.6; }
-            if (cam.groundEye) c.pos[1] = Math.max(L.lake.heightAt(c.pos[0], c.pos[2]), 0) + cam.groundEye;
-            L.cam(c);
-          }
-          L.setHour(hour); L.setWeather(weather, { instant: true }); L.freeze(10); L.tick(40);
-        }, { cam, hour, weather });
-        await h.shot(`hero-1440p-${name}`);
-      }
-      await h.page.setViewportSize(vp);
-    }
+    /* 2560×1440 の主役の絵：lab は起動時の窓の大きさで描画先を作るので、途中で窓を変えても左上の 1/4 にしか描かれない。
+       1440p の証拠は «--size 2560x1440 TIERS=high» で同じシナリオを回して撮る（high-* が 1440p になる） */
   }
   out.fail = fail;
   fs.writeFileSync(path.join(h.out, 'proof.json'), JSON.stringify(out, null, 1));
