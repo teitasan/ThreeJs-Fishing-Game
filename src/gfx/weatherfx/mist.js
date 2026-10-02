@@ -1,7 +1,7 @@
 /* ===========================================================
    朝霧の板（ARCHITECTURE §6.9）
    -----------------------------------------------------------
-   水面の上 0.5–4m に浮かぶ大きなソフトなカード（60 / 32 / 16 枚）。カメラ中心の 280m の箱で折り返し、風で流れる。
+   水面の上 0.5–4m に浮かぶ大きなソフトなカード（60 / 32 / 16 枚）。カメラ中心の 140m の箱で折り返し、風で流れる。
    - 密度は core の朝霧と同じ場：ngMistDensity·e^(−(y − ngMistBaseY)/ngMistH)·ngMistMask（slot 6）。
      core の解析の朝霧が «平均» を受け持つので、カードは «濃淡の揺らぎ» の分だけを足す（ノイズの平均より濃い所。二重に濃くしない）
    - 縁を見せない：楕円の窓 × 2 段のノイズ（世界座標で読む = カードが重なっても模様が揃う）、深度でソフト、
@@ -13,7 +13,7 @@ import { NG_HEIGHTFIELD_GLSL } from '../core/glsl/heightfield.glsl.js';
 import { NG_LAYER, ngOwn } from '../core/layers.js';
 import { mulberry32, stream } from '../../world/rng.js';
 
-const BOX = 140;   // 半辺 m
+const BOX = 70;    // 半辺 m（140 では 60 枚が 1 枚 / 1300m² に薄まり、視野に 2–3 枚しか入らなかった）
 
 const VS = NG_HEIGHTFIELD_GLSL + /* glsl */ `
 #include <common>
@@ -31,8 +31,8 @@ void main() {
   vec2 xz;
   xz.x = c.x - B + mod(aSeed.x * 2.0 * B + w.x * t - (c.x - B), 2.0 * B);
   xz.y = c.z - B + mod(aSeed.y * 2.0 * B + w.y * t - (c.z - B), 2.0 * B);
-  float wid = mix(24.0, 46.0, aSeed.z);
-  float hgt = mix(3.0, 6.5, aSeed.w);
+  float wid = mix(18.0, 36.0, aSeed.z);
+  float hgt = mix(2.5, 5.0, aSeed.w);
   float y0 = ngMistBaseY + 0.35 + 1.2 * fract(aSeed.z * 7.1);
   /* 水の上だけ：汀線の内 6m から（ngShoreD は陸 +、水 −） */
   float shore = ngShoreD(xz);
@@ -83,10 +83,12 @@ void main() {
   float r = length(q * vec2(1.0, 1.0)) + (n - 0.5) * 0.55;
   float win = 1.0 - smoothstep(0.35, 1.0, r);
   /* 揺らぎの分だけ：ノイズの平均（≈ 0.45）より濃い所 */
-  float var = max(n - 0.40, 0.0) * 1.9;
+  float var = max(n - 0.38, 0.0) * 2.2;
   float hy = max(vW.y - ngMistBaseY, 0.0);
   float rho = ngMistDensity * exp(-hy / max(ngMistH, 0.3)) * ngMistMask(vW.xz);
-  float a = (1.0 - exp(-rho * 26.0 * var)) * win * vA;
+  /* 板 1 枚 = 横から見た «濃い塊»（視線に沿って ≈ 100m 分の平均の 1.4 倍の濃さ）：τ = ρ·100·var。
+     ρ 0.012/m の夜明けで最大 τ ≈ 0.6（ρ·26 では a ≈ 0.02 で全く見えなかった） */
+  float a = (1.0 - exp(-rho * 100.0 * var)) * win * vA;
   /* 水面の近く・深度（地形・桟橋・木）でソフトに */
   a *= smoothstep(0.0, 0.6, vW.y - 0.02);
   float zs = texture(ngSceneDepth, gl_FragCoord.xy * ngScreen.zw).r;
@@ -94,9 +96,14 @@ void main() {
   a *= smoothstep(0.0, 5.0, zs - zf);
   if (a < 1e-3) discard;
   vec3 vd = normalize(vVd);
-  /* 薄い層の単散乱：L = E·p(μ)（a ≈ τ で前乗せ）。太陽側の光暈は位相で、頭打ち 1.2 */
-  vec3 E = ngKeyRad * vNgCloud * min(ngMsHG(dot(vd, ngKeyDir), clamp(ngMieG, 0.0, 0.9)), 1.2)
-         + ngSkyIrr * 0.9 + vec3(ngMistAmb);
+  /* 板の色 = core の媒質そのものの «源の放射輝度»（カメラ → 板の区間の Lin/(1 − T)：E·P(μ) + A の平均）。
+     同じ朝霧の «濃い塊» なので色と前方散乱の光暈（太陽側）が core の霧と一致する。
+     自前の E·HG + 空の放射照度は core の霧より暗く、板が霧の帯を逆に暗くしていた（差分で −3/255） */
+  vec3 Tm, Lm;
+  ngAirSegment(cameraPosition, vW, Tm, Lm);
+  vec3 E = Lm / max(vec3(1.0) - Tm, vec3(1e-3));
+  /* 区間が短く T ≈ 1 のとき（近い板）の割り算の誤差：太陽側の位相で頭打ち */
+  E = min(E, (ngKeyRad * 1.2 + ngSkyIrr) * 1.5 + vec3(ngMistAmb));
   gl_FragColor = vec4(E, 1.0);
   #include <fog_fragment>
   gl_FragColor = vec4(gl_FragColor.rgb * a, a);
