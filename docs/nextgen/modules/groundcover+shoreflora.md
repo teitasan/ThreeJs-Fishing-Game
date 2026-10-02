@@ -73,7 +73,7 @@ shoreflora（`src/gfx/shoreflora/`）
 | mid 1280×720 | 同 | 0.94 / 0.71 / 0.86 / 0.61（予算 0.85） | 0.38 / 0.29 / 0.66 / 0.46（予算 0.60） |
 | low 1280×720 | 同 | **0.71** / 0.44 / 0.66 / 0.34（予算 0.30） | 0.15 / 0.11 / 0.25 / 0.21（予算 0.30） |
 
-本編（index.html、`groundcover+shoreflora-game.mjs`、high 720p）：groundcover 桟橋 1.1・岸 0.6・内陸 1.6、shoreflora 桟橋 0.4・岸 3.9（r2 の前、LOD の段の前）。
+本編（index.html、`groundcover+shoreflora-game.mjs` → `shots/groundcover+shoreflora/game2`、720p、桟橋 / 岸 / 内陸）：groundcover high 1.3 / 1.0 / 1.8・mid 0.7 / 0.6 / 1.0・low 0.1 / 0.4 / 0.3、shoreflora high 1.0 / 2.3 / 2.0・mid 0.6 / 0.7 / 0.7・low 0.4 / 0.3 / 0.5（岸の high は LOD の段の前 3.9）。3 段とも健在・console のエラー 0・ページ例外 0・警告 0・NaN 0。
 三角形（high、草地）：groundcover 1.10M（r1 の 1.73M から：笹シダのリング 0.6m × 47 → 0.7m × 41）、shoreflora 0.51M。プログラム 4 + 4、テクスチャ 2.5MB（計算パスの RT 768 × 行 + 藪の葉 256²）
 
 ## 自己批評（1 巡、r2）
