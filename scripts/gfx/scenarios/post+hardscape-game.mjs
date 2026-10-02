@@ -104,9 +104,10 @@ export default async function (h) {
     const sy = g.water.surfaceY ? g.water.surfaceY(o.x, o.z) : null;
     const beach = m._beach || null;
     const ground = beach ? m._groundAt(o.x, o.z) : null;
-    return { boatY: b.position.y, baseY: o.y, surfaceY: sy, pitch: b.rotation.x, roll: b.rotation.z, beached: !!beach, ground };
+    return { boatY: b.position.y, baseY: o.y, surfaceY: sy, pitch: b.rotation.x, roll: b.rotation.z, beached: !!beach, ground, contract: m.collisionReport().boat };
   });
   console.log('boat', JSON.stringify(out.boat));
+  expect(out.boat.contract.outsideEnds <= 2 && out.boat.contract.topOver <= 2, `本編の小舟が当たりの円を越える ${JSON.stringify(out.boat.contract)}`);
   if (out.boat.beached) expect(out.boat.boatY > out.boat.ground - 0.2 && out.boat.boatY < out.boat.ground + 0.3, `浜の舟が地面に載っていない ${JSON.stringify(out.boat)}`);
   else if (out.boat.surfaceY != null) expect(Math.abs(out.boat.boatY - out.boat.baseY - out.boat.surfaceY) < 0.06, `小舟の上下が水面とずれる ${JSON.stringify(out.boat)}`);
 

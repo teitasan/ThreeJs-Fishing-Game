@@ -282,7 +282,7 @@ export class PostModule extends NgModule {
       const aoOn = !!(this.ao && !uw && force.ao !== 0);
       this._aoOn = aoOn;
       if (aoOn) {
-        u.ngAo.value.set(cfg.aoRadius, cfg.aoSteps, 1.25, 70);
+        u.ngAo.value.set(cfg.aoRadius, cfg.aoSteps, 1.6, 70);   // 強さ 1.25 → 1.6（桟橋の下の根太の間が読めるように。環境光の割合だけに掛かる）
         this._pass(MODE.GTAO, targets.copy.textures[1], this.ao);
         this._pass(MODE.AOBLUR, this.ao, this.aoB);
       }

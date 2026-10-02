@@ -126,7 +126,8 @@ export function buildDock(o) {
       const rFn = (t, th) => r0 * (1 + 0.035 * Math.sin(th * 3 + ph) + 0.02 * Math.sin(th * 5 + ph2 + t * 9) + 0.04 * (1 - t) * 0.5);
       const H = top[1] - bot;
       const nRows = Math.max(6, Math.min(26, Math.round(H / 0.5)));
-      g.log(b0, top, rFn, 14, nRows + 1, [K.PILE, rnd(), r0, 0], [rnd() * 0.75, rnd() * 4], false, true);
+      const tn = rnd(), u0 = rnd() * 0.75, v0 = rnd() * 4;
+      g.log(b0, top, rFn, 14, nRows + 1, [K.PILE, tn, r0, u0], [u0, v0], false, true);   // w.w = u0（杭の周の木目の位相）
       piles.push({ x: base[0], z: base[2], r: r0 * 1.04, top: bearBot, al: ra, si });
       /* ボルト（受け梁を貫く） */
       g.log(P(ra - 0.1, si, yBear), P(ra + 0.1, si, yBear), () => 0.011, 6, 2, [K.IRON, rnd(), 0, 0]);

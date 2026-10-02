@@ -123,15 +123,19 @@ export function buildBoat(rnd) {
 /**
  * 小舟（休止の姿勢）が当たりの円 2 つの和の内側か（cm。正 = はみ出し）と上端
  * @param {ArrayLike<number>} pos 船の座標の位置
- * @param {{x:number, y:number, z:number, yaw:number, circles:{x:number,z:number,r:number,top:number}[]}} bp
+ * @param {{x:number, y:number, z:number, yaw:number, pitch?:number, roll?:number, circles:{x:number,z:number,r:number,top:number}[]}} bp
  */
 export function boatContractReport(pos, bp) {
   const c = Math.cos(bp.yaw), s = Math.sin(bp.yaw);
   let out = -Infinity, outEnds = -Infinity, top = -Infinity;
   const [c0, c1] = bp.circles;
   const mx = (c0.x + c1.x) / 2, mz = (c0.z + c1.z) / 2, ax = c1.x - c0.x, az = c1.z - c0.z, half = Math.hypot(ax, az) / 2;
+  /* 浜に引き揚げた姿勢（pitch・roll。YXZ：R = Ry · Rx · Rz）。浮いている時は 0 */
+  const cp = Math.cos(bp.pitch || 0), sp = Math.sin(bp.pitch || 0), cr = Math.cos(bp.roll || 0), sr = Math.sin(bp.roll || 0);
   for (let i = 0; i < pos.length; i += 3) {
-    const x = bp.x + pos[i] * c + pos[i + 2] * s, y = bp.y + pos[i + 1], z = bp.z - pos[i] * s + pos[i + 2] * c;
+    const lx = pos[i] * cr - pos[i + 1] * sr, ly0 = pos[i] * sr + pos[i + 1] * cr;
+    const ly = ly0 * cp - pos[i + 2] * sp, lz = ly0 * sp + pos[i + 2] * cp;
+    const x = bp.x + lx * c + lz * s, y = bp.y + ly, z = bp.z - lx * s + lz * c;
     top = Math.max(top, y);
     let d = Infinity;
     for (const k of bp.circles) d = Math.min(d, Math.hypot(x - k.x, z - k.z) - k.r);

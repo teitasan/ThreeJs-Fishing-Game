@@ -68,7 +68,21 @@ export const WOOD_FRAG_NORMAL = /* glsl */ `
   } else if (k < 1.5) {
     alb *= vec3(0.9, 0.87, 0.83) * (0.82 + 0.3 * tone);
   } else if (k < 2.5) {
-    alb *= vec3(0.8, 0.77, 0.72) * (0.85 + 0.25 * tone);
+    /* 杭（丸太）：板目の弧を周に引き伸ばすと大きな «指紋» になる。地図はぼかして色だけ使い、
+       縦にまっすぐの木目（1.2cm と 4mm の 2 段）・数本の干割れ・灰銀の風化を周期のノイズで（継ぎ目なし） */
+    vec3 tx = texture2D(map, vMapUv).rgb, tb = texture2D(map, vMapUv, 6.0).rgb;
+    alb = alb / max(tx, vec3(0.02)) * tb;
+    float a = fract((vMapUv.x - vNgWood.w) / 0.24);
+    float C = 6.2831853 * max(vNgWood.z, 0.05);
+    float n1 = floor(C / 0.012 + 0.5), n2 = n1 * 3.0, n3 = 7.0;
+    float g1 = ngVNoise2P(vec2(a * n1, P.y * 0.8 + tone * 31.0), vec2(n1, 4096.0));
+    float g2 = ngVNoise2P(vec2(a * n2, P.y * 2.6 + tone * 17.0), vec2(n2, 4096.0));
+    float cr = ngVNoise2P(vec2(a * n3, P.y * 0.55 + tone * 7.0), vec2(n3, 4096.0));
+    float crk = (1.0 - smoothstep(0.0, 0.03, abs(cr - 0.5))) * smoothstep(0.45, 0.7, ngVNoise2(vec2(a * 5.0, P.y * 1.3 + tone * 9.0)));
+    alb *= vec3(0.8, 0.77, 0.72) * (0.85 + 0.25 * tone) * (0.86 + 0.16 * g1 + 0.1 * g2);
+    alb *= 1.0 - 0.6 * crk;
+    cav = mix(1.0, 0.92 + 0.08 * g1, 0.8) * (1.0 - 0.7 * crk);
+    Nw = normalize(mix(Nw, Gn, 0.8));
   } else if (k < 3.5) {
     /* 船：外板の継ぎ目（周の 13.5cm ごと）・暗い褐色 */
     float gir = clamp((fract(vMapUv.x * 4.0) - 0.04) / 0.92, 0.0, 1.0) * 0.5;

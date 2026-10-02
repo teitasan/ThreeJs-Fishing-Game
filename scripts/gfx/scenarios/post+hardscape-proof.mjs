@@ -71,6 +71,8 @@ export default async function (h) {
         L.freeze(10);
         L.tick(o.frames || 30);
         const s = L.stats();
+        /* sky の非同期の読み戻しが PIXEL_PACK を束ねたままのことがある（同期の readPixels が INVALID_OPERATION） */
+        try { const gl = L.gfx.renderer.getContext(); gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null); } catch (e) { /* 無視 */ }
         return { nan: L.nanCheck(), exposure: s.exposure, gpu: s.gpuTotal, post: s.modules.post, hs: s.modules.hardscape };
       },
       snag() {

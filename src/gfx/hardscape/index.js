@@ -22,7 +22,7 @@ import { waveHeight, shoalGain } from '../../waveField.js?v=20260828-lakescale1'
 import { ngBlackbody } from '../post/grade.js';
 import { GeoBuilder, WOOD_KIND, tubePositions } from './geo.js';
 import { buildDock, DOCK_DIM, dockContractReport } from './dock.js';
-import { buildBoat, BOAT_DIM, boatContractReport, boatBottomY, boatBottomB } from './boat.js';
+import { buildBoat, BOAT_DIM, boatContractReport, boatBottomY, boatBottomB, boatSheerY, boatHalfB } from './boat.js';
 import { buildRockShapes, ROCK_SHAPES } from './rocks.js';
 import { addSnag, addDriftwood } from './logs.js';
 import { bakeHardscapeTextures } from './textures.js';
@@ -234,7 +234,16 @@ export class HardscapeModule extends NgModule {
     { const [x, z] = W(0.4, 0); gS = groundAt(x, z); }
     const pitch = Math.atan2(gF - gA, 2 * L), roll = Math.atan2(gS - gP, 0.8) + 0.07;
     /* 砂に 5cm めり込ませる（宙に浮かない） */
-    return { y: need - 0.05, pitch: -Math.max(-0.2, Math.min(0.2, pitch)), roll: Math.max(-0.25, Math.min(0.25, roll)) };
+    const pose = { y: need - 0.05, pitch: -Math.max(-0.2, Math.min(0.2, pitch)), roll: Math.max(-0.25, Math.min(0.25, roll)) };
+    /* 当たりの円の上端（placement の top）を見た目の舷が越えない：越える分だけ砂に沈める（土手に舳先が埋まる） */
+    const capTop = Math.min(...(b.circles || [{ top: Infinity }]).map((k) => k.top)) + 0.02;
+    let top = -Infinity;
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12, lz = (t * 2 - 1) * BOAT_DIM.HALF_L, hb = boatHalfB(t), sy = boatSheerY(t);
+      for (const lx of [-hb, hb]) top = Math.max(top, this._boatLocalToWorld([lx, sy, lz], pose)[1]);
+    }
+    if (Number.isFinite(capTop) && top > capTop) pose.y -= top - capTop;
+    return pose;
   }
 
   /* 船の座標 → 世界（休止の姿勢 + heave / pitch / roll） */
@@ -527,7 +536,8 @@ export class HardscapeModule extends NgModule {
     const dock = dockContractReport(this.dockGeo.attributes.position.array, this.dockGeo.attributes.ngWood.array, {
       start: D.dockStart, dir: fx.dir, right: fx.right, Y: D.dockY, L: D._dockLen, lamp: this.lampPos,
     });
-    const boat = boatContractReport(this.boatGeo.attributes.position.array, this.boatP);
+    const boat = boatContractReport(this.boatGeo.attributes.position.array, this._beach ? { ...this.boatP, pitch: this._beach.pitch, roll: this._beach.roll } : this.boatP);
+    boat.beached = !!this._beach;
     /* 大岩：見た目の半径（形の xz の最大 = 1 × 0.40·size·max(sx, sz)）と当たりの半径・上端 */
     let bR = -Infinity, bT = 0;
     for (const b of this.ctx.placement?.boulders || []) {
