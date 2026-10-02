@@ -90,6 +90,13 @@ export function shBasis(x, y, z, out) {
   return out;
 }
 
+/** c の色度を輝度を保ったまま中立（わずかに青）へ w だけ寄せる */
+function desat(c, w, out = [0, 0, 0]) {
+  const l = ngLuminance(c[0], c[1], c[2]), n = l / ngLuminance(1, 1, 1.04);
+  out[0] = c[0] + (n - c[0]) * w; out[1] = c[1] + (n - c[1]) * w; out[2] = c[2] + (n * 1.04 - c[2]) * w;
+  return out;
+}
+
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export class SkyRig {
@@ -135,6 +142,7 @@ export class SkyRig {
     };
     this._b = new Array(9).fill(0);
     this._t = [0, 0, 0];
+    this._t2 = [0, 0, 0];
   }
 
   /* 真昼・快晴（haze 1）の太陽の照度 = KEY_NOON、空の半球照度 = SKY_NOON、月の天頂 = MOON */
@@ -289,7 +297,11 @@ export class SkyRig {
     const D = 1 / (1 + 0.75 * tau * 0.15);
     const lyE = Math.sqrt(Math.max(p.light[1], 0.03));
     const upT = this.upTw;
-    for (let k = 0; k < 3; k++) p.deckL[k] = (p.lightE[k] * Tcl[k] * lyE + 0.6 * upT[k]) * D / Math.PI * smooth(0.2, 0.9, wp.cover);
+    /* 厚い甲板の底は上の空の青をそのまま映さない（何度も散乱して灰青に均される）：被覆に応じて空の明かりの色度を中立へ。
+       そのままだと雨のブルーアワーが «雲のない晴れの夕空» に見えた（r3 の 18:30 雨） */
+    const dsat = 0.9 * smooth(0.35, 0.95, wp.cover);
+    const upD = desat(upT, dsat, this._t2);
+    for (let k = 0; k < 3; k++) p.deckL[k] = (p.lightE[k] * Tcl[k] * lyE + 0.6 * upD[k]) * D / Math.PI * smooth(0.2, 0.9, wp.cover);
     A.deck.h = wp.base; A.deck.occ = wp.deckOcc; A.deck.L = p.deckL;
     if (this.B !== A && this.B) { this.B.deck = A.deck; }
     /* 晴れの空の方向ごとの値（毎フレーム 9 方向ずつ、跳びは全部） */
@@ -318,6 +330,8 @@ export class SkyRig {
     const up = this.skyUp;
     /* 雲の上の空（雲の環境光）：空の半球照度 / π × 0.75（雲の中では上の雲が遮る）+ 夜の底 */
     for (let k = 0; k < 3; k++) p.ambTop[k] = (Math.max(this.skyUp[k], upT[k]) / Math.PI) * 0.55 + NIGHT_FLOOR[k];
+    desat(p.ambTop, dsat, p.ambTop);
+    desat(p.ambBot, dsat, p.ambBot);
     for (let k = 0; k < 3; k++) p.ambBot[k] = ATMO.albedo * (E[k] * Math.max(kd[1], 0) + up[k]) / Math.PI;
     /* 媒質（core の ngApplyMedium）：Rayleigh・谷の霞（雨で 2 倍以上）・朝霧 */
     const bM = 3.5e-5 * (1 + 1.5 * cloud + 3.5 * rain);
@@ -332,8 +346,9 @@ export class SkyRig {
     const a = (h / 24) * Math.PI * 2;
     set4(F, NG.CLOUDSH, Math.cos(a) * CLOUD_R, Math.sin(a) * CLOUD_R, 1 / 900, wp.shadow);
     set4(F, NG.CLOUDS, wp.cover, wp.base, wp.top, a);
-    /* 朝霧：4:30–8:00、5:45 に最大。雨上がり（濡れ）で濃い */
-    const dawn = smooth(4.5, 5.75, h) * (1 - smooth(5.75, 8.0, h));
+    /* 朝霧：5:12–8:00、6:09 に最大。雨上がり（濡れ）で濃い */
+    /* 日の出（6:00）の直後に最大：深い薄明（5:30、太陽 −7°）では反対の低い月に照らされた灰白の帯になった */
+    const dawn = smooth(5.2, 6.15, h) * (1 - smooth(6.15, 8.0, h));
     const wetTarget = rain > 0.1 ? 1 : 0;
     this.wet += (wetTarget - this.wet) * (1 - Math.exp(-dt / (wetTarget > this.wet ? 10 : 60)));
     this.puddle += (this.wet - this.puddle) * (1 - Math.exp(-dt / (this.wet > this.puddle ? 25 : 120)));

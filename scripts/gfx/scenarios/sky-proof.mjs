@@ -124,16 +124,20 @@ export default async function (h) {
         /* 地平の仰角 1.15°（HZ_Y = 0.02）：ngSkyViewUV の v = 0.5 + 0.5·sqrt(el/90°) */
         const el = Math.atan(0.02) * 180 / Math.PI;
         const v = 0.5 + 0.5 * Math.sqrt(el / 90);
-        const row = Math.min(H - 1, Math.floor(v * H));
-        const rb = new Uint16Array(W * 4);
-        R.readRenderTargetPixels(rt, 0, row, W, 1, rb);
+        /* 縮小の 17 行目と同じ核：縦は v で双一次、横は 8 テクセルの箱 → 32 マスを方位で線形補間（rig._fromGpu と同じ）。
+           核が違うと、太陽側の残照のような方位の鋭い山で «GPU と CPU の差» でなく «測り方の差» を測ってしまう */
+        const yv = v * H - 0.5, r0 = Math.floor(yv), fy = yv - r0;
+        const rb0 = new Uint16Array(W * 4), rb1 = new Uint16Array(W * 4);
+        R.readRenderTargetPixels(rt, 0, r0, W, 1, rb0);
+        R.readRenderTargetPixels(rt, 0, Math.min(H - 1, r0 + 1), W, 1, rb1);
+        const PW = 32, cell = (j, k) => { let a = 0; for (let t = 0; t < 8; t++) { const x = j * 8 + t; a += half(rb0[x * 4 + k]) * (1 - fy) + half(rb1[x * 4 + k]) * fy; } return a / 8; };
         let gpu = [0, 0, 0], cpu = [0, 0, 0];
         for (let i = 0; i < 8; i++) {
           const az = (i / 8) * Math.PI * 2;
-          /* ngSkyViewUV：u = atan(z, x) / 2π + 0.5。方位のまわり ±4 テクセル（±5.6°）の平均 */
+          /* ngSkyViewUV：u = atan(z, x) / 2π + 0.5 */
           const u = Math.atan2(Math.sin(az), Math.cos(az)) / (2 * Math.PI) + 0.5;
-          const c = [0, 0, 0], x0 = Math.round(u * W);
-          for (let dx = -4; dx < 4; dx++) { const x = ((x0 + dx) % W + W) % W; for (let k = 0; k < 3; k++) c[k] += half(rb[x * 4 + k]) / 8; }
+          const xx = u * PW - 0.5, x0 = Math.floor(xx), fx = xx - x0, xa = ((x0 % PW) + PW) % PW, xb = (xa + 1) % PW;
+          const c = [0, 1, 2].map((k) => cell(xa, k) * (1 - fx) + cell(xb, k) * fx);
           const s = m.rig.Lsky.slice(128 * 3 + i * 3, 128 * 3 + i * 3 + 3);
           for (let k = 0; k < 3; k++) { gpu[k] += c[k] / 8; cpu[k] += s[k] / 8; }
         }
