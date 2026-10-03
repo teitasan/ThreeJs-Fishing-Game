@@ -5,8 +5,9 @@
    copy   : 不透明パスの写し。MRT で sceneColor（RGBA16F、high は mip）と
             sceneDepthLin（R32F の線形深度 m、Nearest）。low は半解像度
    refl   : 平面反射（RGBA16F、mip、深度 RB）。大きさは main × reflection.scale
-   大きさは «描画バッファの物理ピクセル × 動的解像度の倍率»。同じ大きさなら何もしない
+   大きさは «描画バッファの物理ピクセル × 画素の上限の倍率（profile.maxPixels）× 動的解像度の倍率»。同じ大きさなら何もしない
    =========================================================== */
+import { ngPixelCap } from './quality.js';
 
 /**
  * RT の組
@@ -37,6 +38,7 @@ export class Targets {
    * @returns {boolean} 作り直したら true
    */
   ensure(w, h, scale, profile) {
+    scale *= ngPixelCap(profile, w, h);
     const W = Math.max(1, Math.round(w * scale)), H = Math.max(1, Math.round(h * scale));
     const key = [W, H, profile.msaa, profile.copyScale, profile.copyMips, profile.reflection.scale, profile.reflection.mips].join();
     if (key === this._key) return false;

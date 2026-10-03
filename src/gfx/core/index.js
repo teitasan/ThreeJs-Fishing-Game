@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { installNg, verifyNg } from './chunks.js';
 import { NgFrame, NG, NG_PASS, ngFrameData } from './frame.js';
 import { NG_LAYER, NG_MASK, ngOwn } from './layers.js';
-import { Quality, NG_TIERS, normalizeTier } from './quality.js';
+import { Quality, NG_TIERS, normalizeTier, ngPixelCap } from './quality.js';
 import { Safety } from './safe.js';
 import { Budget } from './budget.js';
 import { Wind } from './wind.js';
@@ -638,7 +638,7 @@ export class Gfx {
     try { override = new URLSearchParams(globalThis.location?.search || '').get('msaa'); } catch (e) { /* Node */ }
     try {
       const s = this.renderer.getDrawingBufferSize(new THREE.Vector2());
-      const k = this.pipeline?.renderScale || 1;
+      const k = (this.pipeline?.renderScale || 1) * ngPixelCap(this.quality.profile, s.x, s.y);
       const probe = override ? null : measureMsaa(THREE, this.renderer, {
         width: Math.max(64, Math.round(s.x * k)), height: Math.max(64, Math.round(s.y * k)), sync: this._gpuSync,
       });

@@ -369,12 +369,13 @@ export class HardscapeModule extends NgModule {
         im.count = 0; im.visible = false;
         im.castShadow = shadowLods.includes(lod); im.receiveShadow = true;
         im.instanceMatrix.setUsage(T.DynamicDrawUsage);
-        ngOwn(im, NG_LAYER.WORLD);
+        /* LOD3（遠い大岩）は反射に写さない：反射の RT（0.6 倍）で 1–3px、反射のパスで 0.3ms だった */
+        ngOwn(im, lod >= 3 ? NG_LAYER.NO_REFLECT : NG_LAYER.WORLD);
         this.world.add(im);
         return im;
       }));
     };
-    this._rockMeshes = mk(this._boulders, [0, 1, 2], 'hs-boulder', [0, 1]);
+    this._rockMeshes = mk(this._boulders, [0, 1, 2, 3], 'hs-boulder', [0, 1]);
     this._cobbleMeshes = mk(this._cobbles, [1, 2], 'hs-cobble', [1]);
     this._bucketAt = null;
 
@@ -402,12 +403,19 @@ export class HardscapeModule extends NgModule {
         if (isCobble) {
           if (Math.hypot(r.x - cx, r.z - cz) > cfg.cobbleCull) continue;
           lod = d < cfg.lod0 ? 0 : 1;      // cobbles の列は [LOD1, LOD2]
-        } else lod = d < cfg.lod0 ? 0 : d < cfg.lod1 ? 1 : 2;
+        } else {
+          /* 遠い大岩：LOD3（80 三角形）。1440p の桟橋の構図で LOD2 の 1300 個が主 0.4 + 反射 0.4ms（三角形が数 px 未満で
+             四つ組の無駄が大きい）。さらに遠い所は 2px 未満なので描かない */
+          if (d > cfg.rockCull) continue;
+          lod = d < cfg.lod0 ? 0 : d < cfg.lod1 ? 1 : d < cfg.lod2 ? 2 : 3;
+        }
         const im = meshes[r.shape]?.[lod];
         if (!im) continue;
         const j = im.count++;
         im.instanceMatrix.array.set(r.m.elements, j * 16);
-        im.geometry.attributes.ngRockI.array.set(r.info, j * 4);
+        const ia = im.geometry.attributes.ngRockI.array;
+        ia.set(r.info, j * 4);
+        ia[j * 4 + 3] = !isCobble && lod >= 2 ? 1 : 0;   // 遠景の安い道（shaders.js の ngFar）
       }
       for (const row of meshes) {
         for (const im of row || []) {

@@ -224,12 +224,22 @@ export const ROCK_FRAG_NORMAL = /* glsl */ `
   vec2 o = vec2(sd * 17.0, sd * 31.0);
   const float sc = 0.85;
   vec2 uX = P.zy * sc + o, uY = P.xz * sc + o, uZ = P.xy * sc + o;
-  vec4 A = texture2D(ngRockA, uX) * bw.x + texture2D(ngRockA, uY) * bw.y + texture2D(ngRockA, uZ) * bw.z;
-  vec3 tX = ngHsTN(texture2D(ngRockN, uX), type), tY = ngHsTN(texture2D(ngRockN, uY), type), tZ = ngHsTN(texture2D(ngRockN, uZ), type);
-  tX = vec3(tX.xy + G.zy, abs(tX.z) * G.x);
-  tY = vec3(tY.xy + G.xz, abs(tY.z) * G.y);
-  tZ = vec3(tZ.xy + G.xy, abs(tZ.z) * G.z);
-  vec3 Nw = normalize(tX.zyx * bw.x + tY.xzy * bw.y + tZ.xyz * bw.z);
+  /* 遠景（LOD2 / LOD3 のインスタンス、vNgRockI.w = 1。描画ごとに一様な分岐）：地図は上からの 1 回、法線の地図・fbm は省く
+     （数 px の岩で 6 回の読みと 10 オクターブの雑音が主 + 反射の 0.6ms の大半だった） */
+  bool ngFar = vNgRockI.w > 0.5;
+  vec4 A;
+  vec3 Nw;
+  if (ngFar) {
+    A = texture2D(ngRockA, uY);
+    Nw = G;
+  } else {
+    A = texture2D(ngRockA, uX) * bw.x + texture2D(ngRockA, uY) * bw.y + texture2D(ngRockA, uZ) * bw.z;
+    vec3 tX = ngHsTN(texture2D(ngRockN, uX), type), tY = ngHsTN(texture2D(ngRockN, uY), type), tZ = ngHsTN(texture2D(ngRockN, uZ), type);
+    tX = vec3(tX.xy + G.zy, abs(tX.z) * G.x);
+    tY = vec3(tY.xy + G.xz, abs(tY.z) * G.y);
+    tZ = vec3(tZ.xy + G.xy, abs(tZ.z) * G.z);
+    Nw = normalize(tX.zyx * bw.x + tY.xzy * bw.y + tZ.xyz * bw.z);
+  }
   float lum = mix(A.g, A.r, type);
   vec3 alb = lum * mix(vec3(0.96, 0.99, 1.05), vec3(1.06, 1.0, 0.92), type);
   alb *= 0.86 + 0.28 * A.b;
@@ -238,14 +248,21 @@ export const ROCK_FRAG_NORMAL = /* glsl */ `
   float cav = vNgRockV.x;
   /* 雨の筋（急な面を縦に流れた汚れ）と、根元の土の跳ね */
   float steep = 1.0 - smoothstep(0.35, 0.7, abs(G.y));
-  float stk = ngFbm(vec2((P.x + P.z) * 3.2 + sd * 7.0, P.y * 0.3), 3);
+  float stk = 0.5, mn, an;
+  if (ngFar) {
+    mn = 0.3 + 0.4 * ngVNoise2(P.xz * 1.7 + o);
+    an = 0.5;
+  } else {
+    stk = ngFbm(vec2((P.x + P.z) * 3.2 + sd * 7.0, P.y * 0.3), 3);
+    mn = ngFbm(P.xz * 1.7 + o, 4);
+    an = ngFbm(P.xz * 2.3 + P.y * 1.7, 3);
+  }
   alb *= mix(1.0, 0.72 + 0.4 * stk, steep);
   alb *= mix(0.62, 1.0, smoothstep(0.0, 0.16, vNgRockV.y + 0.04 * (stk - 0.5)));
   /* 地衣（乾いた面の淡い斑） */
   float dry = smoothstep(0.32, 0.9, P.y);
   alb = mix(alb, vec3(0.33, 0.35, 0.29), A.a * 0.55 * dry * (1.0 - 0.3 * type));
   /* 苔：上向きの面（樹冠の陰と水辺で厚く = moss）。窪みの縁から乗る */
-  float mn = ngFbm(P.xz * 1.7 + o, 4);
   float mU = smoothstep(0.12, 0.62, G.y + 0.5 * (mn - 0.5) + 0.3 * (1.0 - cav));
   float mossA = mU * dry * smoothstep(0.42, 0.62, mn * 0.7 + 0.55 * moss);
   vec3 mCol = mix(vec3(0.045, 0.075, 0.022), vec3(0.085, 0.115, 0.035), ngVNoise2(P.xz * 9.0));
@@ -256,7 +273,6 @@ export const ROCK_FRAG_NORMAL = /* glsl */ `
   float wl = 0.02 + 0.035 * sin(P.x * 1.3 + P.z * 0.7 + ngWaterTime * 1.1);
   float sub = 1.0 - smoothstep(wl - 0.03, wl + 0.03, P.y);
   float band = (1.0 - smoothstep(0.0, 0.3, P.y - wl)) * (1.0 - sub);
-  float an = ngFbm(P.xz * 2.3 + P.y * 1.7, 3);
   float algae = sub * (1.0 - 0.6 * smoothstep(-0.3, -2.5, P.y)) * clamp(0.55 + 0.6 * (an - 0.5), 0.0, 1.0);
   alb = mix(alb, mix(vec3(0.04, 0.055, 0.022), vec3(0.08, 0.085, 0.04), an), algae);
   float silt = sub * smoothstep(-0.3, -1.5, P.y) * smoothstep(0.1, 0.75, G.y + 0.2 * (an - 0.5));

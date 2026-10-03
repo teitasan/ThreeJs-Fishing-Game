@@ -1,15 +1,15 @@
 /* ===========================================================
    hardscape の品質表（ARCHITECTURE §7。配置と当たりは全品質で同一。three を import しない）
    -----------------------------------------------------------
-   - lod0 / lod1：岩の LOD の距離 m（大きい岩ほど遠くまで：距離 ÷ √size）
+   - lod0 / lod1 / lod2：岩の LOD の距離 m（大きい岩ほど遠くまで：距離 ÷ √size）。rockCull：大岩を描く最大（同じ尺度）
    - cobbleCull：小石を描く最大距離 m（それより先は数 px 未満）
    - moths：夜の灯籠の蛾の数
    密度（当たりの無い岩・小石・流木）は placement の TIER_DENSITY（rank の入れ子）
    =========================================================== */
 export const HS_TIERS = Object.freeze({
-  low: Object.freeze({ lod0: 7, lod1: 32, cobbleCull: 38, moths: 6 }),
-  mid: Object.freeze({ lod0: 11, lod1: 48, cobbleCull: 60, moths: 10 }),
-  high: Object.freeze({ lod0: 16, lod1: 70, cobbleCull: 90, moths: 14 }),
+  low: Object.freeze({ lod0: 7, lod1: 32, lod2: 60, rockCull: 260, cobbleCull: 38, moths: 6 }),
+  mid: Object.freeze({ lod0: 11, lod1: 48, lod2: 90, rockCull: 320, cobbleCull: 60, moths: 10 }),
+  high: Object.freeze({ lod0: 16, lod1: 70, lod2: 120, rockCull: 400, cobbleCull: 90, moths: 14 }),
 });
 
 /** @param {string} tier */

@@ -76,7 +76,7 @@ const t0 = performance.now();
 const A = buildRockShapes(123456789);
 const ms = performance.now() - t0;
 const B = buildRockShapes(123456789);
-check(A.length === ROCK_SHAPES && A.every((s) => s.lods.length === 3), '岩は 8 形 × 3 LOD');
+check(A.length === ROCK_SHAPES && A.every((s) => s.lods.length === 4), '岩は 8 形 × 4 LOD');
 check(ms < 2500, `岩の形が遅い ${ms.toFixed(0)}ms`);
 let same = true;
 A.forEach((s, k) => s.lods.forEach((l, j) => {

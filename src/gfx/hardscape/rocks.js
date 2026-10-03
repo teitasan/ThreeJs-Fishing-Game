@@ -12,7 +12,7 @@ import { mulberry32, stream } from '../../world/rng.js';
 
 /** 形の数（placement.boulders[].shape 0..11 を % で畳む） */
 export const ROCK_SHAPES = 8;
-export const ROCK_LOD_DETAIL = [4, 3, 2];
+export const ROCK_LOD_DETAIL = [4, 3, 2, 1];   // 5120 / 1280 / 320 / 80 三角形（LOD3 は遠景の大岩だけ）
 
 /* ---- 3D の値ノイズ（整数格子のハッシュ。決定的） ---- */
 function h3(i, j, k, s) {
@@ -109,7 +109,7 @@ export function rockShapeFn(seed, k) {
 }
 
 /**
- * 8 形 × 3 LOD を作る
+ * 8 形 × 4 LOD を作る
  * @param {number} seed
  * @returns {{lods: {pos: Float32Array, nrm: Float32Array, rv: Float32Array, idx: Uint16Array|Uint32Array}[]}[]}
  */
