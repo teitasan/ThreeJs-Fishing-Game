@@ -108,6 +108,11 @@ varying float vNgCloud;
     fog_fragment: `#ifdef USE_FOG
 #ifdef NG_FRAME
 	gl_FragColor.rgb = ngApplyMedium( gl_FragColor.rgb, vNgWorld );
+#if defined( ALPHA_TO_COVERAGE )
+	/* 反射の RT（MSAA なし）では a2c の a（縁で 0..1 に研いだ値）が «覆い» として残り、水が空と混ぜて
+	   木の映りに縦の筋と白い粒が出た。反射のパスでは切り抜きを 0.5 で決めて a = 1 にする */
+	if ( ngPassId > 0.5 && ngPassId < 1.5 ) { if ( gl_FragColor.a < 0.5 ) discard; gl_FragColor.a = 1.0; }
+#endif
 #else
 ${fogFrag}
 #endif

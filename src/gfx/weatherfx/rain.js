@@ -254,10 +254,18 @@ void main() {
   vec2 wd = ngWindDir * ngWindSpeed;
   /* 縦に流れる筋（下へ 9m/s、風で横へ）。2 つの尺度 */
   /* 1 周期 = 横 18m・縦 26m（ノイズは横 24 セル = 幕の筋 0.75m。細かすぎると遠景に «櫛» の模様が出る） */
-  vec2 uv = vec2(az * ngRnRadius / 18.0 + ngRnA.x * dot(wd, vec2(-vDir.z, vDir.x)) / 18.0, (vH + ngRnA.x * 9.0) / 26.0);
-  float n = texture(ngRnNoise, uv).r * 0.65 + texture(ngRnNoise, uv * vec2(2.3, 1.7) + 0.37).g * 0.35;
+  /* 方位の周回の数は整数（そうしないと atan の折り返し（真後ろ・斜め）で模様が切れ、縦の継ぎ目の線が出た）。
+     微分は折り返しを除いた方位の差から作る（atan の跳びで mip が最小に落ちて継ぎ目が光るのも防ぐ） */
+  float tiles = max(1.0, floor(ngRnRadius / 18.0 + 0.5));   // 1 周のノイズの枚数（以前の az·R/18 と同じ密度）
+  float tilesM = max(1.0, floor(ngRnRadius / 90.0 + 0.5));
+  float dax = dFdx(az), day = dFdy(az);
+  dax -= floor(dax + 0.5); day -= floor(day + 0.5);
+  vec2 uv = vec2(az * tiles + ngRnA.x * dot(wd, vec2(-vDir.z, vDir.x)) / 18.0, (vH + ngRnA.x * 9.0) / 26.0);
+  vec2 gx = vec2(dax * tiles, dFdx(vH) / 26.0), gy = vec2(day * tiles, dFdy(vH) / 26.0);
+  float n = textureGrad(ngRnNoise, uv, gx, gy).r * 0.65 + textureGrad(ngRnNoise, uv * vec2(2.3, 1.7) + 0.37, gx * vec2(2.3, 1.7), gy * vec2(2.3, 1.7)).g * 0.35;
   /* 幕は一様にしない：大きな尺度（90m × 80m）の濃淡で «雨の帯» が流れて来ては去る（一様だと遠景が櫛の模様） */
-  float m = smoothstep(0.25, 0.8, texture(ngRnNoise, vec2(az * ngRnRadius / 90.0 + ngRnA.x * 0.004, vH / 80.0 + 0.31)).r);
+  vec2 kM = vec2(tilesM / tiles, 26.0 / 80.0);
+  float m = smoothstep(0.25, 0.8, textureGrad(ngRnNoise, vec2(az * tilesM + ngRnA.x * 0.004, vH / 80.0 + 0.31), gx * kM, gy * kM).r);
   float a = 1.3 * rain * (0.05 + (0.04 + 0.08 * n) * m) * smoothstep(0.0, 6.0, vH) * (1.0 - smoothstep(22.0, 36.0, vH));
   a *= soft;   // 地形に刺さる縁を消す（不透明の深度との差でソフト）
   if (a < 1e-3) discard;

@@ -5,7 +5,7 @@
    派生（法線・汀線距離・底質・樹冠・被覆）を GPU で作る。
    - 高さ：R32F・Nearest。補間は GLSL の手動バイリニア（glsl/heightfield.glsl.js）
    - 法線：oct（格子と同じ解像度、中心差分）。空いた成分に派生を同居させてサンプラーを 2 枚減らす：
-       ngNormalNear = RGBA16F（xy 法線、z 汀線距離 m）、ngNormalFar = RGBA8（xy 法線、zw 樹冠の密度・高さ/40m）
+       ngNormalNear = RGBA16F（xy 法線、z 汀線距離 m）、ngNormalFar = RGBA16F（xy 法線、zw 樹冠の密度・高さ/40m）
    - 汀線距離：1024² のジャンプフラッド（JFA）の符号付き距離（陸 +、水 −、m）を near の法線へ写す
    - 底質：grids.bed（RGBA8：mud, sand, rock, v）をそのまま（lake.bedAt と一致）
    - 樹冠：placement.trees を CPU で ±512m @2m に散らし（RG8：密度・高さ/40m）、far の法線へ写す
@@ -243,7 +243,8 @@ export class HeightField {
       uniforms: { ...u, ngUseFar: { value: useFar }, ngShoreSrc: { value: shore }, ngCanopySrc: { value: this.maps.canopy } },
     });
     u.ngNormalNear.value = own(normal(0, g.near.n, T.HalfFloatType));
-    u.ngNormalFar.value = own(normal(1, g.far.n, T.UnsignedByteType));
+    /* far も RGBA16F：RGBA8 の八面体の法線は 1 段 ≈0.8°。雨で濡れた斜面（粗さ 0.12）の鏡面に等高線の縞（対岸の丘の同心の弧）が出た */
+    u.ngNormalFar.value = own(normal(1, g.far.n, T.HalfFloatType));
     u.ngCoverMap.value = own(f.bake2D({ w: COVER_N, h: COVER_N, frag: COVER_FRAG, type: T.UnsignedByteType, wrap: 'clamp', uniforms: { ...u } }));
   }
 

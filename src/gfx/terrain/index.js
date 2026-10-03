@@ -306,18 +306,32 @@ export class TerrainModule extends NgModule {
         key.shadow.updateMatrices(key);
         fr = key.shadow.getFrustum();
       }
-      this._passCounts.shadow = this._fill(this.list, fr, -1e9);
+      this._passCounts.shadow = this._fill(this.list, fr, -1e9, 'shadow');
     } else if (passId === NG_PASS.REFLECTION) {
       u.ngTerrMorph.value = this._morphRefl;
       /* 鏡映カメラの投影は斜めの近クリップ（水面）で、そこから取った視錐台は遠平面が大きく傾く（対岸の浜・草地のセルを
          184 → 34 に捨て、写らない所に空が出て «対岸の汀の下の白い帯» になっていた）。遠平面（planes[4]）は使わない */
-      const fr = this._camFrustum(camera);
-      if (fr) fr.planes[4].set(this._zero3 || (this._zero3 = new this.ctx.THREE.Vector3()), 1);
-      this._passCounts.refl = this._fill(this.reflList, fr, -0.05);
+      this._passCounts.refl = this._fill(this.reflList, this._reflFrustum(camera), -0.05, 'refl');
     } else {
       u.ngTerrMorph.value = this._morphMain;
-      this._passCounts.main = this._fill(this.list, this._camFrustum(camera), -1e9);
+      this._passCounts.main = this._fill(this.list, this._camFrustum(camera), -1e9, 'main');
     }
+  }
+
+  /* 反射の選択の視錐台：鏡映カメラの «斜めでない» 投影（画角は 1.2 倍・遠平面なし）から作る。斜めの近クリップの投影から
+     取ると遠平面が倒れ、さらに粗い反射の区画（128m）の箱が側面で落ちて、対岸の森の丘ごと反射から消えていた
+     （写らない所は空になり «対岸の汀の下の白い帯»・木の映りの隙間の空）。GPU が画面の外を切るので広めでよい */
+  _reflFrustum(cam) {
+    if (!cam?.projectionMatrix) return null;
+    cam.updateMatrixWorld();
+    const n = Math.max(cam.near || 0.1, 0.05);
+    const t = n * Math.tan(Math.min(80, (cam.fov || 50) * 0.6) * Math.PI / 180) / (cam.zoom || 1);
+    const a = cam.aspect || 1.78;
+    this._m4.makePerspective(-t * a, t * a, t, -t, n, 1e6);
+    this._m4.multiply(cam.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._m4);
+    this._frustum.planes[4].set(this._zero3 || (this._zero3 = new this.ctx.THREE.Vector3()), 1);
+    return this._frustum;
   }
 
   _camFrustum(cam) {
@@ -328,9 +342,38 @@ export class TerrainModule extends NgModule {
     return this._frustum;
   }
 
+  /* パスごとの幾何（位置・法線・索引は共有、インスタンスの属性 aNgInst だけ別）。three は幾何の属性の転送を
+     «render の回（info.render.frame）» ごとに 1 回しか行わず、近景の影の描画は影の tick の render と同じ回に入るので、
+     同じ幾何を影 → 反射と詰め直すと反射は影の区画の並び（の先頭 n 個）で描かれていた（対岸の森の丘が反射から消え、
+     空が写って汀の下の白い帯・木の映りの隙間の空になっていた） */
+  _passGeo(pass) {
+    const base = this._baseGeo || (this._baseGeo = this.mesh.geometry);
+    if (pass === 'main') return base;
+    this._pgeo = this._pgeo || {};
+    let g = this._pgeo[pass];
+    if (!g || g.userData.base !== base) {
+      g?.dispose();
+      const T = this.ctx.THREE;
+      g = new T.InstancedBufferGeometry();
+      for (const k of ['position', 'normal']) g.setAttribute(k, base.attributes[k]);
+      g.setIndex(base.index);
+      const inst = new T.InstancedBufferAttribute(new Float32Array(base.attributes.aNgInst.array.length), 4);
+      inst.setUsage(T.DynamicDrawUsage);
+      g.setAttribute('aNgInst', inst);
+      g.instanceCount = 0;
+      g.boundingSphere = base.boundingSphere;
+      g.boundingBox = base.boundingBox;
+      g.userData.base = base;
+      this._pgeo[pass] = g;
+    }
+    return g;
+  }
+
   /* 選択を視錐台と «湖面より上» で詰め、インスタンスの属性へ */
-  _fill(src, frustum, minTop) {
-    const geo = this.mesh.geometry, attr = geo.attributes.aNgInst, dst = attr.array, d = src.data;
+  _fill(src, frustum, minTop, pass = 'main') {
+    const geo = this._passGeo(pass);
+    this.mesh.geometry = geo;
+    const attr = geo.attributes.aNgInst, dst = attr.array, d = src.data;
     const box = this._box, hr = this._hr, clip = RIDGE_CLIP + 2;
     let n = 0;
     for (let i = 0; i < src.count; i++) {
@@ -361,10 +404,12 @@ export class TerrainModule extends NgModule {
     if (!this.mesh) return;
     const T = this.ctx.THREE;
     if (this.q.cells !== this._cells) {
-      const old = this.mesh.geometry;
+      const old = this._baseGeo || this.mesh.geometry;
       this._cells = this.q.cells;
-      this.mesh.geometry = patchGeometry(T, this._cells);
+      this.mesh.geometry = this._baseGeo = patchGeometry(T, this._cells);
       old.dispose();
+      for (const g of Object.values(this._pgeo || {})) g.dispose();
+      this._pgeo = {};
     }
     if (this.q.texSize !== this._texSize) {
       /* 段の切り替え（設定の変更）のときだけ。焼き直しは同期（1024² × 8 層 × 2） */

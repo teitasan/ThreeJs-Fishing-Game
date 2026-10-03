@@ -321,7 +321,10 @@ export class FramePipeline {
     m.position.set(px, -py, pz);
     m.up.set(e[4], -e[5], e[6]);
     m.lookAt(px - e[8], -(py - e[9]), pz - e[10]);
-    m.near = cam.near; m.far = cam.far; m.fov = cam.fov; m.aspect = cam.aspect; m.zoom = cam.zoom;
+    /* 遠平面は 50 倍：斜めの近クリップ（Lengyel）は遠平面を近クリップ面の側へ倒す。元の far のままだと、
+       遠くの «水面すれすれ» の物（対岸の浜・草地・幹の根元）が倒れた遠平面で切られて空が写り、
+       日中の対岸の汀の下に白い帯が出ていた。深度は反射の RT の遮蔽にしか使わないので精度は足りる */
+    m.near = cam.near; m.far = cam.far * 50; m.fov = cam.fov; m.aspect = cam.aspect; m.zoom = cam.zoom;
     m.updateProjectionMatrix();
     m.updateMatrixWorld();
     m.matrixWorldInverse.copy(m.matrixWorld).invert();

@@ -381,7 +381,9 @@ export class SkyRig {
     this.puddle += (this.wet - this.puddle) * (1 - Math.exp(-dt / (this.wet > this.puddle ? 25 : 120)));
     if (!Number.isFinite(this.wet)) this.wet = 0;
     if (!Number.isFinite(this.puddle)) this.puddle = 0;
-    set4(F, NG.MIST, 0.012 * dawn * (1 + this.wet) * (1 - 0.7 * rain), 0, 5, MIE_G_MEDIUM);
+    /* 朝霧は湖面の低い層（スケール高 2.2m）。以前の 0.012/m・5m では対岸まで 300m の水平な視線の光学的厚さが 2 を超え、
+       森が汀から稜線の下まで «平らな茶色の壁» に沈んだ。今は対岸の幹の根元が半分霞み、樹冠（y ≥ 10m）は 85% 通る */
+    set4(F, NG.MIST, 0.0075 * dawn * (1 + this.wet) * (1 - 0.7 * rain), 0, 2.2, MIE_G_MEDIUM);
     set4(F, NG.WEATHER, this.wet, rain, this.puddle * 0.8, 0.42);
     /* 地平線の整合：8 方位の空の地平（雲込み）に 3km 先の霞の漸近値を合わせる */
     const cam = input.camera?.position || { x: 0, y: 2, z: 0 };

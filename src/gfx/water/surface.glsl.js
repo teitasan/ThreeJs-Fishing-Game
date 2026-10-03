@@ -420,8 +420,9 @@ void main() {
         float win = smoothstep(0.9990 - 0.0015 * lod, 0.99985 - 0.0015 * lod, dot(R, ngKeyDir));
         /* 反射 RT の a は «覆い» ではない：切り抜きの葉（alphaTest + a2c の材質）は MSAA の無い反射 RT へテクスチャの a（0.5–1）を
            そのまま書く（色は前乗算でない）。a で割ると葉の縁が最大 2 倍に光り、空と混ぜると縦に伸びた筋になっていた。
-           空のドームも a = 1 で写るので、a が 1/4 以上なら覆われている（割らない）。何も描かれていない所（a = 0）だけ空へ */
-        cover = clamp(rc.a * 4.0, 0.0, 1.0);
+           切り抜きの a は 0.5 以上なので a × 2 を覆いとする（葉は 1、空のドームは 1）。何も写らない所（a = 0：空のドームが
+           反射のパスで水面の下を通る視線に書く値）とのぼかしの境は、覆いで割り戻して空（ngSkySpecular）を混ぜる */
+        cover = clamp(rc.a * 2.0, 0.0, 1.0);
         refl = rc.rgb / max(cover, 1e-3);
         if (win > 0.0) {
           float cap = 6.0 * max(ngLuminance(ngSkySpecular(R, 0.5)), 1e-4);

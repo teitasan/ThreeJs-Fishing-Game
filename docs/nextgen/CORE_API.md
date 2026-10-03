@@ -682,7 +682,7 @@ uniforms：`ngHfShadow0`・`ngHfShadow1`（R8 相当、1 = 日向）・`ngHfShad
 
 | メンバ | 型 | 中身 |
 | --- | --- | --- |
-| `uniforms` | object | `ngHeightNear` `ngHeightFar`（R32F・Nearest DataTexture）、`ngNormalNear`（RGBA16F：oct 法線 xy・汀線距離 z）、`ngNormalFar`（RGBA8：oct 法線 xy・樹冠 zw）、`ngBedMap`（RGBA8）、`ngCoverMap`（RGBA8）、`ngHfNear` `ngHfFar`（vec4：origin.x, origin.z, 1/step, n）、`ngHfMapXf`（vec4：near の原点, 1/near の幅, far の原点, 1/far の幅）。build の前は 1×1 の中立値 |
+| `uniforms` | object | `ngHeightNear` `ngHeightFar`（R32F・Nearest DataTexture）、`ngNormalNear`（RGBA16F：oct 法線 xy・汀線距離 z）、`ngNormalFar`（RGBA16F：oct 法線 xy・樹冠 zw）、`ngBedMap`（RGBA8）、`ngCoverMap`（RGBA8）、`ngHfNear` `ngHfFar`（vec4：origin.x, origin.z, 1/step, n）、`ngHfMapXf`（vec4：near の原点, 1/near の幅, far の原点, 1/far の幅）。build の前は 1×1 の中立値 |
 | `heightAt(x, z)` | number m | **GPU の `ngTerrainH` と同じ補間** の CPU 双子（描画の高さ合わせに使う。ゲームの当たりは `terrain.heightAt`） |
 | `grids` | object | `{ near: { data: Float32Array, n: 1040, origin: [−260, −260], step: 0.5 }, far: { n: 1024, origin: [−512, −512], step: 1.0 }, bed: { data: Uint8Array RGBA, n: 260, origin: [−260, −260], step: 2.0 }, hash }`。格子点 k は x = origin + k·step、行は z（`data[iz·n + ix]`） |
 | `maps` | `{ shore, canopy }` | 同居させる前の派生（lab の表示用） |
