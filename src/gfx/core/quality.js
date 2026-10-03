@@ -39,7 +39,7 @@ export const NG_TIERS = Object.freeze({
     causticsStrength: 0.72,
   },
   high: {
-    pixelRatioMax: 2, drs: [0.7, 1.0], hdr: true, msaa: 4, postAA: 'none', maxPixels: 2.6e6,
+    pixelRatioMax: 2, drs: [0.7, 1.0], hdr: true, msaa: 4, postAA: 'none', maxPixels: 2.36e6,
     copyScale: 1, copyMips: 4,
     nearShadow: { size: 3072, extent: 48, radius: 2 },
     hfShadow: { levels: 2, size: 1024 },
@@ -125,7 +125,7 @@ export class Quality {
 /**
  * 内部解像度の画素の上限（profile.maxPixels）による倍率。DRS の倍率はこの上に掛かる。
  * high の 2560×1440（3.7MP）は M1 で 1 画素あたりの重さ（MSAA・森の切り抜き・水・post）が 16ms を割らないので、
- * 内部を ≈2.6MP（1440p で 0.84 倍）に抑え、FINAL の CAS で戻す。1080p（2.07MP）以下では効かない
+ * 内部を ≈2.36MP（1440p で 0.8 倍 = 2048×1152）に抑え、FINAL の CAS で戻す。1080p（2.07MP）以下では効かない
  * @param {{maxPixels?: number}} profile
  * @param {number} w 描画バッファの幅（物理 px）
  * @param {number} h
