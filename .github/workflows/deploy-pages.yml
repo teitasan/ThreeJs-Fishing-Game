@@ -48,6 +48,32 @@ jobs:
             ./ _site/
           touch _site/.nojekyll
 
+      # 次世代グラフィックのフォークを /nextgen/ に並べて置く（本番のトップは main のまま）
+      - name: Checkout nextgen fork
+        uses: actions/checkout@v4
+        with:
+          ref: fork/nextgen-graphics
+          path: _nextgen
+
+      - name: Add nextgen fork under /nextgen/
+        run: |
+          mkdir -p _site/nextgen
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.claude' \
+            --exclude='worker' \
+            --exclude='scripts' \
+            --exclude='docs' \
+            --exclude='lab' \
+            --exclude='node_modules' \
+            --exclude='serve.sh' \
+            --exclude='wrangler.jsonc' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='.assetsignore' \
+            _nextgen/ _site/nextgen/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
