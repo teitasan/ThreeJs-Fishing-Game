@@ -187,15 +187,17 @@ export class PostModule extends NgModule {
     r.getDrawingBufferSize(s);
     const mw = targets.main.width, mh = targets.main.height;
     const key = `${mw}x${mh}:${s.x}x${s.y}:${this.cfg.bloom}:${this.cfg.gtao}:${this.cfg.shaft}`;
+    /* AA（SMAA / FXAA）は内部解像度で行い、最後の合成（画面へ）で線形に拡大する。high の画素の上限（1440p で 0.8 倍）のとき
+       SMAA の 3 パスと FINAL を画面の大きさで払っていた（post の 0.8ms）。上限が効かない大きさでは今までと同じ */
     if (key === this._key) return;
     this._key = key;
     const rt = this._rt;
     const re = (old, w, h) => { if (old && old.width === w && old.height === h) return old; old?.dispose(); return rt(w, h); };
     this.hdr = re(this.hdr, mw, mh);
     this.main.setSize(mw, mh);
-    this.ldr.setSize(s.x, s.y);
-    this.smaa.setSize(s.x, s.y);
-    this.fxaa.setSize(s.x, s.y);
+    this.ldr.setSize(mw, mh);
+    this.smaa.setSize(mw, mh);
+    this.fxaa.setSize(mw, mh);
     const hw = Math.max(1, mw >> 1), hh = Math.max(1, mh >> 1);
     if (this.cfg.gtao) { this.ao = re(this.ao, hw, hh); this.aoB = re(this.aoB, hw, hh); }
     else { this.ao?.dispose(); this.aoB?.dispose(); this.ao = this.aoB = null; }

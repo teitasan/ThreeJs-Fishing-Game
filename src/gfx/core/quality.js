@@ -43,7 +43,7 @@ export const NG_TIERS = Object.freeze({
     copyScale: 1, copyMips: 4,
     nearShadow: { size: 3072, extent: 48, radius: 2 },
     hfShadow: { levels: 2, size: 1024 },
-    reflection: { scale: 0.6, everyOther: false, lodBias: 0, mips: 5 },
+    reflection: { scale: 0.5, everyOther: false, lodBias: 0, mips: 5 },   // 0.6 → 0.5（内部解像度の上限と合わせ 1440p で 1024×576。−0.4ms）
     causticsStrength: 1.0,
   },
 });
