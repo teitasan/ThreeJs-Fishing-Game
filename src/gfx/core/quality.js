@@ -35,7 +35,7 @@ export const NG_TIERS = Object.freeze({
     copyScale: 1, copyMips: 0,
     nearShadow: { size: 2048, extent: 40, radius: 1.75 },
     hfShadow: { levels: 2, size: 1024 },
-    reflection: { scale: 0.5, everyOther: false, lodBias: 1, mips: 4 },
+    reflection: { scale: 0.42, everyOther: false, lodBias: 1, mips: 4 },   // 0.5 → 0.42（1080p で 806×454。対岸の森が反射に正しく入るようになった分の −0.4ms）
     causticsStrength: 0.72,
   },
   high: {
