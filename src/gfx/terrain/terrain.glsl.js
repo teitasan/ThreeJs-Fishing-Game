@@ -225,7 +225,27 @@ void ngTerrSample(int Li, vec3 P, vec3 Ng, int mode, vec3 dX3, vec3 dY3, out vec
   }
   vec2 uv = P.xz * s;
   vec4 B;
-  if (mode == 1) {
+  if (Li == 4) {
+    /* 砂の波紋は «岸と平行» に並べる：湖の中心を囲む極座標で貼る。テクスチャの波の進む向き k を半径方向へ、
+       峰の向き kp を円周方向へ。円周の座標は基準半径 130m の弧長（r·φ にすると半径方向に動くたびに峰が回る）。
+       φ の継ぎ目（±π）は、継ぎ目を 0 に置いたもう 1 枚と重みで混ぜて隠す */
+    const vec2 k = vec2(0.96649, 0.25584), kp = vec2(-0.25584, 0.96649);
+    float r = max(length(P.xz), 1.0);
+    vec2 rh = P.xz / r, th = vec2(-rh.y, rh.x);
+    float phA = atan(P.z, P.x), phB = atan(-P.z, -P.x);
+    vec2 dux = vec2(dot(rh, dPx), 130.0 * dot(th, dPx) / r), duy = vec2(dot(rh, dPy), 130.0 * dot(th, dPy) / r);
+    mat2 M = mat2(k, kp);   // (半径, 弧長) → テクスチャの uv
+    vec2 gx = M * dux * s, gy = M * duy * s;
+    vec2 uA = M * vec2(r, 130.0 * phA) * s, uB = M * vec2(r, 130.0 * phB) * s + 0.37;
+    vec4 aA = textureGrad(ngTerrA, vec3(uA, L), gx, gy), bA = textureGrad(ngTerrB, vec3(uA, L), gx, gy);
+    vec4 aB = textureGrad(ngTerrA, vec3(uB, L), gx, gy), bB = textureGrad(ngTerrB, vec3(uB, L), gx, gy);
+    float wA = smoothstep(-0.8, 0.8, cos(phA));   // 継ぎ目 ±π では 0、φ = 0 では 1
+    A = mix(aB, aA, wA);
+    vec2 nt = mix(ngTerrUnpackN(bB), ngTerrUnpackN(bA), wA);
+    /* テクスチャ空間の法線（u 方向 = k、v 方向 = kp）を（半径, 円周）へ戻し、世界の xz へ */
+    vec2 nrc = vec2(dot(nt, k), dot(nt, kp));
+    B = vec4((rh * nrc.x + th * nrc.y) * 0.5 + 0.5, mix(bB.zw, bA.zw, wA));
+  } else if (mode == 1) {
     ngTerrHex(L, ngTerrHexRotOf(Li), uv, dPx * s, dPy * s, A, B);
   } else if (mode == 3) {
     /* 遠目：2 スケールの 2 枚目（0.31 倍）だけ。周期が 3 倍長く、1 回の読みで済む */
