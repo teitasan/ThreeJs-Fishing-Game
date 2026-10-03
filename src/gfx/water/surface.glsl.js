@@ -526,8 +526,21 @@ void main() {
     float Fr = NG_F0 + (1.0 - NG_F0) * pow(1.0 - cosT, 5.0);
     float wEdge = 0.012 + 0.6 * alpha + fwidth(sinT);
     float tir = smoothstep(1.0 - wEdge, 1.0 + wEdge, sinT);
-    /* 全反射の色：水の中を遠くまで見た色（内散乱）に、湖底の暗い映りを少し */
-    vec3 tirC = ngWaterInsc * 0.85 + texture(ngSceneColor, suv).rgb * 0.04;
+    /* 全反射の色：細波の法線で返した視線の向きで決める（下を向くほど深い水 = 暗い、水平に近いほど内散乱の明るさ）。
+       さらに返した視線の先（6m）を画面の写し（水中の湖底・杭・魚）から 1 回読む。以前は一様な内散乱の色で、
+       水面の裏が «平らな天井» に見えた（細波の模様が見えない） */
+    vec3 rr = reflect(I, n);
+    rr.y = min(rr.y, -0.02);
+    rr = normalize(rr);
+    float dn = smoothstep(0.04, 0.7, -rr.y);
+    vec3 tirC = ngWaterInsc * mix(1.0, 0.5, dn) + texture(ngSceneColor, suv).rgb * 0.03;
+    vec2 tuvR = ngToScreen(vWorld + rr * 6.0);
+    vec2 eR = min(tuvR, 1.0 - tuvR);
+    float onR = smoothstep(0.0, 0.08, min(eR.x, eR.y));
+    if (onR > 0.0) {
+      vec3 scR = textureLod(ngSceneColor, clamp(tuvR, vec2(0.0), vec2(1.0)), 1.5).rgb;
+      tirC = mix(tirC, scR, 0.45 * onR);
+    }
     vec3 win = tirC;
     if (tir < 0.999) {
       vec3 tt = refract(I, n, 1.333);
