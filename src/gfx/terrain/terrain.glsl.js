@@ -54,6 +54,14 @@ export const TERRAIN_VERT_BEGIN = /* glsl */ `
   float ngK1;
   vec2 ngXZb = ngTerrVertXZ( position, ngK1 );
   transformed = vec3( ngXZb.x, ngTerrainH( ngXZb ), ngXZb.y );
+  /* 反射のパス：森の下の地面を樹冠の高さの 0.6 倍へ持ち上げ、«森の塊» として写す。鏡映カメラは水面の下から見上げるので、
+     インポスターの板（幹と樹冠の隙間）の向こうは空しか無く、対岸の汀の上に白い帯が写っていた（実際は暗い森の中が写る）。
+     色は farAlbedo の樹冠（ngTerrCan の BRDF）。近い 40m は持ち上げない（LOD1 の木がそのまま写る所） */
+  if ( ngPassId > 0.5 && ngPassId < 1.5 ) {
+    vec2 ngCn = ngCanopyAt( ngXZb );
+    float ngLiftK = smoothstep( 0.25, 0.7, ngCn.x ) * smoothstep( 40.0, 80.0, distance( ngXZb, cameraPosition.xz ) );
+    transformed.y += ngCn.y * 40.0 * 0.6 * ngLiftK * step( 0.0, transformed.y );
+  }
   ngTerrVInfo = vec3( ngK1, position.xz );
 }
 `;

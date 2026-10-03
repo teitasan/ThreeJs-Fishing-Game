@@ -309,7 +309,11 @@ export class TerrainModule extends NgModule {
       this._passCounts.shadow = this._fill(this.list, fr, -1e9);
     } else if (passId === NG_PASS.REFLECTION) {
       u.ngTerrMorph.value = this._morphRefl;
-      this._passCounts.refl = this._fill(this.reflList, this._camFrustum(camera), -0.05);
+      /* 鏡映カメラの投影は斜めの近クリップ（水面）で、そこから取った視錐台は遠平面が大きく傾く（対岸の浜・草地のセルを
+         184 → 34 に捨て、写らない所に空が出て «対岸の汀の下の白い帯» になっていた）。遠平面（planes[4]）は使わない */
+      const fr = this._camFrustum(camera);
+      if (fr) fr.planes[4].set(this._zero3 || (this._zero3 = new this.ctx.THREE.Vector3()), 1);
+      this._passCounts.refl = this._fill(this.reflList, fr, -0.05);
     } else {
       u.ngTerrMorph.value = this._morphMain;
       this._passCounts.main = this._fill(this.list, this._camFrustum(camera), -1e9);

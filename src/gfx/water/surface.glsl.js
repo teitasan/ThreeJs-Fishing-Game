@@ -418,7 +418,10 @@ void main() {
                        + textureLod(ngReflection, clamp(uvr - vec2(0.0, dv), 0.001, 0.999), lr));
         /* RT に写った太陽・月の円盤（鏡面の GGX が持つ分）を窓の中だけ空の明るさに抑える */
         float win = smoothstep(0.9990 - 0.0015 * lod, 0.99985 - 0.0015 * lod, dot(R, ngKeyDir));
-        cover = clamp(rc.a, 0.0, 1.0);
+        /* 反射 RT の a は «覆い» ではない：切り抜きの葉（alphaTest + a2c の材質）は MSAA の無い反射 RT へテクスチャの a（0.5–1）を
+           そのまま書く（色は前乗算でない）。a で割ると葉の縁が最大 2 倍に光り、空と混ぜると縦に伸びた筋になっていた。
+           空のドームも a = 1 で写るので、a が 1/4 以上なら覆われている（割らない）。何も描かれていない所（a = 0）だけ空へ */
+        cover = clamp(rc.a * 4.0, 0.0, 1.0);
         refl = rc.rgb / max(cover, 1e-3);
         if (win > 0.0) {
           float cap = 6.0 * max(ngLuminance(ngSkySpecular(R, 0.5)), 1e-4);
